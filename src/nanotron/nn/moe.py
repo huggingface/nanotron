@@ -25,6 +25,7 @@ except ImportError:
 
 # Try to debug the topk version
 topk_version = True
+native_torch_version = True
 
 
 class Router(nn.Module):
@@ -242,6 +243,67 @@ class Qwen2MoELayer(nn.Module):
         hidden_states = ops.unpermute(expert_outputs, inverse_mapping, routing_weights)
         return hidden_states
 
+    def permute_topk(self, hidden_states, routing_indices):
+        """
+        hidden_states: [num_tokens, hidden_dim]
+        routing_indices: [num_tokens, topk]
+        num_experts: total number of experts
+        Returns:
+            permuted: [num_tokens * topk, hidden_dim]
+            expert_counts: [num_experts], number of tokens assigned to each expert
+            permute_metadata: metadata for unpermute
+        """
+        num_tokens, hidden_dim = hidden_states.shape
+        topk = routing_indices.shape[-1]
+
+        # Expand hidden_states to match topk, shape: [num_tokens, topk, hidden_dim]
+        expanded_states = hidden_states.unsqueeze(1).expand(-1, topk, -1)
+
+        # Flatten the batch: [num_tokens * topk, hidden_dim]
+        flat_states = expanded_states.reshape(-1, hidden_dim)
+        flat_indices = routing_indices.reshape(-1)  # [num_tokens * topk]
+
+        # Sort by expert (so tokens are grouped by expert index)
+        sorted_expert_indices, sort_order = flat_indices.sort()
+        permuted = flat_states[sort_order]  # [num_tokens * topk, hidden_dim]
+
+        # Count tokens per expert
+        num_tokens_per_expert = torch.bincount(sorted_expert_indices, minlength=self.num_experts)
+
+        return permuted, (sort_order, flat_indices.shape[0]), num_tokens_per_expert
+
+    def unpermute_topk(self, permuted, sort_order, total_elements, routing_weights):
+        """
+        permuted: [num_tokens * topk, hidden_dim], output from experts
+        sort_order: indices used to sort the tokens in permute
+        total_elements: num_tokens * topk
+        routing_weights: [num_tokens, topk], used to scale expert outputs before aggregation
+        Returns:
+            output: [num_tokens, hidden_dim], weighted sum over topk expert outputs
+        """
+        device = permuted.device
+        hidden_dim = permuted.size(-1)
+        num_tokens, topk = routing_weights.shape
+
+        # Restore original order
+        unsort_order = torch.empty_like(sort_order)
+        unsort_order[sort_order] = torch.arange(total_elements, device=device)
+
+        # Restore the original [num_tokens * topk, hidden_dim] order
+        unpermuted = permuted[unsort_order]
+
+        # Reshape to [num_tokens, topk, hidden_dim]
+        unpermuted = unpermuted.view(num_tokens, topk, hidden_dim)
+
+        # Apply routing weights
+        routing_weights = routing_weights.to(permuted.dtype).unsqueeze(-1)  # [num_tokens, topk, 1]
+        weighted_output = unpermuted * routing_weights
+
+        # Aggregate over topk experts: sum over topk axis
+        output = weighted_output.sum(dim=1)  # [num_tokens, hidden_dim]
+
+        return output
+
     def permute(self, hidden_states, probs, routing_map):
         num_tokens, _ = hidden_states.shape
         num_experts = routing_map.shape[1]
@@ -272,16 +334,18 @@ class Qwen2MoELayer(nn.Module):
 
         # Dispatch tokens to experts
         if topk_version:
-            dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(
-                hidden_states, routing_indices
-            )
-
-            expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)
-
-            output = self._combine_expert_outputs(
-                expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights
-            )
-
+            if native_torch_version:
+                permuted, metadata, num_tokens_per_expert = self.permute_topk(hidden_states, routing_indices)
+                output = self.experts(permuted, num_tokens_per_expert)
+                output = self.unpermute_topk(output["hidden_states"], *metadata, routing_weights)
+            else:
+                dispatched_inputs, inverse_permute_mapping, num_tokens_per_expert = self._dispatch_tokens(
+                    hidden_states, routing_indices
+                )
+                expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)
+                output = self._combine_expert_outputs(
+                    expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights
+                )
         else:
             num_tokens_per_expert = routing_indices.sum(dim=0).long()  # [num_local_experts]
             # permute
