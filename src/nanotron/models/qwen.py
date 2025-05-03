@@ -15,6 +15,7 @@ from nanotron.nn.activations import ACT2FN
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
 from nanotron.nn.layer_norm import LlamaRMSNorm as RMSNorm
 from nanotron.nn.layer_norm import TritonRMSNorm
+from nanotron.nn.moe import MoELogging
 from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
@@ -384,9 +385,9 @@ class Qwen2DecoderLayer(nn.Module):
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
-            from nanotron.nn.moe import Qwen2MoELayer
+            from nanotron.nn.moe import Qwen2MoEMLPLayer
 
-            self.mlp = Qwen2MoELayer(
+            self.mlp = Qwen2MoEMLPLayer(
                 config=config,
                 parallel_config=parallel_config,
                 parallel_context=parallel_context,
@@ -407,6 +408,7 @@ class Qwen2DecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],  # [batch_size*seq_length, hidden_size]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
         cu_seqlens: Union[torch.Tensor, TensorPointer],
+        moe_logging: Optional[MoELogging] = None,
     ) -> List[Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -417,13 +419,10 @@ class Qwen2DecoderLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        # dist.barrier()
-        hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
-        # dist.barrier()
-        # log_rank(f"[qwen2_decoder_layer.{self.layer_idx}.mlp.shape={hidden_states.shape}]", logger=logger, level=logging.INFO)
+        hidden_states = self.mlp(hidden_states=hidden_states, moe_logging=moe_logging)
         hidden_states = hidden_states + residual
 
-        return hidden_states, position_ids, cu_seqlens
+        return hidden_states, position_ids, cu_seqlens, moe_logging
 
     def _checkpointed_forward(
         self,
@@ -438,18 +437,22 @@ class Qwen2DecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],
         position_ids: Union[torch.Tensor, TensorPointer],
         cu_seqlens: Union[torch.Tensor, TensorPointer],
+        moe_logging: Optional[MoELogging] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, position_ids, cu_seqlens = self._checkpointed_forward(
-                hidden_states, position_ids, cu_seqlens
+            hidden_states, position_ids, cu_seqlens, moe_logging = self._checkpointed_forward(
+                hidden_states, position_ids, cu_seqlens, moe_logging
             )
         else:
-            hidden_states, position_ids, cu_seqlens = self._core_forward(hidden_states, position_ids, cu_seqlens)
+            hidden_states, position_ids, cu_seqlens, moe_logging = self._core_forward(
+                hidden_states, position_ids, cu_seqlens, moe_logging
+            )
 
         return {
             "hidden_states": hidden_states,
             "position_ids": position_ids,
             "cu_seqlens": cu_seqlens,
+            "moe_logging": moe_logging,
         }
 
 
@@ -519,8 +522,8 @@ class Qwen2Model(nn.Module):
                         "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
-                    module_input_keys={"hidden_states", "position_ids", "cu_seqlens"},
-                    module_output_keys={"hidden_states", "position_ids", "cu_seqlens"},
+                    module_input_keys={"hidden_states", "position_ids", "cu_seqlens", "moe_logging"},
+                    module_output_keys={"hidden_states", "position_ids", "cu_seqlens", "moe_logging"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -566,10 +569,15 @@ class Qwen2Model(nn.Module):
         else:
             cu_seqlens = None
 
+        # moe_logging = MoELogging(num_local_tokens=[]) if self.config.moe_config is not None else None
+        num_local_experts = self.config.moe_config.num_experts // self.parallel_config.expert_parallel_size
+        moe_logging = torch.zeros((self.config.num_hidden_layers, num_local_experts), device="cuda", dtype=torch.int32)
+
         decoder_states = {
             "hidden_states": output["input_embeds"],
             "position_ids": output["position_ids"],
             "cu_seqlens": cu_seqlens,
+            "moe_logging": moe_logging,
         }
 
         for decoder_layer in self.decoder:
@@ -579,7 +587,7 @@ class Qwen2Model(nn.Module):
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 
-        return sharded_logits
+        return sharded_logits, moe_logging
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model for load balancing."""
@@ -704,7 +712,7 @@ class Qwen2ForTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        sharded_logits = self.model(
+        sharded_logits, moe_logging = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
         )
@@ -713,10 +721,14 @@ class Qwen2ForTraining(NanotronModel):
             label_ids=label_ids,
             label_mask=label_mask,
         )
+        outputs = {"loss": loss["loss"]}
+
         if self.config.z_loss_enabled:
-            return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
-        else:
-            return {"loss": loss["loss"]}
+            outputs["z_loss"] = loss["z_loss"]
+        if moe_logging is not None:
+            outputs["moe_logging"] = moe_logging
+
+        return outputs
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):

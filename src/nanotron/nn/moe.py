@@ -1,4 +1,5 @@
-from typing import Optional
+from dataclasses import dataclass
+from typing import List, Optional
 
 import torch
 from torch import nn
@@ -107,6 +108,15 @@ def _get_dispatched_routing_indices(global_routing_indices, expert_parallel_size
 def compiled_get_dispatched_routing_indices(global_routing_indices, num_ranks, num_experts_per_rank):
     # NOTE: use torch.compile to compile the function
     return torch.compile(_get_dispatched_routing_indices)(global_routing_indices, num_ranks, num_experts_per_rank)
+
+
+@dataclass
+class MoELogging:
+    """
+    num_local_tokens: List[torch.Tensor]: The number of tokens per local expert per layer
+    """
+
+    num_local_tokens: List[torch.Tensor]
 
 
 class AllToAllDispatcher(nn.Module):
@@ -403,7 +413,7 @@ class GroupedMLP(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        num_tokens_per_expert: torch.Tensor,
+        num_local_tokens_per_expert: torch.Tensor,
     ):
         """
         assume hidden_states is permuted
@@ -413,18 +423,6 @@ class GroupedMLP(nn.Module):
         + expect a, b are in bfloat16
         + expect num_tokens_per_expert is a on cpu
         """
-        # NOTE: ops.gemm requires "batch_sizes" (aka: num_tokens_per_expert here) to be on cpu
-        # num_tokens_per_expert = num_tokens_per_expert.to("cpu")
-
-        # NOTE: refactor, should be the same line
-        # if self.expert_parallel_size == 1:
-        #     ep_rank = dist.get_rank(self.ep_pg)
-        #     num_local_tokens_per_expert = num_tokens_per_expert.view(
-        #         self.expert_parallel_size, self.num_local_experts
-        #     )[ep_rank]
-        # else:
-        #     num_local_tokens_per_expert = num_tokens_per_expert
-        num_local_tokens_per_expert = num_tokens_per_expert
 
         # NOTE: if no tokens are assigned to this expert device, then we just return the hidden states
         if torch.count_nonzero(num_local_tokens_per_expert) == 0:
@@ -439,7 +437,7 @@ class GroupedMLP(nn.Module):
         return {"hidden_states": hidden_states}
 
 
-class Qwen2MoELayer(nn.Module):
+class Qwen2MoEMLPLayer(nn.Module):
     """Mixture of experts Layer for Qwen2 models."""
 
     def __init__(
@@ -485,55 +483,57 @@ class Qwen2MoELayer(nn.Module):
                 bias=False,
             )  # TODO: ensure shared_expert_gate is tied across TP
 
-        # Create the expert MLPs
-        # TODO: merge the ep process group to non-ep in parallel_context initialization
-        # this is hacky
-        # if not hasattr(parallel_context, "ep_pg"):
-        #     ep_pg = parallel_context.tp_pg
-        # else:
-        #     ep_pg = parallel_context.ep_pg
-
         self.experts = GroupedMLP(config, parallel_config, ep_pg=parallel_context.ep_pg)
         # Whether to recompute MoE layer during backward pass for memory efficiency
         self.recompute_layer = parallel_config.recompute_layer
         self.ep_pg = parallel_context.ep_pg
+        self.layer_idx = layer_idx
 
     def _compute_expert_outputs(self, hidden_states, routing_weights, routing_indices):
         (
             dispatched_inputs,
             inverse_permute_mapping,
             expert_sort_indices,
-            num_tokens_per_expert,
+            num_local_tokens_per_expert,
         ) = self.token_dispatcher.permute(hidden_states, routing_indices)
 
-        expert_outputs = self.experts(dispatched_inputs, num_tokens_per_expert)
+        expert_outputs = self.experts(dispatched_inputs, num_local_tokens_per_expert)
         output = self.token_dispatcher.unpermute(
             expert_outputs["hidden_states"], inverse_permute_mapping, routing_weights, expert_sort_indices
         )
-        return output
+        return output, num_local_tokens_per_expert
 
-    def _core_forward(self, hidden_states):
+    def _core_forward(self, hidden_states, moe_logging: Optional[MoELogging]):
         """Core forward logic for MoE layer."""
         # Get top-k routing weights and indices
         routing_weights, routing_indices = self.router(hidden_states)  # [num_tokens, num_experts_per_token]
 
-        output = self._compute_expert_outputs(hidden_states, routing_weights, routing_indices)
+        output, num_local_tokens_per_expert = self._compute_expert_outputs(
+            hidden_states, routing_weights, routing_indices
+        )
 
         if self.enable_shared_expert:
             shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
             shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
             output = output + shared_gate * shared_expert_output
+
+        # if moe_logging is not None:
+        #     moe_logging.num_local_tokens.append(num_local_tokens_per_expert)
+        if moe_logging is not None:
+            moe_logging[self.layer_idx, :] = num_local_tokens_per_expert
+
+        # return {"hidden_states": output, "num_local_tokens_per_expert": num_local_tokens_per_expert}
         return output
 
     def _checkpointed_forward(self, hidden_states):
         """Apply gradient checkpointing to save memory during training."""
         return CheckpointFunction.apply(self._core_forward, True, hidden_states)
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, moe_logging: Optional[MoELogging] = None):
         """Forward pass for the MoE layer."""
         if self.recompute_layer and self.training:
-            hidden_states = self._checkpointed_forward(hidden_states)
+            hidden_states = self._checkpointed_forward(hidden_states, moe_logging)
         else:
-            hidden_states = self._core_forward(hidden_states)
+            hidden_states = self._core_forward(hidden_states, moe_logging)
 
-        return {"hidden_states": hidden_states}
+        return hidden_states
