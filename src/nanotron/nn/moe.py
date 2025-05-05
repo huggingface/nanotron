@@ -437,6 +437,13 @@ class Qwen2MoEMLPLayer(nn.Module):
         )
         return output, num_local_tokens_per_expert
 
+    def _compute_shared_expert_outputs(self, hidden_states):
+        shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
+        shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
+        output = hidden_states + shared_gate * shared_expert_output
+        return output
+        # return shared_expert_output + hidden_states
+
     def _core_forward(self, hidden_states, moe_logging: Optional[MoELogging]):
         """Core forward logic for MoE layer."""
         # Get top-k routing weights and indices
@@ -447,9 +454,10 @@ class Qwen2MoEMLPLayer(nn.Module):
         )
 
         if self.enable_shared_expert:
-            shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
-            shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
-            output = output + shared_gate * shared_expert_output
+            # shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
+            # shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
+            # output = output + shared_gate * shared_expert_output
+            output = self._compute_shared_expert_outputs(hidden_states)
 
         if moe_logging is not None:
             moe_logging[self.layer_idx, :] = num_local_tokens_per_expert
