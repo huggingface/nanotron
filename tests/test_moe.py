@@ -15,7 +15,7 @@ from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.models.base import init_on_device_and_dtype
 from nanotron.nn.moe import (
     GroupedMLP,
-    Qwen2MoELayer,
+    Qwen2MoEMLPLayer,
     _get_dispatched_routing_indices,
     permute,
     unpermute,
@@ -232,8 +232,9 @@ def test_init_moe_process_groups(
         torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.int32),  # top-k=2
     ],
 )
+@pytest.mark.parametrize("include_backward", [False])
 @rerun_if_address_is_in_use()
-def test_expert_parallelism(list_routing_indicies):
+def test_expert_parallelism(list_routing_indicies, include_backward):
     DP_SIZE = 2
     EP_SIZE = 2
     BS = 1
@@ -248,7 +249,8 @@ def test_expert_parallelism(list_routing_indicies):
         expert_data_parallel_size=1,
         enabled_moe=True,
     )
-    inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
+    # inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
+    inputs = torch.randn(BS * SEQ_LEN, HIDDEN_SIZE, dtype=torch.bfloat16, device="cuda")
 
     init_distributed(
         tp=1,
@@ -259,7 +261,10 @@ def test_expert_parallelism(list_routing_indicies):
         expert_data_parallel_size=1,
         enabled_moe=True,
     )(_test_expert_parallelism)(
-        list_input_batches=inputs, list_routing_indices=list_routing_indicies, parallel_config=parallel_config
+        list_input_batches=inputs,
+        list_routing_indices=list_routing_indicies,
+        parallel_config=parallel_config,
+        include_backward=include_backward,
     )
 
 
@@ -268,6 +273,7 @@ def _test_expert_parallelism(
     list_input_batches: torch.Tensor,
     list_routing_indices: torch.Tensor,
     parallel_config: ParallelismArgs,
+    include_backward: bool,
 ):
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     os.environ["TORCH_USE_CUDA_DSA"] = "1"
@@ -279,13 +285,17 @@ def _test_expert_parallelism(
         .cuda()
     )
     list_input_batches = list_input_batches.contiguous().cuda()
-    (
-        torch.chunk(list_routing_indices, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
-        .contiguous()
-        .cuda()
-    )
-    list_routing_indices = list_routing_indices.contiguous().cuda()
+    # (
+    #     torch.chunk(list_routing_indices, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
+    #     .contiguous()
+    #     .cuda()
+    # )
+    # list_routing_indices = list_routing_indices.contiguous().cuda()
 
+    input_batches.requires_grad = True
+    list_input_batches.requires_grad = True
+
+    # TODO(xrsrke): deduplicate the code
     ref_parallel_context = copy(parallel_context)
     ref_parallel_context.expert_parallel_size = 1
     ref_parallel_context.expert_tensor_parallel_size = 1
@@ -298,10 +308,10 @@ def _test_expert_parallelism(
     ref_parallel_config.expert_data_parallel_size = 1
 
     with init_on_device_and_dtype(device="cuda", dtype=torch.bfloat16):
-        moe_layer = Qwen2MoELayer(
+        moe_layer = Qwen2MoEMLPLayer(
             config=TINY_MOE_QWEN_CONFIG, parallel_context=parallel_context, parallel_config=parallel_config
         )
-        ref_moe_layer = Qwen2MoELayer(
+        ref_moe_layer = Qwen2MoEMLPLayer(
             config=TINY_MOE_QWEN_CONFIG, parallel_context=ref_parallel_context, parallel_config=ref_parallel_config
         )
         # NOTE: make the parameters of all ranks in the ref_moe_layer the same
@@ -330,13 +340,30 @@ def _test_expert_parallelism(
         assert name == ref_name
         assert torch.allclose(param, ref_param)
 
-    outputs = moe_layer(input_batches)
-    ref_outputs = ref_moe_layer(list_input_batches)
+    outputs = moe_layer(input_batches)["hidden_states"]
+    ref_outputs = ref_moe_layer(list_input_batches)["hidden_states"]
 
     assert torch.allclose(
-        outputs["hidden_states"],
-        torch.chunk(ref_outputs["hidden_states"], chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank],
+        outputs,
+        torch.chunk(ref_outputs, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank],
     )
+    assert outputs.requires_grad is True
+
+    assert 1 == 1
+
+    if include_backward:
+        outputs.sum().backward()
+        ref_outputs.sum().backward()
+
+        for (n, p), (ref_n, ref_p) in zip(moe_layer.named_parameters(), ref_moe_layer.named_parameters()):
+            if any(x in n for x in ["router.weight", "shared_expert"]):
+                torch.testing.assert_close(p.grad, ref_p.grad)
+            else:
+                torch.testing.assert_close(
+                    p.grad, torch.chunk(ref_p.grad, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
+                )
+
+        assert 1 == 1
 
 
 @pytest.mark.parametrize(
@@ -346,8 +373,9 @@ def _test_expert_parallelism(
         torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.int32),  # top-k=2
     ],
 )
+@pytest.mark.parametrize("include_backward", [True, False])
 @rerun_if_address_is_in_use()
-def test_expert_parallelism_exclude_router(list_routing_indicies):
+def test_expert_parallelism_exclude_router(list_routing_indicies, include_backward):
     DP_SIZE = 2
     EP_SIZE = 2
     BS = 1
@@ -362,7 +390,8 @@ def test_expert_parallelism_exclude_router(list_routing_indicies):
         expert_data_parallel_size=1,
         enabled_moe=True,
     )
-    inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
+    # inputs = torch.arange(BS * SEQ_LEN, dtype=torch.bfloat16).unsqueeze(-1).expand(-1, HIDDEN_SIZE)
+    inputs = torch.randn(BS * SEQ_LEN, HIDDEN_SIZE, dtype=torch.bfloat16, device="cuda")
 
     init_distributed(
         tp=1,
@@ -373,7 +402,10 @@ def test_expert_parallelism_exclude_router(list_routing_indicies):
         expert_data_parallel_size=1,
         enabled_moe=True,
     )(_test_expert_parallelism_exclude_router)(
-        list_input_batches=inputs, list_routing_indices=list_routing_indicies, parallel_config=parallel_config
+        list_input_batches=inputs,
+        list_routing_indices=list_routing_indicies,
+        parallel_config=parallel_config,
+        include_backward=include_backward,
     )
 
 
@@ -382,6 +414,7 @@ def _test_expert_parallelism_exclude_router(
     list_input_batches: torch.Tensor,
     list_routing_indices: torch.Tensor,
     parallel_config: ParallelismArgs,
+    include_backward: bool,
 ):
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     os.environ["TORCH_USE_CUDA_DSA"] = "1"
@@ -412,10 +445,10 @@ def _test_expert_parallelism_exclude_router(
     ref_parallel_config.expert_data_parallel_size = 1
 
     with init_on_device_and_dtype(device="cuda", dtype=torch.bfloat16):
-        moe_layer = Qwen2MoELayer(
+        moe_layer = Qwen2MoEMLPLayer(
             config=TINY_MOE_QWEN_CONFIG, parallel_context=parallel_context, parallel_config=parallel_config
         )
-        ref_moe_layer = Qwen2MoELayer(
+        ref_moe_layer = Qwen2MoEMLPLayer(
             config=TINY_MOE_QWEN_CONFIG, parallel_context=ref_parallel_context, parallel_config=ref_parallel_config
         )
         # NOTE: make the parameters of all ranks in the ref_moe_layer the same
@@ -426,14 +459,15 @@ def _test_expert_parallelism_exclude_router(
     def is_expert_param(name):
         return any(x for x in ["experts.merged_gate_up_proj", "experts.merged_down_proj"] if x in name)
 
+    expert_dim_slice = slice(
+        ep_rank * moe_layer.num_local_experts, ep_rank * moe_layer.num_local_experts + moe_layer.num_local_experts
+    )
+
     for (n, p), (ref_n, ref_p) in zip(moe_layer.named_parameters(), ref_moe_layer.named_parameters()):
         assert n == ref_n
         if is_expert_param(n):
             # NOTE: expert parallel sharding
-            num_local_experts = moe_layer.num_local_experts
-            start_idx = ep_rank * num_local_experts
-            end_idx = start_idx + num_local_experts
-            p.data.copy_(ref_p.data[start_idx:end_idx, :, :])
+            p.data.copy_(ref_p.data[expert_dim_slice, :, :])
         else:
             p.data.copy_(ref_p.data)
 
@@ -445,12 +479,12 @@ def _test_expert_parallelism_exclude_router(
         assert torch.allclose(param, ref_param)
 
     # NOTE: move the routing_weights to random weights
-    outputs = moe_layer._compute_expert_outputs(
+    outputs, num_local_tokens_per_expert = moe_layer._compute_expert_outputs(
         input_batches,
         torch.ones_like(routing_indices, dtype=torch.float32),
         routing_indices,
     )
-    ref_outputs = ref_moe_layer._compute_expert_outputs(
+    ref_outputs, ref_num_local_tokens_per_expert = ref_moe_layer._compute_expert_outputs(
         list_input_batches,
         torch.ones_like(list_routing_indices, dtype=torch.float32),
         list_routing_indices,
@@ -458,6 +492,22 @@ def _test_expert_parallelism_exclude_router(
     assert torch.allclose(
         outputs, torch.chunk(ref_outputs, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
     )
+    # torch.testing.assert_close(outputs, ref_outputs[expert_dim_slice])
+
+    if include_backward:
+        outputs.sum().backward()
+        ref_outputs.sum().backward()
+
+        for (n, p), (ref_n, ref_p) in zip(moe_layer.named_parameters(), ref_moe_layer.named_parameters()):
+            if any(x in n for x in ["router.weight", "shared_expert"]):
+                assert p.grad is None
+                continue
+
+            torch.testing.assert_close(
+                p.grad, torch.chunk(ref_p.grad, chunks=parallel_context.expert_parallel_size, dim=0)[ep_rank]
+            )
+
+    assert 1 == 1
 
 
 @pytest.mark.parametrize(
@@ -492,11 +542,13 @@ if __name__ == "__main__":
     # (1, 1, 1, 2, 1, 1) the test that fails
     # test_init_moe_process_groups(tp=1, dp=1, pp=1, expert_parallel_size=2, expert_tensor_parallel_size=1, expert_data_parallel_size=1)
     test_expert_parallelism(
-        list_routing_indicies=torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
+        list_routing_indicies=torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32),
+        include_backward=True,
     )
     # test_expert_parallelism_exclude_router(
     #     # torch.tensor([[2], [3], [1], [3], [1], [0], [2], [3]], dtype=torch.int32)
-    #     torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.int32)
+    #     torch.tensor([[2, 1], [3, 0], [1, 2], [3, 1], [1, 2], [0, 1], [2, 1], [3, 2]], dtype=torch.int32),
+    #     include_backward=True,
     # )
 
     # test_permute(

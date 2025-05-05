@@ -419,7 +419,7 @@ class Qwen2DecoderLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states=hidden_states, moe_logging=moe_logging)
+        hidden_states = self.mlp(hidden_states=hidden_states, moe_logging=moe_logging)["hidden_states"]
         hidden_states = hidden_states + residual
 
         return hidden_states, position_ids, cu_seqlens, moe_logging

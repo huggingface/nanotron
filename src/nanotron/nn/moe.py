@@ -451,13 +451,10 @@ class Qwen2MoEMLPLayer(nn.Module):
             shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
             output = output + shared_gate * shared_expert_output
 
-        # if moe_logging is not None:
-        #     moe_logging.num_local_tokens.append(num_local_tokens_per_expert)
         if moe_logging is not None:
             moe_logging[self.layer_idx, :] = num_local_tokens_per_expert
 
-        # return {"hidden_states": output, "num_local_tokens_per_expert": num_local_tokens_per_expert}
-        return output
+        return {"hidden_states": output}
 
     def _checkpointed_forward(self, hidden_states):
         """Apply gradient checkpointing to save memory during training."""
@@ -466,8 +463,8 @@ class Qwen2MoEMLPLayer(nn.Module):
     def forward(self, hidden_states, moe_logging: Optional[MoELogging] = None):
         """Forward pass for the MoE layer."""
         if self.recompute_layer and self.training:
-            hidden_states = self._checkpointed_forward(hidden_states, moe_logging)
+            outputs = self._checkpointed_forward(hidden_states, moe_logging)
         else:
-            hidden_states = self._core_forward(hidden_states, moe_logging)
+            outputs = self._core_forward(hidden_states, moe_logging)
 
-        return hidden_states
+        return outputs
