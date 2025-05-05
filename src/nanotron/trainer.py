@@ -22,6 +22,7 @@ from typing import (
 
 import psutil
 import torch
+from einops import rearrange, reduce
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
@@ -728,38 +729,38 @@ class DistributedTrainer:
                 z_loss_avg = None
 
             if "moe_logging" in outputs[0]:
-                moe_logging = torch.stack([output["moe_logging"] for output in outputs]).sum(
-                    dim=0
-                )  # sum across microbatches
+                # Aggregate MoE stats across microbatches
+                moe_logging = torch.stack([output["moe_logging"] for output in outputs]).sum(dim=0)
 
-                list_of_moe_logging = [
-                    torch.zeros_like(moe_logging) for _ in range(self.parallel_context.ep_pg.size())
-                ]
-                dist.all_gather(list_of_moe_logging, moe_logging, group=self.parallel_context.ep_pg)
-                moe_logging = torch.stack(list_of_moe_logging)
-                from einops import rearrange, reduce
+                # Gather across expert parallel group
+                ep_group_size = self.parallel_context.ep_pg.size()
+                gathered_moe = [torch.zeros_like(moe_logging) for _ in range(ep_group_size)]
+                dist.all_gather(gathered_moe, moe_logging, group=self.parallel_context.ep_pg)
+                gathered_moe = torch.stack(gathered_moe)  # [ep_rank, num_layers, num_experts]
 
-                moe_logging = rearrange(moe_logging, "n_ranks n_layers n_experts -> n_layers n_ranks n_experts")
-
-                # NOTE: global
-                assert 1 == 1
-                _moe_logging = rearrange(moe_logging, "n_layers n_ranks n_experts -> n_layers (n_ranks n_experts)")
-                sum_experts = reduce(_moe_logging, "n_layers n_experts -> n_experts", "sum")
-                moe_logging_across_layers = sum_experts / sum_experts.sum()
-
-                # NOTE: per layer
-                expert_counts = reduce(moe_logging, "n_layers n_ranks n_experts -> n_layers 1 1", "sum")
-                # NOTE: percent_active_per_expert
-                # moe_logging.shape = (num_layers, num_ranks, num_experts)
-                moe_logging = moe_logging / expert_counts
-                moe_logging_per_layer = rearrange(
-                    moe_logging, "n_layers n_ranks n_experts -> n_layers (n_ranks n_experts)"
+                # Reorganize dimensions for analysis
+                gathered_moe = rearrange(
+                    gathered_moe, "ep_rank num_layers num_experts -> num_layers ep_rank num_experts"
                 )
-                # moe_logging.shape = (num_ranks, num_layers, num_experts)
-                assert 1 == 1
-                moe_logging = (moe_logging_per_layer, moe_logging_across_layers)
+
+                # Calculate global expert distribution
+                global_usage = rearrange(
+                    gathered_moe, "num_layers ep_rank num_experts -> num_layers (ep_rank num_experts)"
+                )
+                total_usage = reduce(global_usage, "num_layers experts -> experts", "sum")
+                global_expert_percent = total_usage / total_usage.sum()
+
+                # Calculate per-layer expert distribution
+                layer_totals = reduce(gathered_moe, "num_layers ep_rank num_experts -> num_layers 1 1", "sum")
+                layer_percent = gathered_moe / layer_totals
+                layer_percent = rearrange(
+                    layer_percent, "num_layers ep_rank num_experts -> num_layers (ep_rank num_experts)"
+                )
+
+                moe_logging = (layer_percent, global_expert_percent)
             else:
                 moe_logging = None
+
             # sync loss across DP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
             handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
         else:
@@ -957,7 +958,6 @@ class DistributedTrainer:
         if os.environ.get("DEBUG_MODEL", "0") == "1":
             basic_log_entries.extend([LogItem(f"model_grads/{n}", g, "human_format") for n, g in model_grads])
 
-        # NOTE: log "moe.layer_{i}.expert{i}"
         if moe_logging is not None:
             # Per-layer expert metrics
             moe_logging_per_layer, moe_logging_across_layers = moe_logging
@@ -976,9 +976,6 @@ class DistributedTrainer:
                 basic_log_entries.append(
                     LogItem(f"moe/router/expert_{expert_idx}", expert_percent.item(), "human_format")
                 )
-
-        assert 1 == 1
-        # NOTE: log "moe.layer_{i}.expert{i}"
 
         # WandB logging - determine if this rank should log to wandb
         should_log_to_wandb = wandb is not None and (
