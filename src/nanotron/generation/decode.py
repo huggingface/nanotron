@@ -103,6 +103,17 @@ def micro_batcher(
             # Each dp is responsible for its own micro batches
             continue
 
+        if tokenizer.bos_token_id is not None:
+            # TODO: do we want this always?
+            add_special_tokens = False
+            logging.warn_once(
+                f"Tokenizer {tokenizer.name_or_path} has a bos_token_id={tokenizer.bos_token_id}, we set add_special_tokens to False to avoid adding bos token to input ids",
+                main_rank_only=True,
+                logger=logger,
+            )
+        else:
+            add_special_tokens = True
+
         if dist.get_rank(parallel_context.pp_pg) == input_rank:
             encodings = tokenizer(
                 [elt.text for elt in micro_batch],
@@ -111,6 +122,7 @@ def micro_batcher(
                 padding=tokenizer_config.padding,
                 max_length=tokenizer_config.max_input_length,
                 truncation=tokenizer_config.truncation,
+                add_special_tokens=add_special_tokens,
                 # pad_to_multiple_of=8
             )
 
@@ -305,6 +317,10 @@ def decode_text(
                         else:
                             batch_generated_ids = state.new_input_ids
                             batch_generated_mask = state.new_input_mask
+                        # assert first token isn't bos
+                        assert (
+                            batch_generated_ids[0, 0] != tokenizer.bos_token_id
+                        ), "First token is bos. Make sure you're using add_special_tokens=True when initializing the tokenizer."
                         position_ids = get_position_ids(batch_generated_ids, tokenizer)
                         sharded_logits = model(
                             input_ids=batch_generated_ids,
