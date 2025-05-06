@@ -411,7 +411,7 @@ def test_expert_parallelism_exclude_router(list_routing_indicies, include_backwa
     DP_SIZE = 2
     EP_SIZE = 2
     BS = 1
-    SEQ_LEN = 8
+    SEQ_LEN = 8  # 128
     HIDDEN_SIZE = TINY_MOE_QWEN_CONFIG.hidden_size
     parallel_config = ParallelismArgs(
         tp=1,
@@ -671,25 +671,24 @@ def _test_expert_parallelism_shared_expert(
     output.sum().backward()
     ref_output.sum().backward()
 
-    tp_rank = dist.get_rank(parallel_context.tp_pg)
-    n_failed = []
-    n_passes = []
+    dist.get_rank(parallel_context.tp_pg)
     for (n, p), (ref_n, ref_p) in zip(moe_layer.named_parameters(), ref_moe_layer.named_parameters()):
         assert 1 == 1
         # if "shared_expert" in n:
         if any(x in n for x in ["shared_expert.gate_up_proj", "shared_expert.down_proj"]):
             assert 1 == 1
             # n_passes.append(n)
-            try:
-                # assert torch.equal(p.grad, get_ep_shard(ref_p.grad, ep_rank, parallel_context))
-                assert torch.equal(p.grad, ref_p.grad)
-                n_passes.append(n)
-            except Exception:
-                print(f"Rank ep_rank={ep_rank}, tp_rank={tp_rank}: FAIL., n={n}")
-                n_failed.append(n)
-                # dist.barrier()
-                # raise e
-            # assert torch.equal(p.grad, ref_p.grad), f"Rank ep_rank={ep_rank}, tp_rank={tp_rank}: FAIL., n={n}"
+            # try:
+            #     # assert torch.equal(p.grad, get_ep_shard(ref_p.grad, ep_rank, parallel_context))
+            #     assert torch.equal(p.grad, ref_p.grad)
+            #     n_passes.append(n)
+            # except Exception:
+            #     print(f"Rank ep_rank={ep_rank}, tp_rank={tp_rank}: FAIL., n={n}")
+            #     n_failed.append(n)
+            #     # dist.barrier()
+            #     # raise e
+            # # assert torch.equal(p.grad, ref_p.grad), f"Rank ep_rank={ep_rank}, tp_rank={tp_rank}: FAIL., n={n}"
+            assert torch.equal(p.grad, ref_p.grad)
 
     # print(f"Rank ep_rank={ep_rank}, tp_rank={tp_rank}: PASSES={n_passes}, FAILS={n_failed}")
     # dist.barrier()

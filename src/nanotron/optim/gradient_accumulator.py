@@ -214,6 +214,8 @@ class FP32GradientAccumulator(GradientAccumulator):
     @torch.profiler.record_function("FP32GradientAccumulator._accumulate_grad")
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
+        # if half_param.grad is None:
+        #     return
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
         fp32_grad = self.get_grad_buffer(name=name)
 

@@ -147,7 +147,6 @@ class AllToAllDispatcher(nn.Module):
         + num_local_dispatched_tokens_per_expert: we return it in cpu so don't have to move to cpu for grouped_gemm.gmm
         """
 
-        @torch.no_grad()
         def calculate_output_split_sizes_for_rank(all_input_split_sizes, rank):
             """
             Calculate output_split_sizes for a specific rank based on input_split_sizes from all ranks.
@@ -454,10 +453,10 @@ class Qwen2MoEMLPLayer(nn.Module):
         )
 
         if self.enable_shared_expert:
-            # shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
-            # shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
-            # output = output + shared_gate * shared_expert_output
-            output = self._compute_shared_expert_outputs(hidden_states)
+            shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
+            shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
+            output = output + shared_gate * shared_expert_output
+            # output = self._compute_shared_expert_outputs(hidden_states)
 
         if moe_logging is not None:
             moe_logging[self.layer_idx, :] = num_local_tokens_per_expert

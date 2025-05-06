@@ -38,7 +38,6 @@ from einops import rearrange
 #     return dispatched_indices
 
 
-@torch.no_grad()
 def _get_dispatched_routing_indices(global_routing_indices, expert_parallel_size, num_experts):
     num_local_experts = num_experts // expert_parallel_size
     global_routing_indices_per_device = rearrange(
