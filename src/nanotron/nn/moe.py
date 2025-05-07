@@ -30,6 +30,12 @@ except ImportError:
     )
 
 
+def is_expert_param(name: str) -> bool:
+    from nanotron.constants import EXPERT_PARAM_NAMES
+
+    return any(param in name for param in EXPERT_PARAM_NAMES)
+
+
 def permute(x: torch.Tensor, routing_indices: torch.Tensor):
     permuted_x, inverse_permute_mapping = ops.permute(x.to(torch.float32), routing_indices)
     permuted_x = permuted_x.to(x.dtype)

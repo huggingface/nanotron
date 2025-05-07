@@ -2,13 +2,14 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import torch
 from torch.distributed import GradBucket
 
 import nanotron.distributed as dist
 from nanotron import logging
+from nanotron.logging import log_rank
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
@@ -16,7 +17,7 @@ logger = logging.get_logger(__name__)
 
 
 class GradientAccumulator(ABC):
-    fp32_grads_allreduce_handle: Optional[torch.futures.Future]
+    fp32_grads_allreduce_handle: Optional[Union[List[torch.futures.Future], torch.futures.Future]]
 
     @abstractmethod
     def __init__(self, named_parameters: Iterator[Tuple[str, NanotronParameter]]):
@@ -117,7 +118,7 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         self._is_accumulation_sync_step = False
         # We need the last allreduce handle to make sure it finishes before the optimizer step
-        self.fp32_grads_allreduce_handle: Optional[torch.futures.Future] = None
+        self.fp32_grads_allreduce_handle: Optional[Union[List[torch.futures.Future], torch.futures.Future]] = []
 
     def assign_param_offsets(self, param_name_to_offsets: Dict[str, Dict[int, Tuple[int, int]]], dp_rank: int):
         """To use only when you use with ZeRODistributedOptimizer"""
@@ -335,6 +336,8 @@ def get_fp32_accum_hook(
     # s = torch.cuda.Stream()
 
     def fp32_accum_hook(state: FP32GradBucketManager, bucket: GradBucket) -> torch.futures.Future[torch.Tensor]:
+        from nanotron.nn.moe import is_expert_param
+
         # import pydevd
         # pydevd.settrace(suspend=False, trace_only_current_thread=True)
 
@@ -353,27 +356,23 @@ def get_fp32_accum_hook(
             fp32_grad_buffer.add_(grad.view_as(fp32_grad_buffer))
             param_in_buckets.append(name)
 
-        # log_rank("[fp32_accum_hook] param_in_buckets: {}".format(param_in_buckets), logger=logger, level=logging.INFO, rank=0, is_separator=True)
-
-        def is_expert_param(name: str) -> bool:
-            EXPERT_PARAMS = ["mlp.experts.merged_down_proj", "mlp.experts.merged_gate_up_proj"]
-            return any(param in name for param in EXPERT_PARAMS)
+        log_rank(
+            "[DDP triggered register_comm_hook] parameters in bucket: {}".format(param_in_buckets),
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+            is_separator=True,
+        )
 
         # NOTE: if there are expert params, then there shouldn't have non-expert params in the bucket
         is_all_expert_params = all(is_expert_param(name) for name in param_in_buckets)
-        # if is_all_expert_params:
-        #     assert 1 == 1
-
-        # is_any_non_expert_params = any(not is_expert_param(name) for name in param_in_buckets)
-        # assert is_all_expert_params or is_any_non_expert_params, "All params in the bucket should be either expert or non-expert"
         assert (is_all_expert_params is False) or (
             is_all_expert_params and len(param_in_buckets) == 1
         ), "All params in the bucket should be either expert or non-expert"
-
         all_reduce_group = state.ep_dp_pg if is_all_expert_params else state.dp_pg
 
-        if is_all_expert_params:
-            assert 1 == 1
+        ep_dp_pg = state.ep_dp_pg
+        dp_pg = state.dp_pg
 
         # sync across dp
         if all_reduce_group.size() == 1:
@@ -382,6 +381,9 @@ def get_fp32_accum_hook(
             return fut
 
         if reduce_scatter:
+            if is_all_expert_params:
+                raise NotImplementedError("Reduce scatter is not implemented for MoE")
+
             assert hasattr(accumulator, "param_name_to_offsets")
             grad_buffer_tensor_list = [
                 accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
@@ -406,12 +408,41 @@ def get_fp32_accum_hook(
                 async_op=True,
             )
         else:
-            grad_buffer_tensor_list = [
-                accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
+            # grad_buffer_tensor_list = [
+            #     accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
+            # ]
+            # accumulator.fp32_grads_allreduce_handle.append(dist.all_reduce_coalesced(
+            #     grad_buffer_tensor_list, group=all_reduce_group, async_op=True, op=reduce_op
+            # ))
+
+            def execute_all_reduce(params: List[NanotronParameter], pg: dist.ProcessGroup):
+                grad_buffer_tensor_list = [
+                    accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in params
+                ]
+                accumulator.fp32_grads_allreduce_handle.append(
+                    dist.all_reduce_coalesced(grad_buffer_tensor_list, group=pg, async_op=True, op=reduce_op)
+                )
+
+            expert_params = [param for param in bucket.parameters() if is_expert_param(param_id_to_name[id(param)])]
+            non_expert_params = [
+                param for param in bucket.parameters() if not is_expert_param(param_id_to_name[id(param)])
             ]
-            accumulator.fp32_grads_allreduce_handle = dist.all_reduce_coalesced(
-                grad_buffer_tensor_list, group=all_reduce_group, async_op=True, op=reduce_op
+
+            log_rank(
+                "[DDP triggered register_comm_hook] Detect a bucket have both expert and non-expert params: {}".format(
+                    param_in_buckets
+                ),
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+                is_separator=True,
             )
+
+            if len(expert_params) > 0:
+                execute_all_reduce(expert_params, pg=ep_dp_pg)
+
+            if len(non_expert_params) > 0:
+                execute_all_reduce(non_expert_params, pg=dp_pg)
             # we shouldn't wait for this future for the rest of the backward
 
         # with torch.cuda.stream(s):

@@ -10,3 +10,6 @@ PY_VERSION = parse(platform.python_version())
 
 CHECKPOINT_FILE_NAME = "checkpoint_metadata.json"
 MODEL_CONFIG_FILE_NAME = "model_config.json"
+
+# MoE specific
+EXPERT_PARAM_NAMES = ["mlp.experts.merged_down_proj", "mlp.experts.merged_gate_up_proj"]
