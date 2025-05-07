@@ -65,6 +65,8 @@ from nanotron.models.base import check_model_has_grad
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.models.starcoder2 import Starcoder2ForTraining
+from nanotron.nn.load_balancing_loss import MoEAuxLossAutoScaler
+from nanotron.nn.moe_utils import track_moe_metrics
 from nanotron.optim.clip_grads import clip_grad_norm
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.data_parallel.utils import sync_gradients_across_dp
@@ -558,6 +560,10 @@ class DistributedTrainer:
         # free memory
         gc.collect()
         torch.cuda.empty_cache()
+
+        moe_loss_scale = torch.tensor(1.0 / self.config.tokens.batch_accumulation_per_replica)
+        MoEAuxLossAutoScaler.set_loss_scale(moe_loss_scale)
+
         with prof:
             for self.iteration_step in range(self.initial_iter_step, self.last_iter_step + 1):
                 if isinstance(prof, torch.profiler.profile):
@@ -956,6 +962,13 @@ class DistributedTrainer:
                     "iteration_step": self.iteration_step,
                 },
                 step=self.iteration_step,
+            )
+            track_moe_metrics(
+                loss_scale=MoEAuxLossAutoScaler.main_loss_backward_scale,
+                iteration=self.iteration_step,
+                num_layers=self.config.model.model_config.num_hidden_layers,
+                wandb_writer=wandb,
+                per_layer_logging=False,
             )
         log_rank(
             f"Successfully logged {len(basic_log_entries)} metrics to WandB for tp_rank={tp_rank}",

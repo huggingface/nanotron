@@ -40,7 +40,8 @@ class MoEConfig:
     top_k: int = 2  # Number of experts to route each token to
     moe_intermediate_size: int = 1408  # Intermediate size of the MoE layer
     shared_expert_intermediate_size: int = 5632  # Intermediate size of the shared expert
-    router_aux_loss_coef: float = 0.01  # Coefficient for the router auxiliary loss
+    aux_loss_coeff: Optional[float] = None  # Coefficient for the router auxiliary loss
+    load_balancing_type: Optional[str] = None  # None for no load balancing
     layers: List[int] = field(
         default_factory=lambda: [-1]
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers

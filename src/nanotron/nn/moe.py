@@ -12,6 +12,7 @@ from nanotron.config.models_config import Qwen2Config
 from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.load_balancing_loss import MoEAuxLossAutoScaler, switch_aux_loss
+from nanotron.nn.moe_utils import save_aux_losses, save_token_per_expert
 
 logger = logging.get_logger(__name__)
 
@@ -41,9 +42,9 @@ class Router(nn.Module):
         self.num_experts = config.moe_config.num_experts
         self.num_experts_per_token = config.moe_config.top_k
 
-        self.aux_loss_coeff = 1e2  # TODO: add to config
-        self.load_balancing_type = None  # 'aux_loss' #TODO: add to config
-        self.sequence_partition_group = None  # TODO: tp_cp group
+        self.aux_loss_coeff = config.moe_config.aux_loss_coeff
+        self.load_balancing_type = config.moe_config.load_balancing_type
+        self.sequence_partition_group = None  # TODO: tp_cp group when support tensor parallel
 
         # float32 routing weights
         # NOTE: qwen keep the routing weights in float32
@@ -96,6 +97,13 @@ class Router(nn.Module):
             probs, k=self.num_experts_per_token, dim=-1
         )  # [num_tokens, num_experts_per_token]
 
+        save_token_per_expert(
+            routing_indices=routing_indices,
+            num_experts=self.num_experts,
+            layer_number=self.layer_idx,
+            num_layers=self.config.num_hidden_layers,
+        )
+
         # fail to converge
         if topk_version:
             return routing_weights, routing_indices
@@ -107,18 +115,7 @@ class Router(nn.Module):
         topk_map = torch.zeros_like(logits).int().scatter(1, routing_indices, 1)  # [num_tokens, num_experts]
         return topk_masked_gates, topk_map
 
-        # routing_indices = routing_indices.to(torch.int32)  # NOTE: ops.permute requires indices to be int32
-
     def apply_aux_loss(self, logits: torch.Tensor):
-        # doesn't converge
-        # probs = F.softmax(logits, dim=-1, dtype=torch.float32)
-        # routing_weights, routing_indices = torch.topk(probs, k=self.num_experts_per_token, dim=-1)
-        # tokens_per_expert = torch.bincount(routing_indices.flatten(), minlength=self.num_experts)
-        # aux_loss = switch_aux_loss(probs, tokens_per_expert, self.aux_loss_coeff, self.num_experts_per_token, self.sequence_partition_group)
-        # probs = MoEAuxLossAutoScaler.apply(probs, aux_loss)
-        # return routing_weights, routing_indices
-
-        # converge
         probs, routing_map = self.top_k_softmax(logits)
         tokens_per_expert = routing_map.sum(dim=0)
         aux_loss = switch_aux_loss(
@@ -126,9 +123,13 @@ class Router(nn.Module):
         )
         probs = MoEAuxLossAutoScaler.apply(probs, aux_loss)
 
-        # # debug print
-        # if self.layer_idx == 0:
-        #     print(f"Aux loss value: {aux_loss.item()}")  # See the actual value
+        save_aux_losses(
+            "load_balancing_loss",
+            aux_loss / self.aux_loss_coeff,
+            self.layer_idx,
+            self.config.num_hidden_layers,
+            reduce_group=self.sequence_partition_group,
+        )
         return probs, routing_map
 
 
