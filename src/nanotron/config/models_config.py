@@ -47,6 +47,7 @@ class MoEConfig:
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
     enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
     token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
+    z_loss_coeff: Optional[float] = None  # Coefficient for the router z-loss
 
     def __post_init__(self):
         # Validate the configuration

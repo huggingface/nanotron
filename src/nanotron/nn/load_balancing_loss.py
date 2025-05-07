@@ -43,6 +43,20 @@ def switch_aux_loss(
     return aux_loss
 
 
+def z_loss_func(logits, z_loss_coeff):
+    """Encourages the router's logits to remain small to enhance stability.
+
+    Args:
+        logits (torch.Tensor): The logits before router after gating.
+
+    Returns:
+        torch.Tensor: The logits after applying the z-loss.
+    """
+
+    z_loss = torch.mean(torch.square(torch.logsumexp(logits, dim=-1))) * z_loss_coeff
+    return z_loss
+
+
 def sequence_wise_aux_loss(
     probs: torch.Tensor,
     routing_map: torch.Tensor,
@@ -118,10 +132,6 @@ class MoEAuxLossAutoScaler(torch.autograd.Function):
             MoEAuxLossAutoScaler.main_loss_backward_scale = torch.tensor(1.0, device=aux_loss.device)
         aux_loss_backward_scale = MoEAuxLossAutoScaler.main_loss_backward_scale
         scaled_aux_loss_grad = torch.ones_like(aux_loss) * aux_loss_backward_scale
-        # Debug prints
-        # print(f"Aux loss backward called with aux_loss: {aux_loss.item()}")
-        # print(f"Backward scale: {aux_loss_backward_scale.item()}")
-        # print(f"Scaled aux loss grad: {scaled_aux_loss_grad.item()}")
         return grad_output, scaled_aux_loss_grad
 
     @staticmethod

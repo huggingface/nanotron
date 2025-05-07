@@ -11,7 +11,7 @@ from nanotron.config import ParallelismArgs
 from nanotron.config.models_config import Qwen2Config
 from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.load_balancing_loss import MoEAuxLossAutoScaler, switch_aux_loss
+from nanotron.nn.load_balancing_loss import MoEAuxLossAutoScaler, switch_aux_loss, z_loss_func
 from nanotron.nn.moe_utils import save_aux_losses, save_token_per_expert
 
 logger = logging.get_logger(__name__)
@@ -45,6 +45,13 @@ class Router(nn.Module):
         self.aux_loss_coeff = config.moe_config.aux_loss_coeff
         self.load_balancing_type = config.moe_config.load_balancing_type
         self.sequence_partition_group = None  # TODO: tp_cp group when support tensor parallel
+        self.sequence_partition_group_size = (
+            1 if self.sequence_partition_group is None else dist.get_world_size(self.sequence_partition_group)
+        )
+        if config.moe_config.z_loss_coeff is not None:
+            self.z_loss_coeff = config.moe_config.z_loss_coeff / self.sequence_partition_group_size
+        else:
+            self.z_loss_coeff = None
 
         # float32 routing weights
         # NOTE: qwen keep the routing weights in float32
@@ -81,13 +88,9 @@ class Router(nn.Module):
 
     def forward(self, x: torch.Tensor):
         logits = self.gating(x)
-
+        if self.z_loss_coeff is not None:
+            logits = self.apply_z_loss(logits)
         routing_weights, routing_indices = self.routing(logits)
-
-        # # debug
-        # x.register_hook(self.make_print_param_grad_hook("hidden_states"))
-        # logits.register_hook(self.make_print_param_grad_hook("logits"))
-        # routing_weights.register_hook(self.make_print_param_grad_hook("routing_weights"))
 
         return routing_weights, routing_indices
 
@@ -131,6 +134,18 @@ class Router(nn.Module):
             reduce_group=self.sequence_partition_group,
         )
         return probs, routing_map
+
+    def apply_z_loss(self, logits: torch.Tensor):
+        z_loss = z_loss_func(logits, self.z_loss_coeff)
+        logits = MoEAuxLossAutoScaler.apply(logits, z_loss)
+        save_aux_losses(
+            "z_loss",
+            z_loss / self.z_loss_coeff,
+            self.layer_idx,
+            self.config.num_hidden_layers,
+            reduce_group=self.sequence_partition_group,
+        )
+        return logits
 
 
 class GroupedMLP(nn.Module):
