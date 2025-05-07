@@ -306,7 +306,8 @@ class FP32GradBucketManager:
     """Manages the fp32 gradient buckets.
 
     Attributes:
-        dp_pg: The process group to allreduce gradients across.
+        dp_pg: The process group to allreduce non-expert gradients across.
+        ep_dp_pg: The process group to allreduce expert gradients across.
         accumulator: The gradient accumulator which keeps the gradient buffers.
         bucket_id_to_fp32_grad_buckets_and_dependencies: A dictionary mapping bucket ids to:
             - fp32 grad bucket (torch.Tensor)
@@ -314,6 +315,7 @@ class FP32GradBucketManager:
         param_id_to_bucket_id: A dictionary mapping param ids to bucket ids."""
 
     dp_pg: dist.ProcessGroup
+    ep_dp_pg: Optional[dist.ProcessGroup]
     accumulator: FP32GradientAccumulator
     param_id_to_name: Dict[int, str]
 
@@ -333,22 +335,48 @@ def get_fp32_accum_hook(
     # s = torch.cuda.Stream()
 
     def fp32_accum_hook(state: FP32GradBucketManager, bucket: GradBucket) -> torch.futures.Future[torch.Tensor]:
+        # import pydevd
+        # pydevd.settrace(suspend=False, trace_only_current_thread=True)
+
         # nonlocal s
         # DDP groups grads in GradBuckets. This hook is called throughout the bwd pass, once each bucket is ready to overlap communication with computation.
         # See https://pytorch.org/docs/stable/ddp_comm_hooks.html#what-does-a-communication-hook-operate-on for more details.
-        dp_pg = state.dp_pg
         accumulator = state.accumulator
         param_id_to_name = state.param_id_to_name
 
         # Add new incoming gradient
         # with torch.cuda.stream(s):
+        param_in_buckets = []
         for param, grad in zip(bucket.parameters(), bucket.gradients()):
             name = param_id_to_name[id(param)]
             fp32_grad_buffer = accumulator.get_grad_buffer(name)
             fp32_grad_buffer.add_(grad.view_as(fp32_grad_buffer))
+            param_in_buckets.append(name)
+
+        # log_rank("[fp32_accum_hook] param_in_buckets: {}".format(param_in_buckets), logger=logger, level=logging.INFO, rank=0, is_separator=True)
+
+        def is_expert_param(name: str) -> bool:
+            EXPERT_PARAMS = ["mlp.experts.merged_down_proj", "mlp.experts.merged_gate_up_proj"]
+            return any(param in name for param in EXPERT_PARAMS)
+
+        # NOTE: if there are expert params, then there shouldn't have non-expert params in the bucket
+        is_all_expert_params = all(is_expert_param(name) for name in param_in_buckets)
+        # if is_all_expert_params:
+        #     assert 1 == 1
+
+        # is_any_non_expert_params = any(not is_expert_param(name) for name in param_in_buckets)
+        # assert is_all_expert_params or is_any_non_expert_params, "All params in the bucket should be either expert or non-expert"
+        assert (is_all_expert_params is False) or (
+            is_all_expert_params and len(param_in_buckets) == 1
+        ), "All params in the bucket should be either expert or non-expert"
+
+        all_reduce_group = state.ep_dp_pg if is_all_expert_params else state.dp_pg
+
+        if is_all_expert_params:
+            assert 1 == 1
 
         # sync across dp
-        if dp_pg.size() == 1:
+        if all_reduce_group.size() == 1:
             fut = torch.futures.Future()
             fut.set_result(bucket.buffer())
             return fut
@@ -367,14 +395,14 @@ def get_fp32_accum_hook(
                 for grad_buffer, param in zip(grad_buffer_tensor_list, bucket.parameters())
             ]
             input_tensor_lists = [
-                torch.split(grad_buffer, split_size_or_sections=len(grad_buffer) // dp_pg.size())
+                torch.split(grad_buffer, split_size_or_sections=len(grad_buffer) // all_reduce_group.size())
                 for grad_buffer in grad_buffer_tensor_list
             ]
             dist.reduce_scatter_coalesced(
                 output_tensor_list=output_tensor_list,
                 input_tensor_lists=input_tensor_lists,
                 op=reduce_op,
-                group=dp_pg,
+                group=all_reduce_group,
                 async_op=True,
             )
         else:
@@ -382,7 +410,7 @@ def get_fp32_accum_hook(
                 accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
             ]
             accumulator.fp32_grads_allreduce_handle = dist.all_reduce_coalesced(
-                grad_buffer_tensor_list, group=dp_pg, async_op=True, op=reduce_op
+                grad_buffer_tensor_list, group=all_reduce_group, async_op=True, op=reduce_op
             )
             # we shouldn't wait for this future for the rest of the backward
 

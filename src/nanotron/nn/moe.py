@@ -41,9 +41,6 @@ def unpermute(x: torch.Tensor, inverse_mapping: torch.Tensor, routing_weights: t
     return comebined_x.to(x.dtype)
 
 
-USE_HAOJUN_PERMUTE = True
-
-
 @dataclass
 class MoELogging:
     """
@@ -51,6 +48,19 @@ class MoELogging:
     """
 
     num_local_tokens: List[torch.Tensor]
+
+
+class ScaleGradient(torch.autograd.Function):
+    @staticmethod
+    @torch.cuda.amp.custom_fwd
+    def forward(ctx, x: torch.Tensor, scale: float):
+        ctx.scale = scale
+        return x
+
+    @staticmethod
+    @torch.cuda.amp.custom_bwd
+    def backward(ctx, grad: torch.Tensor):
+        return grad * ctx.scale, None
 
 
 class AllToAllDispatcher(nn.Module):
@@ -436,13 +446,6 @@ class Qwen2MoEMLPLayer(nn.Module):
         )
         return output, num_local_tokens_per_expert
 
-    def _compute_shared_expert_outputs(self, hidden_states):
-        shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
-        shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
-        output = hidden_states + shared_gate * shared_expert_output
-        return output
-        # return shared_expert_output + hidden_states
-
     def _core_forward(self, hidden_states, moe_logging: Optional[MoELogging]):
         """Core forward logic for MoE layer."""
         # Get top-k routing weights and indices
@@ -456,7 +459,6 @@ class Qwen2MoEMLPLayer(nn.Module):
             shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
             shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
             output = output + shared_gate * shared_expert_output
-            # output = self._compute_shared_expert_outputs(hidden_states)
 
         if moe_logging is not None:
             moe_logging[self.layer_idx, :] = num_local_tokens_per_expert
