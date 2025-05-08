@@ -6,6 +6,7 @@ from typing import Dict
 from nanotron.config import Config, ModelArgs
 from nanotron.config.models_config import InitScalingMethod
 from nanotron.nn.layer_norm import LlamaRMSNorm, TritonRMSNorm
+from nanotron.nn.moe import GroupedMLP, Router
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -36,10 +37,15 @@ class StandardParametrizator(Parametrizator):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_column_linear,
+            # TODO: double check if correct initialization for grouped MLP
             TensorParallelRowLinear: self._parametrize_row_linear,
             TritonRMSNorm: self._parametrize_layer_norm,
             LlamaRMSNorm: self._parametrize_layer_norm,
             TensorParallelEmbedding: self._parametrize_embedding,
+            # NOTE: MoE's specific initialization
+            GroupedMLP: self._parametrize_grouped_mlp,
+            Router: self._parametrize_router,
+            nn.Linear: self._parametrize_column_linear,
         }
 
         self.std = config.model.init_method.std
@@ -53,6 +59,26 @@ class StandardParametrizator(Parametrizator):
 
         if "weight" == param_name:
             # TODO @nouamane: should we use trunc_normal_
+            init.normal_(module.weight, mean=0.0, std=self.std)
+        elif "bias" == param_name:
+            module.bias.zero_()
+
+    def _parametrize_grouped_mlp(self, param_name: str, module: nn.Module):
+        for n, p in module.named_parameters():
+            if n == "merged_gate_up_proj":
+                # NOTE: the same as parametrization of column linear
+                init.normal_(p, mean=0.0, std=self.std)
+            elif n == "merged_down_proj":
+                # NOTE: the same as parametrization of row linear
+                scaling = self._compute_scaling_factor()
+                adjusted_std = self.std / scaling
+                # TODO @nouamane: should we use trunc_normal_
+                init.normal_(p, mean=0.0, std=adjusted_std)
+            else:
+                raise ValueError(f"Unknown parameter {n}")
+
+    def _parametrize_router(self, param_name: str, module: nn.Module):
+        if "weight" == param_name:
             init.normal_(module.weight, mean=0.0, std=self.std)
         elif "bias" == param_name:
             module.bias.zero_()
