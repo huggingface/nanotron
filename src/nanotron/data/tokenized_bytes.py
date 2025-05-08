@@ -23,6 +23,8 @@ from nanotron.data.samplers import MegatronPretrainingSampler
 from nanotron.logging import human_format, log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.utils import main_rank_first
+from huggingface_hub import cached_assets_path
+
 
 try:
     tb_logger_available = True
@@ -302,15 +304,13 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
         filename_pattern: str = None,
         recursive: bool = True,
         token_size: int = 2,
-        max_tokens: int | None = None,
         shuffle: bool = False,
         seed: int = 42,
         return_positions: bool = False,
         eos_token_id: int | None = None,
         skip_in_stream: bool = True,
         num_samples: Optional[int] = None,
-        folder_read_path: Optional[str] = None,
-        force_update_cache: bool = os.environ.get("FORCE_UPDATE_CACHE_S3", 0) == "1",
+        paths_file: str | None = None,
     ):
         log_rank("Using DatatroveFolderDataset", logger=logger, level=logging.INFO, rank=0)
         if return_positions and not eos_token_id:
@@ -320,117 +320,17 @@ class TokenizedBytesFolderDataset(DatatroveFolderDataset):
                 level=logging.WARNING,
                 rank=0,
             )
-
-        # Handle S3 paths specially
-        matched_files = None
-        file_sizes = None
-        if folder_path.startswith("s3://"):
-            cache_dir = os.path.expanduser("~/.cache/nanotron/s3_cache")
-            os.makedirs(cache_dir, exist_ok=True)
-
-            # Create a unique cache key based on the folder path and pattern
-            import hashlib
-
-            cache_key = hashlib.md5(f"{folder_path}:{filename_pattern}:{recursive}".encode()).hexdigest()
-            cache_file = os.path.join(cache_dir, f"{cache_key}.cache")
-
-            with main_rank_first():
-                if dist.get_rank() == 0:
-                    # Check if we have a valid cache
-                    if os.path.exists(cache_file) and not force_update_cache:
-                        try:
-                            import pickle
-
-                            with open(cache_file, "rb") as f:
-                                cached_data = pickle.load(f)
-                                matched_files = cached_data["matched_files"]
-                                file_sizes = cached_data["file_sizes"]
-                            log_rank(
-                                "[TokenizedBytesFolderDataset] Using cached S3 file list",
-                                logger=logger,
-                                level=logging.INFO,
-                                rank=0,
-                            )
-                        except Exception as e:
-                            log_rank(
-                                f"[TokenizedBytesFolderDataset] Failed to load cache, fetching from S3: {e}",
-                                logger=logger,
-                                level=logging.WARNING,
-                                rank=0,
-                            )
-
-                    # If no cache or cache invalid, fetch from S3
-                    if matched_files is None:
-                        log_rank(
-                            "[TokenizedBytesFolderDataset] Fetching file list from S3...",
-                            logger=logger,
-                            level=logging.INFO,
-                            rank=0,
-                        )
-                        from datatrove.utils.dataset import url_to_fs
-
-                        fs_folder, stripped_folder_path = url_to_fs(folder_path)
-                        matched_files = (
-                            fs_folder.find(stripped_folder_path, detail=False, maxdepth=1 if not recursive else None)
-                            if not filename_pattern
-                            else fs_folder.glob(
-                                os.path.join(stripped_folder_path, filename_pattern),
-                                maxdepth=1 if not recursive else None,
-                            )
-                        )
-                        matched_files = sorted(matched_files)
-
-                        # Get file sizes
-                        file_sizes = {}
-                        for path in matched_files:
-                            file_path = fs_folder.unstrip_protocol(path)
-                            fs, file_path = url_to_fs(file_path)
-                            file_sizes[file_path] = fs.size(file_path)
-
-                        # Save to cache
-                        try:
-                            import pickle
-
-                            with open(cache_file, "wb") as f:
-                                pickle.dump({"matched_files": matched_files, "file_sizes": file_sizes}, f)
-                            log_rank(
-                                "[TokenizedBytesFolderDataset] Saved S3 file list to cache",
-                                logger=logger,
-                                level=logging.INFO,
-                                rank=0,
-                            )
-                        except Exception as e:
-                            log_rank(
-                                f"[TokenizedBytesFolderDataset] Failed to save cache: {e}",
-                                logger=logger,
-                                level=logging.WARNING,
-                                rank=0,
-                            )
-            if dist.get_rank() != 0:
-                try:
-                    import pickle
-
-                    with open(cache_file, "rb") as f:
-                        cached_data = pickle.load(f)
-                        matched_files = cached_data["matched_files"]
-                        file_sizes = cached_data["file_sizes"]
-                except Exception as e:
-                    raise RuntimeError(f"Failed to read cache file on rank {dist.get_rank()}: {e}")
-
         super().__init__(
-            folder_path=folder_path,
+            data_folder=folder_path,
             seq_len=seq_len,
             filename_pattern=filename_pattern,
             recursive=recursive,
             token_size=token_size,
-            max_tokens=max_tokens,
             shuffle=shuffle,
             seed=seed,
             return_positions=return_positions,
-            eos_token_id=eos_token_id,
-            read_path=folder_read_path,
-            matched_files=matched_files,
-            file_sizes=file_sizes,
+            positions_from_eos_token_id=eos_token_id,
+            paths_file=paths_file,
         )
 
         self.subset_log = TBFolderDatasetLog(
@@ -500,20 +400,42 @@ def build_dataset(
             dtype=np.uint16 if token_size == 2 else np.uint32,
         )
 
+    paths_file = None
+    if folder_read_path:
+        paths_file = (
+            cached_assets_path(library_name="nanotron", namespace="path_files")
+            / f"{dataset_folder.replace('/', '_')}_paths.json"
+        ).as_posix()
+        # This ensures that the paths file is created BASED on the datasef_folder
+        DatatroveFolderDataset(
+            data_folder=dataset_folder,
+            filename_pattern="*.ds",
+            seq_len=seq_length,
+            recursive=False,
+            token_size=token_size,
+            shuffle=False,
+            return_positions=return_positions,
+            positions_from_eos_token_id=eos_token_id,
+            seed=seed,
+            paths_file=paths_file,
+        )
+
+        # From now on, we use the folder_read_path to read the dataset
+        dataset_folder = folder_read_path
+
     return TokenizedBytesFolderDataset(
         folder_path=dataset_folder,
         filename_pattern="*.ds",
         seq_len=seq_length,
         recursive=False,
         token_size=token_size,
-        max_tokens=max_tokens,
         shuffle=shuffle,
         return_positions=return_positions,  # if set to True, the position ids are directly read from datatrove
         eos_token_id=eos_token_id,
         seed=seed,
         skip_in_stream=skip_in_stream,
         num_samples=num_samples,
-        folder_read_path=folder_read_path,
+        paths_file=paths_file,
     )
 
 
@@ -561,29 +483,26 @@ def get_tb_datasets(
         for i, (dataset_folder, max_tokens) in enumerate(zip(config.dataset_folder, dataset_max_tokens))
     ]
 
-    if len(datasets) == 1 and False:
-        outputs_dataset = datasets[0]
-    else:
-        if dist.get_rank(parallel_context.world_pg) == 0:
-            try:
-                compile_helper()
-            except ImportError:
-                raise ImportError(
-                    "Could not compile megatron dataset C++ helper functions and therefore cannot import helpers python file."
-                )
-        dist.barrier(parallel_context.world_pg)
-        weights = config.dataset_weights
-        if not weights:
-            weights = [1] * len(datasets)
+    if dist.get_rank(parallel_context.world_pg) == 0:
+        try:
+            compile_helper()
+        except ImportError:
+            raise ImportError(
+                "Could not compile megatron dataset C++ helper functions and therefore cannot import helpers python file."
+            )
+    dist.barrier(parallel_context.world_pg)
+    weights = config.dataset_weights
+    if not weights:
+        weights = [1] * len(datasets)
 
-        outputs_dataset = BlendableDataset(
-            datasets,
-            weights,
-            train_num_samples,
-            parallel_context=parallel_context,
-            seed=seed,
-            consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
-        )
+    outputs_dataset = BlendableDataset(
+        datasets,
+        weights,
+        train_num_samples,
+        parallel_context=parallel_context,
+        seed=seed,
+        consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
+    )
 
     log_rank("Streamable datasets ready.", logger=logger, level=logging.INFO, rank=0)
     train_data_log = TrainDataLog(
