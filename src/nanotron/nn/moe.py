@@ -346,16 +346,17 @@ class Router(nn.Module):
 class GroupedMLP(nn.Module):
     def __init__(self, config: Qwen2Config, parallel_config: Optional[ParallelismArgs], ep_pg: dist.ProcessGroup):
         super().__init__()
+        moe_config = config.moe_config
 
-        num_local_experts = config.moe_config.num_experts // parallel_config.expert_parallel_size
+        num_local_experts = moe_config.num_experts // parallel_config.expert_parallel_size
         self.expert_parallel_size = parallel_config.expert_parallel_size
         self.num_local_experts = torch.tensor(num_local_experts, dtype=torch.int32, device="cuda")
         self.ep_pg = ep_pg
         self.merged_gate_up_proj = nn.Parameter(
-            torch.randn(num_local_experts, config.hidden_size, 2 * config.moe_config.moe_intermediate_size)
+            torch.randn(num_local_experts, moe_config.moe_hidden_size, 2 * moe_config.moe_intermediate_size)
         )
         self.merged_down_proj = nn.Parameter(
-            torch.randn(num_local_experts, config.moe_config.moe_intermediate_size, config.hidden_size)
+            torch.randn(num_local_experts, moe_config.moe_intermediate_size, moe_config.moe_hidden_size)
         )
         self.act = ACT2FN[config.hidden_act]
 
@@ -397,8 +398,9 @@ class Qwen2MoEMLPLayer(nn.Module):
         layer_idx: int = 0,
     ) -> None:
         super().__init__()
-        self.hidden_size = config.hidden_size
-        self.intermediate_size = config.intermediate_size
+        moe_config = config.moe_config
+        self.hidden_size = moe_config.moe_hidden_size
+        self.intermediate_size = moe_config.moe_intermediate_size
 
         # MoE specific configurations
         num_experts = config.moe_config.num_experts  # Total number of experts
@@ -423,7 +425,8 @@ class Qwen2MoEMLPLayer(nn.Module):
                 config=config,
                 parallel_config=parallel_config,
                 tp_pg=parallel_context.tp_pg,
-                intermediate_size=config.moe_config.shared_expert_intermediate_size,
+                hidden_size=moe_config.shared_expert_hidden_size,
+                intermediate_size=moe_config.shared_expert_intermediate_size,
             )
             # TODO: duplicte the shared expert gate
             self.shared_expert_gate = nn.Linear(

@@ -303,6 +303,7 @@ class Qwen2MLP(nn.Module):
         config: Qwen2Config,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
+        hidden_size: int,
         intermediate_size: int,
     ) -> None:
         super().__init__()
@@ -319,7 +320,7 @@ class Qwen2MLP(nn.Module):
         )
 
         self.gate_up_proj = TensorParallelColumnLinear(
-            config.hidden_size,
+            hidden_size,
             2 * intermediate_size,
             pg=tp_pg,
             mode=tp_mode,
@@ -332,7 +333,7 @@ class Qwen2MLP(nn.Module):
         # Define down projection
         self.down_proj = TensorParallelRowLinear(
             intermediate_size,
-            config.hidden_size,
+            hidden_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,  # Qwen2 doesn't use bias for down_proj
@@ -398,6 +399,7 @@ class Qwen2DecoderLayer(nn.Module):
                 config=config,
                 parallel_config=parallel_config,
                 tp_pg=tp_pg,
+                hidden_size=config.hidden_size,
                 intermediate_size=config.intermediate_size,
             )
 

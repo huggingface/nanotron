@@ -759,8 +759,8 @@ class DistributedTrainer:
                     )
 
                     moe_logging = (layer_percent, global_expert_percent)
-                else:
-                    moe_logging = None
+            else:
+                moe_logging = None
 
             # sync loss across DP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
             handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
@@ -1208,6 +1208,7 @@ class DistributedTrainer:
         total_params = total_params.item()
         self.num_params = {"total": total_params, "local": num_params}
 
+        # TODO: compute the active parameters for moe
         # TODO @nouamanetazi: better memory logs
         log_rank(
             f"Total number of parameters: {human_format(total_params)} ({total_size.item() / 1024**2:.2f}MiB)",
