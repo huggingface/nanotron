@@ -49,7 +49,7 @@ class BlendableDataset(torch.utils.data.Dataset):
         parallel_context: ParallelContext,
         seed: int,
         consumed_tokens_per_dataset_folder: Optional[Dict[str, int]] = None,
-        offsets: Optional[Dict[str, int]] = None,
+        offsets_in_samples: Optional[Dict[str, int]] = None,
     ):
         self.datasets = datasets
         num_datasets = len(datasets)
@@ -128,13 +128,13 @@ class BlendableDataset(torch.utils.data.Dataset):
         self.sequence_length = None  # Will be set when first batch is processed
 
         # Setup offsets for already consumed tokens from previous stages
-        self.offsets = {idx: 0 for idx in range(len(datasets))} # last stage's consumed_tokens_per_dataset_folder
-        if offsets is not None:
+        self.offsets_in_samples = {idx: 0 for idx in range(len(datasets))} # last stage's consumed_tokens_per_dataset_folder
+        if offsets_in_samples is not None:
             for idx, dataset in enumerate(datasets):
-                for folder_path, offset in offsets.items():
+                for folder_path, offset in offsets_in_samples.items():
                     if dataset.folder_path == folder_path:
-                        self.offsets[idx] = offset
-                        log_rank(f"[BlendableDataset] Applying offset {offset} to dataset {idx} ({dataset.folder_path})", logger=logger, level=logging.INFO, rank=0)
+                        self.offsets_in_samples[idx] = offset
+                        log_rank(f"[BlendableDataset] Applying offset {offset} samples to dataset {idx} ({dataset.folder_path})", logger=logger, level=logging.INFO, rank=0)
 
     def __len__(self):
         return self.size
@@ -143,7 +143,7 @@ class BlendableDataset(torch.utils.data.Dataset):
         dataset_idx = self.dataset_index[idx]
         sample_idx = self.dataset_sample_index[idx]
 
-        return self.datasets[dataset_idx][sample_idx + self.offsets[dataset_idx]] # TODO: is it okay to not respect dataset_sample_index? Since it's sequential it's okay for now
+        return self.datasets[dataset_idx][sample_idx + self.offsets_in_samples[dataset_idx]] # TODO: is it okay to not respect dataset_sample_index? Since it's sequential it's okay for now
 
     # @property
     # def last_file_idx(self):

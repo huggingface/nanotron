@@ -577,6 +577,8 @@ def get_tb_datasets(
         if not weights:
             weights = [1] * len(datasets)
 
+        last_stages_consumed_samples_per_dataset_folder = {k: v // sequence_length for k, v in last_stages_consumed_tokens_per_dataset_folder.items()}
+
         outputs_dataset = BlendableDataset(
             datasets,
             weights,
@@ -584,7 +586,7 @@ def get_tb_datasets(
             parallel_context=parallel_context,
             seed=seed,
             consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
-            offsets=last_stages_consumed_tokens_per_dataset_folder,
+            offsets_in_samples=last_stages_consumed_samples_per_dataset_folder,
         )
 
     log_rank("Streamable datasets ready.", logger=logger, level=logging.INFO, rank=0)
