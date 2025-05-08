@@ -181,7 +181,6 @@ class BlendableDataset(torch.utils.data.Dataset):
         """
         stats = {}
         for dataset_idx, dataset in enumerate(self.datasets):
-
             stats[dataset.folder_path] = {"tokens": self.consumed_tokens[dataset_idx]}
         return stats
 
