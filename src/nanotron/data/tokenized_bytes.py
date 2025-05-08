@@ -404,7 +404,7 @@ def build_dataset(
     if folder_read_path:
         paths_file = (
             cached_assets_path(library_name="nanotron", namespace="path_files")
-            / f"{folder_read_path.replace('/', '_')}_paths.json"
+            / f"{dataset_folder.replace('/', '_')}_paths.json"
         ).as_posix()
         # This ensures that the paths file is created BASED on the datasef_folder
         DatatroveFolderDataset(
@@ -420,6 +420,7 @@ def build_dataset(
             paths_file=paths_file,
         )
 
+        # From now on, we use the folder_read_path to read the dataset
         dataset_folder = folder_read_path
 
     return TokenizedBytesFolderDataset(
