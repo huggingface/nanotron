@@ -640,6 +640,7 @@ class Qwen2Model(nn.Module):
     ):
         # Training case (handles potential packing)
         # Get embeddings for the original (potentially padded/packed) sequence
+        input_ids = input_ids.view(-1)
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
         # output["position_ids"] is the original position_ids [batch_size, seq_length]
 
@@ -660,7 +661,7 @@ class Qwen2Model(nn.Module):
             "hidden_states": output["input_embeds"],  # Padded embeds [batch*seq_len, hidden_size]
             "position_ids": output["position_ids"],  # Original pos_ids [batch_size, seq_len]
             "cu_seqlens": cu_seqlens,  # Based on packing, might be None
-            # "inference_max_seqlen" is not needed for training
+            "inference_max_seqlen": None,
         }
 
         # Pass the prepared decoder_states dictionary to the decoder layers
