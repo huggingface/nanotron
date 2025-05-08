@@ -1208,15 +1208,40 @@ class DistributedTrainer:
         total_params = total_params.item()
         self.num_params = {"total": total_params, "local": num_params}
 
-        # TODO: compute the active parameters for moe
-        # TODO @nouamanetazi: better memory logs
+        # Compute active parameters for MoE
+        if config.model.model_config.is_moe_model:
+            from nanotron.nn.moe import is_expert_param
+
+            expert_params = sum(p.numel() for n, p in model.named_parameters() if is_expert_param(n))
+            non_expert_params = num_params - expert_params
+            active_params = (
+                non_expert_params
+                + expert_params
+                * config.model.model_config.moe_config.top_k
+                / config.model.model_config.moe_config.num_experts
+            )
+            active_params_t = torch.tensor(active_params, device="cuda")
+            dist.all_reduce(active_params_t, group=parallel_context.tp_pg)
+            dist.all_reduce(active_params_t, group=parallel_context.pp_pg)
+            self.num_params["active"] = active_params_t.item()
+
         log_rank(
-            f"Total number of parameters: {human_format(total_params)} ({total_size.item() / 1024**2:.2f}MiB)",
+            f"Total number of parameters: {human_format(total_params)} ({total_size.item() / 1024**2:.2f}MiB)\n",
             logger=logger,
             level=logging.INFO,
             group=parallel_context.world_pg,
             rank=0,
         )
+
+        if config.model.model_config.is_moe_model:
+            log_rank(
+                f"Active parameters: {human_format(self.num_params['active'])}",
+                logger=logger,
+                level=logging.INFO,
+                group=parallel_context.world_pg,
+                rank=0,
+            )
+
         log_rank(
             f"Local number of parameters: {human_format(num_params)} ({size_params / 1024**2:.2f}MiB)",
             logger=logger,
@@ -1224,6 +1249,8 @@ class DistributedTrainer:
             group=parallel_context.dp_pg,
             rank=0,
         )
+        # TODO @nouamanetazi: better memory logs
+
         log_rank(
             f"[After model building] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
             f" Peak allocated: {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB"
