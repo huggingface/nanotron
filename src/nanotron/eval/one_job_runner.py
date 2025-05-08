@@ -158,25 +158,17 @@ export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=6000
 export COUNT_NODE=`scontrol show hostnames "$SLURM_JOB_NODELIST" | wc -l`
 
-# Hugging Face token setup
-if [ -z "$HUGGING_FACE_HUB_TOKEN" ]; then
-  if TOKEN=$(cat ~/.cache/huggingface/token 2>/dev/null); then
-    export HUGGING_FACE_HUB_TOKEN=$TOKEN
-  else
-    echo "Error: The environment variable HUGGING_FACE_HUB_TOKEN is not set and the token cache could not be read."
-    exit 1
-  fi
-fi
-
 # Set environment variables
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 # export CUBLAS_WORKSPACE_CONFIG=":4096:8"
 
 # Set HuggingFace cache locations
-export HUGGINGFACE_HUB_CACHE={slurm_config.hf_cache}
-export HF_DATASETS_CACHE={slurm_config.hf_cache}
-export HF_MODULES_CACHE={slurm_config.hf_cache}
-export HF_HOME={slurm_config.hf_cache}
+if [ -n "{slurm_config.hf_cache}" ] && [ "{slurm_config.hf_cache}" != "None" ]; then
+    export HUGGINGFACE_HUB_CACHE={slurm_config.hf_cache}
+    export HF_DATASETS_CACHE={slurm_config.hf_cache}
+    export HF_MODULES_CACHE={slurm_config.hf_cache}
+    export HF_HOME={slurm_config.hf_cache}
+fi
 
 echo "Running on $COUNT_NODE nodes: $HOSTNAMES"
 
@@ -248,10 +240,10 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun \\
     --node_rank $SLURM_PROCID \\
     --master_addr $MASTER_ADDR \\
     --master_port $MASTER_PORT \\
-    {nanotron_path}/run_evals.py \\
+    -m lighteval nanotron \\
     --checkpoint-config-path $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/config.yaml \\
-    --lighteval-override {lighteval_config.eval_config_override}
-    --cache-dir {slurm_config.hf_cache}"""
+    --lighteval-config-path {lighteval_config.lighteval_config_path}
+    """
     if lighteval_config.output_dir is not None and lighteval_config.s3_save_path is not None:
         slurm_script += f"""
 s5cmd cp --if-size-differ "{lighteval_config.output_dir}*" {lighteval_config.s3_save_path}/

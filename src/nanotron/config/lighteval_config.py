@@ -79,11 +79,11 @@ class LightEvalSlurm:
 
     gpus_per_node: int = 8
     partition: str = "hopper-prod"
-    hf_cache: str = "~/.cache/huggingface"
+    hf_cache: Optional[str] = None
     cpus_per_task: int = 88
     qos: str = "low"
     time: str = "24:00:00"
-    reservation: Optional[str] = "smollm"
+    reservation: Optional[str] = None
 
     def __post_init__(self):
         self.hf_cache = str(Path(self.hf_cache).expanduser())
@@ -115,8 +115,7 @@ class LightEvalConfig:
     wandb_entity: Optional[str] = None
     output_dir: Optional[str] = None # we should sanity check that it's the same as the one in the eval_config_override
     nanotron_path: Optional[str] = "./"
-    eval_config_override: str = None
-    eval_config_override: Path = None  # Previously hardcoded in run_slurm_one_job
+    lighteval_config_path: Path = None  # Previously hardcoded in run_slurm_one_job
     eval_interval: Optional[
         int
     ] = None  # Must be multiple of checkpoint_interval. If None, eval will be done after each checkpoint upload to s3
