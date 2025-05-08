@@ -244,19 +244,19 @@ class DistributedTrainer:
             assert isinstance(checkpoint_metadata.metas, TrainingMetadata)
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
             self.metadata: TrainingMetadata = checkpoint_metadata.metas
-            # NOTE: we should not change data stages
+            # In case of a new datastage, metadata will be updated in `get_dataloader`
             assert (
                 self.config.tokens.train_steps > self.metadata.last_train_step
             ), f"Loaded checkpoint has already trained {self.metadata.last_train_step} batches, you need to specify a higher `config.tokens.train_steps`"
         else:
             data_stages = [
                 DataStageMetadata(
-                    name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0
+                    name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0, sequence_length=stage.sequence_length
                 )
                 for stage in self.config.data_stages
             ]
             self.metadata: TrainingMetadata = TrainingMetadata(
-                consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
+                consumed_train_samples=0, consumed_tokens_total=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
             )
 
         # Setup tensorboard write and log writers on output rank
@@ -339,7 +339,7 @@ class DistributedTrainer:
 
         log_rank("Start training", logger=logger, level=logging.INFO, rank=0, is_separator=True)
         log_rank(
-            f"mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_train_samples: {metadata.consumed_train_samples}",  # noqa
+            f"mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_tokens_total: {metadata.consumed_tokens_total}",  # noqa
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -450,9 +450,6 @@ class DistributedTrainer:
             return
 
         assert len(dataloaders) > 0, "No dataloaders provided"
-        assert len(dataloaders) == len(
-            self.config.data_stages
-        ), "Number of dataloaders should match the number of dataset stages"
 
         def clear_dataloader_from_memory(dataloader: DataLoader, stage_name: str):
             import gc
@@ -573,10 +570,10 @@ class DistributedTrainer:
                 outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Update consumption tracking for current batch
-                if hasattr(self.current_base_dl, "dataset"):
+                if hasattr(self.current_base_dl, "dataset") and hasattr(self.current_base_dl.dataset, "update_consumption_metrics"):
+                    # TODO: only works for BlendableDataset
                     self.current_base_dl.dataset.update_consumption_metrics(
-                        start_idx=(self.iteration_step - 1)
-                        * self.global_batch_size,  # assumes we start from iteration_step=1
+                        start_idx=(self.iteration_step - 1) * self.global_batch_size,  # assumes we start from iteration_step=1
                         end_idx=self.iteration_step * self.global_batch_size,
                         sequence_length=self.sequence_length,
                     )
@@ -592,11 +589,11 @@ class DistributedTrainer:
                         current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
 
                 # Original consumption tracking
-                self.metadata.consumed_train_samples += self.global_batch_size
+                self.metadata.consumed_train_samples += self.global_batch_size # TODO: Legacy: idc abt this
+                self.metadata.consumed_tokens_total += self.global_batch_size * self.sequence_length
                 self.metadata.last_train_step = self.iteration_step
-                self.metadata.data_stages[
-                    self.metadata.last_stage_idx
-                ].consumed_train_samples += self.global_batch_size
+                self.metadata.current_stage.consumed_train_samples += self.global_batch_size
+                assert self.metadata.current_stage.sequence_length == self.sequence_length, "Sequence length mismatch between the current stage and the global sequence length"
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg)

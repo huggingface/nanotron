@@ -818,7 +818,7 @@ def compute_remain_train_steps_of_a_data_stage_from_ckp(
         return 0
     else:
         last_train_steps = metadata.last_train_step if is_resume_from_training() else stage.start_training_step
-        return total_train_steps - last_train_steps
+        return total_train_steps - last_train_steps + 1
 
 
 def get_consumed_train_samples_of_a_data_stage_from_ckp(
@@ -826,6 +826,7 @@ def get_consumed_train_samples_of_a_data_stage_from_ckp(
 ) -> Optional[int]:
     start_training_step = stage.start_training_step
 
+    # find the stage in the metadata using the start_training_step
     actual_stage = next(
         (s for s in metadata.data_stages if s.start_training_step == start_training_step),
         None,

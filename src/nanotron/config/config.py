@@ -226,6 +226,7 @@ class DatasetStageArgs:
     name: str
     start_training_step: int
     data: DataArgs
+    sequence_length: Optional[int] = None # if None, we use the sequence length from the config
 
     def __post_init__(self):
         if self.start_training_step < 0:
@@ -541,6 +542,12 @@ class Config:
         assert (
             self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
         ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by num_key_value_heads ({self.model.model_config.num_key_value_heads})"
+
+        # data_stages
+        if self.data_stages is not None:
+            for stage in self.data_stages:
+                if stage.sequence_length is None:
+                    stage.sequence_length = self.tokens.sequence_length
 
     @property
     def global_batch_size(self):

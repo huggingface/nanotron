@@ -506,7 +506,7 @@ def build_dataset(
         seq_len=seq_length,
         recursive=False,
         token_size=token_size,
-        max_tokens=max_tokens,
+        max_tokens=max_tokens, # TODO: remove
         shuffle=shuffle,
         return_positions=return_positions,  # if set to True, the position ids are directly read from datatrove
         eos_token_id=eos_token_id,
@@ -527,6 +527,7 @@ def get_tb_datasets(
     shuffle: bool = False,
     seed: int = 6,
     consumed_tokens_per_dataset_folder: Optional[Dict[str, int]] = None,
+    last_stages_consumed_tokens_per_dataset_folder: Optional[Dict[str, int]] = None,
 ) -> Tuple[DataLoader, TrainDataLog]:
     """Build TokenizedBytes datasets
 
@@ -583,6 +584,7 @@ def get_tb_datasets(
             parallel_context=parallel_context,
             seed=seed,
             consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
+            offsets=last_stages_consumed_tokens_per_dataset_folder,
         )
 
     log_rank("Streamable datasets ready.", logger=logger, level=logging.INFO, rank=0)

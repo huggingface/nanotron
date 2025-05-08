@@ -2,7 +2,7 @@ import platform
 
 from packaging.version import Version, parse
 
-CHECKPOINT_VERSION = Version("1.4")
+CHECKPOINT_VERSION = Version("1.5")
 
 PY_VERSION = parse(platform.python_version())
 
