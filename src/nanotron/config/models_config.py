@@ -48,7 +48,7 @@ class MoEConfig:
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
     enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
     token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
-    use_haojun_permute: bool = True  # Whether to use Haojun's permute
+    use_torch_permute: bool = True  # Whether to use Haojun's permute
 
     def __post_init__(self):
         # Validate the configuration

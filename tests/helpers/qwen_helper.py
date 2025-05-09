@@ -30,7 +30,7 @@ QWEN_MOE_CONFIG = MoEConfig(
     shared_expert_intermediate_size=32 * 4,
     enable_shared_expert=True,
     token_dispatcher_type="alltoall",
-    use_haojun_permute=True,
+    use_torch_permute=True,
 )
 
 QWEN_MODEL_CONFIG = {

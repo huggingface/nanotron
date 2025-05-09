@@ -89,7 +89,7 @@ class AllToAllDispatcher(nn.Module):
         self.input_split_sizes = None
         self.output_split_sizes = None
 
-        self._use_haojun_permute = True
+        self._use_torch_permute = True
 
     def _haojun_permute_topk(self, hidden_states, routing_indices):
         """
@@ -205,7 +205,7 @@ class AllToAllDispatcher(nn.Module):
             )  # [num_local_experts]
             global_routing_indices = differentiable_all_gather(routing_indices, group=self.ep_pg)
 
-            if self._use_haojun_permute:
+            if self._use_torch_permute:
                 hidden_states, inverse_permute_mapping, _ = self._haojun_permute_topk(hidden_states, routing_indices)
             else:
                 hidden_states, inverse_permute_mapping = permute(hidden_states, routing_indices)
@@ -305,7 +305,7 @@ class AllToAllDispatcher(nn.Module):
         )
 
         # NOTE: merging the expert output combination and un-permuting them back into a single operation
-        if self._use_haojun_permute:
+        if self._use_torch_permute:
             comebined_expert_outputs = self._haojun_unpermute_topk(
                 undispatched_expert_outputs, *inverse_permute_mapping, routing_weights
             )
@@ -420,7 +420,7 @@ class Qwen2MoEMLPLayer(nn.Module):
         # Router for selecting experts
         self.router = Router(config, parallel_config, layer_idx)
         self.token_dispatcher = AllToAllDispatcher(num_local_experts, num_experts, parallel_context.ep_pg)
-        self.token_dispatcher._use_haojun_permute = config.moe_config.use_haojun_permute
+        self.token_dispatcher._use_torch_permute = config.moe_config.use_torch_permute
 
         # Enable shared experts if configured
         self.enable_shared_expert = config.moe_config.enable_shared_expert
