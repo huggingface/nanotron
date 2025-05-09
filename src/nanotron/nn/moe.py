@@ -469,7 +469,6 @@ class Qwen2MoEMLPLayer(nn.Module):
         output, num_local_tokens_per_expert = self._compute_expert_outputs(
             hidden_states, routing_weights, routing_indices
         )
-
         if self.enable_shared_expert:
             shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
             shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
