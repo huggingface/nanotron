@@ -215,8 +215,12 @@ class FP32GradientAccumulator(GradientAccumulator):
     @torch.profiler.record_function("FP32GradientAccumulator._accumulate_grad")
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
-        # if half_param.grad is None:
-        #     return
+        from nanotron.nn.moe import is_expert_param
+
+        if half_param.grad is None and is_expert_param(name):
+            log_rank(f"[MoE] param {name} has no gradients", logger=logger, level=logging.WARNING)
+            return
+
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
         fp32_grad = self.get_grad_buffer(name=name)
 
@@ -356,7 +360,7 @@ def get_fp32_accum_hook(
         log_rank(
             "[DDP triggered register_comm_hook] parameters in bucket: {}".format(param_in_buckets),
             logger=logger,
-            level=logging.INFO,
+            level=logging.DEBUG,
             rank=0,
         )
 
@@ -420,7 +424,7 @@ def get_fp32_accum_hook(
                     param_in_buckets
                 ),
                 logger=logger,
-                level=logging.INFO,
+                level=logging.DEBUG,
                 rank=0,
             )
 

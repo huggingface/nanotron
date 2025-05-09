@@ -4,7 +4,7 @@ import json
 import os
 import shutil
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
 from typing import (
@@ -22,7 +22,6 @@ from typing import (
 
 import psutil
 import torch
-from einops import rearrange, reduce
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
@@ -127,12 +126,6 @@ def get_size(bytes):
         if bytes < 1024:
             return f"{bytes:.2f}{unit}B"
         bytes /= 1024
-
-
-@dataclass
-class ModelLogging:
-    model_grads: List[Tuple[str, torch.Tensor]]
-    moe_tokens_per_expert: torch.Tensor
 
 
 class DistributedTrainer:
@@ -582,9 +575,7 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg, z_loss_avg, model_grads, moe_logging = self.training_step(
-                    dataloader=self.current_dataloader
-                )
+                outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Update consumption tracking for current batch
                 if hasattr(self.current_base_dl, "dataset"):
@@ -617,8 +608,6 @@ class DistributedTrainer:
                         outputs=outputs,
                         loss_avg=loss_avg,
                         z_loss_avg=z_loss_avg,
-                        model_grads=model_grads,
-                        moe_logging=moe_logging,
                     )
 
                 # Checkpoint
@@ -690,14 +679,6 @@ class DistributedTrainer:
         )
         nanotron_timer("sync_gradients", "cuda").end()
 
-        # NOTE: this is the gradient before the clip_grad
-        if os.environ.get("DEBUG_MODEL", "0") == "1":
-            model_grads = [
-                (n, torch.norm(p["fp32"].grad, p=2)) for n, p in self.optimizer.gradient_accumulator.parameters.items()
-            ]
-        else:
-            model_grads = None
-
         # Clip gradients
         nanotron_timer("clip_gradients", "cuda").start()
         if self.config.optimizer.clip_grad is not None:
@@ -728,47 +709,12 @@ class DistributedTrainer:
             else:
                 z_loss_avg = None
 
-            if os.environ.get("DEBUG_MOE", "0") == "1":
-                if "moe_logging" in outputs[0]:
-                    # Aggregate MoE stats across microbatches
-                    moe_logging = torch.stack([output["moe_logging"] for output in outputs]).sum(dim=0)
-
-                    # Gather across expert parallel group
-                    ep_group_size = self.parallel_context.ep_pg.size()
-                    gathered_moe = [torch.zeros_like(moe_logging) for _ in range(ep_group_size)]
-                    dist.all_gather(gathered_moe, moe_logging, group=self.parallel_context.ep_pg)
-                    gathered_moe = torch.stack(gathered_moe)  # [ep_rank, num_layers, num_experts]
-
-                    # Reorganize dimensions for analysis
-                    gathered_moe = rearrange(
-                        gathered_moe, "ep_rank num_layers num_experts -> num_layers ep_rank num_experts"
-                    )
-
-                    # Calculate global expert distribution
-                    global_usage = rearrange(
-                        gathered_moe, "num_layers ep_rank num_experts -> num_layers (ep_rank num_experts)"
-                    )
-                    total_usage = reduce(global_usage, "num_layers experts -> experts", "sum")
-                    global_expert_percent = total_usage / total_usage.sum()
-
-                    # Calculate per-layer expert distribution
-                    layer_totals = reduce(gathered_moe, "num_layers ep_rank num_experts -> num_layers 1 1", "sum")
-                    layer_percent = gathered_moe / layer_totals
-                    layer_percent = rearrange(
-                        layer_percent, "num_layers ep_rank num_experts -> num_layers (ep_rank num_experts)"
-                    )
-
-                    moe_logging = (layer_percent, global_expert_percent)
-            else:
-                moe_logging = None
-
             # sync loss across DP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
             handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
         else:
             z_loss_avg = None
             loss_avg = None
             handle = None
-            moe_logging = None
 
         # Move optimizer states back to GPU before optimizer step
         if (
@@ -800,7 +746,7 @@ class DistributedTrainer:
 
         # TODO: return a dataclass instead of a list of tensors,
         # it's more readable
-        return outputs, loss_avg, z_loss_avg, model_grads, moe_logging
+        return outputs, loss_avg, z_loss_avg
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(
@@ -815,8 +761,6 @@ class DistributedTrainer:
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
         z_loss_avg: Optional[torch.Tensor],
-        model_grads: Optional[List[Tuple[str, torch.Tensor]]],
-        moe_logging: Optional[torch.Tensor],
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
@@ -954,29 +898,6 @@ class DistributedTrainer:
                             LogItem(f"dataloader/consumed_tokens/{dataset_name}", stats["tokens"], "human_format"),
                         ]
                     )
-
-        # NOTE: log all model states
-        if os.environ.get("DEBUG_MODEL", "0") == "1":
-            basic_log_entries.extend([LogItem(f"model_grads/{n}", g, "human_format") for n, g in model_grads])
-
-        if os.environ.get("DEBUG_MOE", "0") == "1" and moe_logging is not None:
-            # Per-layer expert metrics
-            moe_logging_per_layer, moe_logging_across_layers = moe_logging
-            num_layers = moe_logging_per_layer.shape[0]
-            for layer_idx in range(num_layers):
-                layer_experts = moe_logging_per_layer[layer_idx]
-                for expert_idx, expert_percent in enumerate(layer_experts):
-                    basic_log_entries.append(
-                        LogItem(
-                            f"moe/router/layer_{layer_idx}.expert_{expert_idx}", expert_percent.item(), "human_format"
-                        )
-                    )
-
-            # Global expert metrics (across all layers)
-            for expert_idx, expert_percent in enumerate(moe_logging_across_layers):
-                basic_log_entries.append(
-                    LogItem(f"moe/router/expert_{expert_idx}", expert_percent.item(), "human_format")
-                )
 
         # WandB logging - determine if this rank should log to wandb
         should_log_to_wandb = wandb is not None and (
@@ -1221,8 +1142,8 @@ class DistributedTrainer:
                 / config.model.model_config.moe_config.num_experts
             )
             active_params_t = torch.tensor(active_params, device="cuda")
-            dist.all_reduce(active_params_t, group=parallel_context.tp_pg)
-            dist.all_reduce(active_params_t, group=parallel_context.pp_pg)
+            dist.all_reduce(active_params_t, group=parallel_context.ep_pg)
+            dist.all_reduce(active_params_t, group=parallel_context.ep_pp_pg)
             self.num_params["active"] = active_params_t.item()
 
         log_rank(

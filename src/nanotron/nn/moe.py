@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 import torch
+from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import CheckpointFunction
@@ -11,7 +12,6 @@ from nanotron import logging
 from nanotron.config import ParallelismArgs
 from nanotron.config.models_config import Qwen2Config
 from nanotron.models.base import ignore_init_on_device_and_dtype
-from nanotron.nn._moe_kernel import _get_dispatched_routing_indices
 from nanotron.nn.activations import ACT2FN
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
@@ -47,6 +47,28 @@ def unpermute(x: torch.Tensor, inverse_mapping: torch.Tensor, routing_weights: t
     return comebined_x.to(x.dtype)
 
 
+def _get_dispatched_routing_indices(global_routing_indices, expert_parallel_size, num_experts):
+    num_local_experts = num_experts // expert_parallel_size
+    global_routing_indices_per_device = rearrange(
+        global_routing_indices,
+        "(expert_parallel_size num_tokens) num_experts -> expert_parallel_size (num_tokens num_experts)",
+        expert_parallel_size=expert_parallel_size,
+    )
+    sorted_global_routing_indices_per_device, _ = torch.sort(global_routing_indices_per_device)
+
+    dispatched_indices = []
+    for ep_rank in range(expert_parallel_size):
+        start_idx = ep_rank * num_local_experts
+        end_idx = start_idx + num_local_experts
+
+        mask = (sorted_global_routing_indices_per_device >= start_idx) & (
+            sorted_global_routing_indices_per_device < end_idx
+        )
+        dispatched_indices.append(sorted_global_routing_indices_per_device[mask])
+
+    return dispatched_indices
+
+
 @dataclass
 class MoELogging:
     """
@@ -54,19 +76,6 @@ class MoELogging:
     """
 
     num_local_tokens: List[torch.Tensor]
-
-
-class ScaleGradient(torch.autograd.Function):
-    @staticmethod
-    @torch.cuda.amp.custom_fwd
-    def forward(ctx, x: torch.Tensor, scale: float):
-        ctx.scale = scale
-        return x
-
-    @staticmethod
-    @torch.cuda.amp.custom_bwd
-    def backward(ctx, grad: torch.Tensor):
-        return grad * ctx.scale, None
 
 
 class AllToAllDispatcher(nn.Module):
@@ -256,7 +265,6 @@ class AllToAllDispatcher(nn.Module):
             # because we will use this for local grouped_gemm
             # NOTE: the local_routing_indices has a global expert index,
             # so we need to subtract the number of local experts to get the local expert index
-            # dispatched_routing_indices = dispatched_routing_indices.cpu()
             num_local_dispatched_tokens_per_expert = torch.bincount(
                 dispatched_routing_indices_cpu - ep_rank * self.num_local_experts, minlength=self.num_local_experts
             )
@@ -409,8 +417,6 @@ class Qwen2MoEMLPLayer(nn.Module):
         self.expert_parallel_size = parallel_config.expert_parallel_size
         self.num_local_experts = num_local_experts  # Experts per device
 
-        # Get TP mode configuration
-
         # Router for selecting experts
         self.router = Router(config, parallel_config, layer_idx)
         self.token_dispatcher = AllToAllDispatcher(num_local_experts, num_experts, parallel_context.ep_pg)
@@ -455,7 +461,7 @@ class Qwen2MoEMLPLayer(nn.Module):
         )
         return output, num_local_tokens_per_expert
 
-    def _core_forward(self, hidden_states, moe_logging: Optional[MoELogging]):
+    def _core_forward(self, hidden_states):
         """Core forward logic for MoE layer."""
         # Get top-k routing weights and indices
         routing_weights, routing_indices = self.router(hidden_states)  # [num_tokens, num_experts_per_token]
@@ -469,20 +475,17 @@ class Qwen2MoEMLPLayer(nn.Module):
             shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
             output = output + shared_gate * shared_expert_output
 
-        if moe_logging is not None:
-            moe_logging[self.layer_idx, :] = num_local_tokens_per_expert
-
         return {"hidden_states": output}
 
     def _checkpointed_forward(self, hidden_states):
         """Apply gradient checkpointing to save memory during training."""
         return CheckpointFunction.apply(self._core_forward, True, hidden_states)
 
-    def forward(self, hidden_states, moe_logging: Optional[MoELogging] = None):
+    def forward(self, hidden_states):
         """Forward pass for the MoE layer."""
         if self.recompute_layer and self.training:
-            outputs = self._checkpointed_forward(hidden_states, moe_logging)
+            outputs = self._checkpointed_forward(hidden_states)
         else:
-            outputs = self._core_forward(hidden_states, moe_logging)
+            outputs = self._core_forward(hidden_states)
 
         return outputs
