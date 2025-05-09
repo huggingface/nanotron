@@ -63,6 +63,10 @@ def get_args():
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
+    parser.add_argument("--expert_parallel_size", type=int, default=0)
+    parser.add_argument("--expert_tensor_parallel_size", type=int, default=0)
+    parser.add_argument("--expert_data_parallel_size", type=int, default=0)
+    parser.add_argument("--enabled_moe", type=bool, default=False)
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
     parser.add_argument("--use-cache", action="store_true", help="Use KV cache to speed up generation")
     return parser.parse_args()
@@ -78,9 +82,18 @@ def main():
     tokenizer_path = config.tokenizer.tokenizer_name_or_path
 
     parallel_config = ParallelismArgs(
-        dp=args.dp or config.parallelism.dp,
+        dp=config.parallelism.dp,
         pp=args.pp or config.parallelism.pp,
         tp=args.tp or config.parallelism.tp,
+        # TODO: add args
+        # expert_parallel_size=args.expert_parallel_size or config.parallelism.expert_parallel_size,
+        # expert_tensor_parallel_size=args.expert_tensor_parallel_size or config.parallelism.expert_tensor_parallel_size,
+        # expert_data_parallel_size=args.expert_data_parallel_size or config.parallelism.expert_data_parallel_size,
+        # enabled_moe=args.enabled_moe or config.parallelism.enabled_moe,
+        expert_parallel_size=config.parallelism.expert_parallel_size,
+        expert_tensor_parallel_size=config.parallelism.expert_tensor_parallel_size,
+        expert_data_parallel_size=config.parallelism.expert_data_parallel_size,
+        enabled_moe=config.parallelism.enabled_moe,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,
@@ -91,7 +104,12 @@ def main():
         data_parallel_size=parallel_config.dp,
         pipeline_parallel_size=parallel_config.pp,
         tensor_parallel_size=parallel_config.tp,
+        expert_parallel_size=parallel_config.expert_parallel_size,
+        expert_tensor_parallel_size=parallel_config.expert_tensor_parallel_size,
+        expert_data_parallel_size=parallel_config.expert_data_parallel_size,
+        enabled_moe=parallel_config.enabled_moe,
     )
+    # log_rank(f"[run_generate.parallel_context]", logger=logger, level=logging.INFO)
 
     # Set log levels
     logging_config = LoggingArgs(
@@ -171,11 +189,19 @@ def main():
         dummy_inputs = [
             # "The future of AI is",
             "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-            "def fib(n)",
+            "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            # "def fib(n)",
+            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            # "def fib(n)",
             # 'Here is an extract from a webpage: "Have you ever experienced heel pain after a heavy physical activity, or even right after a long period of standing? If you regard this as something usual and normal, then think again. Miscalled as heel pain, plantar fasciitis causes these frequent mild pains experienced in the soles of the feet. It is the inflammation and enlargement the plantar fascia tissue that is located in the heels of the feet, stretching to the base of the toes. This tissue is responsible for absorbing shock in the feet and for supporting the arches. It also plays a vital role in foot movements during walking and standing. Many factors such as excessive walking, standing, and running trigger heel pain and plantar fasciitis. A sudden increase in intensity of activities, increase in weight, and abrupt change of footwear also cause the swelling of the ligament. Non-supportive footwear lacking arch cushions and improper and worn out running or training can also lead to the problem. It is also most evident among those". Write an extensive and detailed course unit suitable for a textbook targeted at college students, related to the given extract, within the context of "Medicine". Do not just list concepts, but develop each one in detail before moving to the next, as we prioritize depth of understanding and comprehensive exploration of the subject matter over breadth. Focus on: - Rigor: Ensure in-depth coverage of the concepts/sections. - Engagement: Write with an academic, professional and engaging tone that captivates interest. - Application: Incorporate specific, practical examples, such as proofs in calculus or critical dates and figures in history. Do not include a title or an introduction, simply write the content without headlines and introductory phrases. Do not use images.',
             # "Advancements in technology will lead to",
             # "Tomorrow's world is shaped by",
         ]
+
+        # log_rank(f"[run_generate.main.before_decode_text]", logger=logger, level=logging.INFO)
 
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),

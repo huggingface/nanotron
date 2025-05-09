@@ -38,14 +38,17 @@ class MoEConfig:
 
     num_experts: int = 8  # Total number of experts
     top_k: int = 2  # Number of experts to route each token to
-    moe_intermediate_size: int = 1408  # Intermediate size of the MoE layer
-    shared_expert_intermediate_size: int = 5632  # Intermediate size of the shared expert
+    moe_hidden_size: int = 4096  # Hidden size of the MoE layer
+    moe_intermediate_size: int = 11008  # Intermediate size of the MoE layer
+    shared_expert_hidden_size: int = 4096  # Hidden size of the shared expert
+    shared_expert_intermediate_size: int = 11008  # Intermediate size of the shared expert
     router_aux_loss_coef: float = 0.01  # Coefficient for the router auxiliary loss
     layers: List[int] = field(
         default_factory=lambda: [-1]
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
     enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
     token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
+    use_torch_permute: bool = True  # Whether to use Haojun's permute
 
     def __post_init__(self):
         # Validate the configuration

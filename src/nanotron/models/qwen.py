@@ -302,6 +302,7 @@ class Qwen2MLP(nn.Module):
         config: Qwen2Config,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
+        hidden_size: int,
         intermediate_size: int,
     ) -> None:
         super().__init__()
@@ -318,7 +319,7 @@ class Qwen2MLP(nn.Module):
         )
 
         self.gate_up_proj = TensorParallelColumnLinear(
-            config.hidden_size,
+            hidden_size,
             2 * intermediate_size,
             pg=tp_pg,
             mode=tp_mode,
@@ -331,7 +332,7 @@ class Qwen2MLP(nn.Module):
         # Define down projection
         self.down_proj = TensorParallelRowLinear(
             intermediate_size,
-            config.hidden_size,
+            hidden_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,  # Qwen2 doesn't use bias for down_proj
@@ -362,6 +363,7 @@ class Qwen2DecoderLayer(nn.Module):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         cp_pg: dist.ProcessGroup,
+        parallel_context: ParallelContext,
         layer_idx: int,
     ) -> None:
         super().__init__()
@@ -379,15 +381,16 @@ class Qwen2DecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
         self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
+        self.layer_idx = layer_idx
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
-            from nanotron.nn.moe import Qwen2MoELayer
+            from nanotron.nn.moe import Qwen2MoEMLPLayer
 
-            self.mlp = Qwen2MoELayer(
+            self.mlp = Qwen2MoEMLPLayer(
                 config=config,
                 parallel_config=parallel_config,
-                tp_pg=tp_pg,
+                parallel_context=parallel_context,
                 layer_idx=layer_idx,
             )
         else:
@@ -395,6 +398,7 @@ class Qwen2DecoderLayer(nn.Module):
                 config=config,
                 parallel_config=parallel_config,
                 tp_pg=tp_pg,
+                hidden_size=config.hidden_size,
                 intermediate_size=config.intermediate_size,
             )
 
@@ -510,6 +514,8 @@ class Qwen2Model(nn.Module):
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "cp_pg": parallel_context.cp_pg,
+                        # TODO: directly pass the ep_pg process group instead of the parallel_context
+                        "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
                     module_input_keys={"hidden_states", "position_ids", "cu_seqlens"},
@@ -706,10 +712,12 @@ class Qwen2ForTraining(NanotronModel):
             label_ids=label_ids,
             label_mask=label_mask,
         )
+        outputs = {"loss": loss["loss"]}
+
         if self.config.z_loss_enabled:
-            return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
-        else:
-            return {"loss": loss["loss"]}
+            outputs["z_loss"] = loss["z_loss"]
+
+        return outputs
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):
