@@ -5,6 +5,13 @@ Usage:
 ```
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
 torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10
+torchrun --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000
+
+torchrun --rdzv_endpoint=127.0.0.1:12357 --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000 --use-cache --max-micro-batch-size 2
+export CUDA_VISIBLE_DEVICES=2,3
+torchrun --rdzv_endpoint=127.0.0.1:12356 --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000 --use-cache
+export CUDA_VISIBLE_DEVICES=4,5
+torchrun --rdzv_endpoint=127.0.0.1:12355 --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000 --max-micro-batch-size 2
 ```
 """
 
@@ -65,6 +72,9 @@ def get_args():
     parser.add_argument("--tp", type=int, default=0)
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
     parser.add_argument("--use-cache", action="store_true", help="Use KV cache to speed up generation")
+    parser.add_argument(
+        "--max-micro-batch-size", type=int, default=1, help="Maximum number of micro batches to generate"
+    )
     return parser.parse_args()
 
 
@@ -170,11 +180,12 @@ def main():
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = [
             # "The future of AI is",
-            "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
             "def fib(n)",
             # 'Here is an extract from a webpage: "Have you ever experienced heel pain after a heavy physical activity, or even right after a long period of standing? If you regard this as something usual and normal, then think again. Miscalled as heel pain, plantar fasciitis causes these frequent mild pains experienced in the soles of the feet. It is the inflammation and enlargement the plantar fascia tissue that is located in the heels of the feet, stretching to the base of the toes. This tissue is responsible for absorbing shock in the feet and for supporting the arches. It also plays a vital role in foot movements during walking and standing. Many factors such as excessive walking, standing, and running trigger heel pain and plantar fasciitis. A sudden increase in intensity of activities, increase in weight, and abrupt change of footwear also cause the swelling of the ligament. Non-supportive footwear lacking arch cushions and improper and worn out running or training can also lead to the problem. It is also most evident among those". Write an extensive and detailed course unit suitable for a textbook targeted at college students, related to the given extract, within the context of "Medicine". Do not just list concepts, but develop each one in detail before moving to the next, as we prioritize depth of understanding and comprehensive exploration of the subject matter over breadth. Focus on: - Rigor: Ensure in-depth coverage of the concepts/sections. - Engagement: Write with an academic, professional and engaging tone that captivates interest. - Application: Incorporate specific, practical examples, such as proofs in calculus or critical dates and figures in history. Do not include a title or an introduction, simply write the content without headlines and introductory phrases. Do not use images.',
             # "Advancements in technology will lead to",
             # "Tomorrow's world is shaped by",
+            # "What is the meaning of the word chutzpah?\nThe word chutzpah means",
         ]
 
         outputs = decode_text(
@@ -183,7 +194,7 @@ def main():
             model=model.model,
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
-            max_micro_batch_size=2,
+            max_micro_batch_size=args.max_micro_batch_size,
             generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
@@ -222,7 +233,7 @@ def main():
             input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
             model=model.model,
             parallel_context=parallel_context,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
             max_micro_batch_size=1,
             max_new_tokens=12,
             returns_logits=False,
