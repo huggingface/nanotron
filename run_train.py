@@ -61,7 +61,7 @@ logger = logging.get_logger(__name__)
 def get_dataloader_from_data_stage(
     trainer: DistributedTrainer,
     data: DataArgs,
-    consumed_train_samples: int,
+    consumed_train_samples_stage: int,
     consumed_tokens_per_dataset_folder: Dict[str, int],
     last_stages_consumed_tokens_per_dataset_folder: Dict[str, int],
     num_remaining_train_steps: int,
@@ -71,11 +71,11 @@ def get_dataloader_from_data_stage(
     Returns a dataloader for a given data stage.
 
     data: The data configuration for the current stage.
-    consumed_train_samples: The number of samples consumed by the model in the this stage (each stage starts from zero).
+    consumed_train_samples_stage: The number of samples consumed by the model in the this stage (each stage starts from zero).
     consumed_tokens_per_dataset_folder: The number of tokens consumed by the model in previous stages to avoid reseeing them, because the sampler has restarted for this stage.
     num_remaining_train_steps: The number of remaining training steps for this stage.
     """
-    assert consumed_train_samples >= 0, "consumed_train_samples should be greater than 0"
+    assert consumed_train_samples_stage >= 0, "consumed_train_samples_stage should be greater than 0"
     assert num_remaining_train_steps >= 0, "num_remaining_train_steps should be greater than 0"
 
     # First, we need to know which ranks to feed the dataloader to
@@ -167,7 +167,7 @@ def get_dataloader_from_data_stage(
                 input_pp_rank=input_pp_rank,
                 output_pp_rank=output_pp_rank,
                 micro_batch_size=trainer.micro_batch_size,
-                consumed_train_samples=consumed_train_samples,
+                consumed_train_samples_stage=consumed_train_samples_stage,
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
@@ -211,10 +211,12 @@ def get_dataloader_from_data_stage(
             global_batch_size=trainer.global_batch_size,
             sequence_length=trainer.sequence_length,
             train_steps=trainer.config.tokens.train_steps,
+            current_iteration=trainer.iteration_step,
             parallel_context=trainer.parallel_context,
             shuffle=data.dataset.shuffle_files,
             eos_token_id=tokenizer.eos_token_id,
             seed=data.seed,
+            consumed_samples=consumed_train_samples_stage,
             consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
             last_stages_consumed_tokens_per_dataset_folder=last_stages_consumed_tokens_per_dataset_folder,
         )
@@ -225,8 +227,8 @@ def get_dataloader_from_data_stage(
             global_batch_size=trainer.global_batch_size,
             num_workers=data.num_loading_workers,
             cfg=data.dataset,
-            consumed_samples=consumed_train_samples,
-            num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+            consumed_samples=consumed_train_samples_stage,
+            num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size, # TODO: this overshoots what's needed by the current stage, but it doesnt matter?
             parallel_context=trainer.parallel_context,
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
@@ -378,7 +380,7 @@ def get_dataloader(
     dataloaders[current_stage.name] = get_dataloader_from_data_stage(
         trainer,
         stage_args_data,
-        consumed_train_samples=cur_stage_consumed_train_samples,
+        consumed_train_samples_stage=cur_stage_consumed_train_samples,
         consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
         last_stages_consumed_tokens_per_dataset_folder=last_stages_consumed_tokens_per_dataset_folder,
         num_remaining_train_steps=num_remaining_train_steps,
