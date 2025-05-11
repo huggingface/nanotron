@@ -337,6 +337,8 @@ def get_dataloader(
                 consumed_tokens_per_dataset_folder={},
                 sequence_length=trainer.sequence_length,
             ))
+    elif len(trainer.metadata.data_stages) < len(trainer.config.data_stages):
+        raise ValueError(f"If you're trying to start a new stage, you need to set `start_training_step` to the step after the last stage's: {trainer.iteration_step+1}")
     current_stage = trainer.metadata.data_stages[stage_idx]
     cur_stage_consumed_train_samples = current_stage.consumed_train_samples
     consumed_tokens_per_dataset_folder = current_stage.consumed_tokens_per_dataset_folder
