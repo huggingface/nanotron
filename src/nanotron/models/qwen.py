@@ -212,8 +212,8 @@ class Qwen2Attention(nn.Module):
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
         self.simple_causal_mask = True
         self._use_qkv_packed = config._use_qkv_packed
-
-        # TODO: support doc masking / SWA / SFT / inference
+        self.sliding_window_size = config.sliding_window_size
+        # TODO: support SFT
 
     def forward(
         self,
@@ -279,6 +279,7 @@ class Qwen2Attention(nn.Module):
         assert cu_seqlens.dtype == torch.int32
         assert max_seqlen is not None
         assert isinstance(max_seqlen, int)
+
         attn_output = flash_attn_varlen_kvpacked_func(
             q,
             kv,
@@ -288,9 +289,9 @@ class Qwen2Attention(nn.Module):
             max_seqlen,
             0.0,
             softmax_scale=None,
-            causal=True,  # TODO: double check
+            causal=True,
             alibi_slopes=None,
-            window_size=(-1, -1),  # TODO: fix
+            window_size=(self.sliding_window_size, self.sliding_window_size) if self.sliding_window_size is not None else (-1, -1),
             deterministic=False,
         )  # Not contiguous, similar to flash_attn
         # flash_attn use rearrange instead of reshape https://github.com/Dao-AILab/flash-attention/blob/1a58058a6da83bd7baaf4c512e8a1abe0240bb77/flash_attn/modules/mha.py#L730
