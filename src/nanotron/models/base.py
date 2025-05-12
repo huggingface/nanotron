@@ -1,3 +1,4 @@
+import threading
 from abc import ABCMeta, abstractmethod
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple
@@ -238,7 +239,34 @@ def build_model(
     return model
 
 
-# TODO @thomasw21: Should this option override user defined options? Maybe not ... right now it does.
+@contextmanager
+def ignore_init_on_device_and_dtype():
+    """
+    A context manager that temporarily disables dtype enforcement from init_on_device_and_dtype.
+
+    Example:
+    ```python
+    with init_on_device_and_dtype(device=torch.device("cuda"), dtype=torch.float32):
+        with ignore_init_on_device_and_dtype():
+            # This parameter will keep its specified dtype (float32)
+            self.weight = nn.Parameter(torch.randn(..., dtype=torch.float32))
+    ```
+    """
+    # Create a thread-local storage for the ignore flag
+    if not hasattr(ignore_init_on_device_and_dtype, "_ignore_flag"):
+        ignore_init_on_device_and_dtype._ignore_flag = threading.local()
+
+    # Set the ignore flag
+    old_value = getattr(ignore_init_on_device_and_dtype._ignore_flag, "value", False)
+    ignore_init_on_device_and_dtype._ignore_flag.value = True
+
+    try:
+        yield
+    finally:
+        # Restore the previous value
+        ignore_init_on_device_and_dtype._ignore_flag.value = old_value
+
+
 @contextmanager
 def init_on_device_and_dtype(
     device: torch.device = torch.device("cpu"),
@@ -250,35 +278,30 @@ def init_on_device_and_dtype(
         device (`torch.device` defaults to `cpu`):
             Device to initialize all parameters on.
         dtype (`torch.dtype` defaults to `torch.float`):
-            Dtype to initialize all parameters on.
-        include_buffers (`bool`, defaults to `False`):
-            Whether or not to also default all buffers constructors given previous arguments.
-    Example:
-    ```python
-    import torch.nn as nn
-    from accelerate import init_on_device
-    with init_on_device_and_dtype(device=torch.device("cuda")):
-        tst = nn.Liner(100, 100)  # on `cuda` device
-    ```
+            Dtype to initialize all parameters on. If specified, will override any dtype
+            set in parameter initialization with a warning, unless within an ignore_init_on_device_and_dtype context.
     """
     old_register_parameter = nn.Module.register_parameter
     old_register_buffer = nn.Module.register_buffer
 
+    def should_ignore_init_on_device_and_dtype():
+        if not hasattr(ignore_init_on_device_and_dtype, "_ignore_flag"):
+            return False
+        return getattr(ignore_init_on_device_and_dtype._ignore_flag, "value", False)
+
     def register_empty_parameter(module, name, param):
         old_register_parameter(module, name, param)
         if param is not None:
-            if isinstance(param, DTypeInvariantTensor):
-                # if param is DTypeInvariantTensor we should avoid updating it
-                param.data = param.data.to(device)
+            if should_ignore_init_on_device_and_dtype():
+                pass
             else:
                 param.data = param.data.to(device, dtype)
 
     def register_empty_buffer(module, name, buffer, persistent=True):
         old_register_buffer(module, name, buffer, persistent=persistent)
         if buffer is not None:
-            if isinstance(buffer, DTypeInvariantTensor):
-                # if buffer is DTypeInvariantTensor we should avoid updating it
-                buffer.data = buffer.data.to(device)
+            if should_ignore_init_on_device_and_dtype():
+                pass
             else:
                 module._buffers[name] = module._buffers[name].to(device, dtype)
 

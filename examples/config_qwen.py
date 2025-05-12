@@ -30,7 +30,7 @@ MODEL_SIZES: Dict[str, Tuple[int, int, int, int, int]] = {
     "410m": (24, 1024, 16, 16, 4096),  # ~410M params
     # Small to medium models
     "1b": (16, 2048, 16, 16, 5632),  # ~1B params
-    "3b": (28, 2048, 16, 2, 11008),  # ~3B params
+    "3b": (36, 2048, 16, 4, 11008),  # ~3B params
     # Standard sizes
     "7b": (32, 4096, 32, 32, 11008),  # ~7B params
     "13b": (40, 5120, 40, 40, 13824),  # ~13B params
@@ -47,7 +47,7 @@ def get_args():
     parser.add_argument(
         "--model",
         choices=MODEL_SIZES.keys(),
-        default="custom",
+        default="3b",
         help="Model size to generate config for (e.g., 7b, 13b)",
     )
     parser.add_argument(
@@ -75,6 +75,10 @@ def get_args():
     tokens_group.add_argument("--seq", type=int, default=4096, help="Sequence length")
     tokens_group.add_argument("--mbs", type=int, default=3, help="Micro batch size")
     tokens_group.add_argument("--acc", type=int, default=1, help="Batch accumulation per replica")
+
+    # checkpoints
+    checkpoints_group = parser.add_argument_group("checkpoints")
+    checkpoints_group.add_argument("--ckpt-save", type=int, default=10, help="Checkpoint save interval")
 
     args = parser.parse_args()
     return args
@@ -108,7 +112,7 @@ def get_model_config(model_size: str) -> Qwen2Config:
         is_qwen2_config=True,
         pad_token_id=None,
         _attn_implementation="flash_attention_2",
-        sliding_window_size=20,
+        _use_doc_masking=True,
     )
 
 
@@ -154,7 +158,7 @@ data_stages = [
 
 def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config:
     learning_rate = LRSchedulerArgs(
-        learning_rate=3e-4, lr_warmup_steps=2, lr_warmup_style="linear", lr_decay_style="cosine", min_decay_lr=1e-5
+        learning_rate=3e-4, lr_warmup_steps=2000, lr_warmup_style="linear", lr_decay_style="cosine", min_decay_lr=0
     )
     parallelism = ParallelismArgs(
         dp=args.dp,
@@ -175,7 +179,7 @@ def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config
     )
     optimizer = OptimizerArgs(
         zero_stage=args.zero,
-        weight_decay=0.01,
+        weight_decay=0.1,
         clip_grad=1.0,
         accumulate_grad_in_fp32=True,
         learning_rate_scheduler=learning_rate,
@@ -192,7 +196,7 @@ def create_config(model_config: Qwen2Config, args: argparse.Namespace) -> Config
 
     return Config(
         general=GeneralArgs(project="debug", run=args.run, seed=seed, ignore_sanity_checks=args.no_sanity),
-        checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=10),
+        checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=args.ckpt_save),
         parallelism=parallelism,
         model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
         # tokenizer=TokenizerArgs("HuggingFaceTB/cosmo2-tokenizer"),
@@ -219,7 +223,11 @@ if __name__ == "__main__":
     world_size = args.dp * args.tp * args.pp * args.cp
     if world_size <= 8:
         print(
-            f"CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={world_size} run_train.py --config-file {args.out}"
+            f"ENABLE_TIMERS=1 DEBUG_CPU=1 STATS_SAMPLING_INTERVAL_IN_SEC=1 CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node={world_size} run_train.py --config-file {args.out}"
         )
+        print("You can also use environment variables for more debugging:")
+        print("  - ENABLE_TIMERS=1: Enable detailed timing information")
+        print("  - DEBUG_CPU=1: Log CPU and memory usage statistics")
+        print("  - STATS_SAMPLING_INTERVAL_IN_SEC=1: Set sampling interval for metrics collection")
     else:
         print("Checkout slurm_launcher.py to launch a multi-node job")

@@ -38,6 +38,9 @@ class MoEConfig:
 
     num_experts: int = 8  # Total number of experts
     top_k: int = 2  # Number of experts to route each token to
+    moe_intermediate_size: int = 1408  # Intermediate size of the MoE layer
+    shared_expert_intermediate_size: int = 5632  # Intermediate size of the shared expert
+    router_aux_loss_coef: float = 0.01  # Coefficient for the router auxiliary loss
     layers: List[int] = field(
         default_factory=lambda: [-1]
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
@@ -149,6 +152,10 @@ class Qwen2Config:
     _fused_rotary_emb: bool = False
     _fused_rms_norm: bool = False
     _use_qkv_packed: bool = False
+
+    _fused_rotary_emb: bool = True
+    _fused_rms_norm: bool = True
+    _use_qkv_packed: bool = True
     _use_doc_masking: bool = False
 
     # MoE configuration
