@@ -1,9 +1,8 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 from torch import nn
-from torch.nn import functional as F
 from torch.utils.checkpoint import CheckpointFunction
 
 from nanotron import distributed as dist
@@ -12,11 +11,12 @@ from nanotron.config import ParallelismArgs
 from nanotron.config.models_config import Qwen2Config
 from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
+from nanotron.nn.moe_utils import gather_to_tensor_group, scatter_to_tensor_group
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
-from typing import Tuple, Optional
+
 logger = logging.get_logger(__name__)
-from .moe_utils import permute, unpermute, topk_softmax_with_capacity
+from .moe_utils import permute, topk_softmax_with_capacity, unpermute
 
 try:
     import grouped_gemm.ops as ops
@@ -32,6 +32,7 @@ except ImportError:
         "Transformer Engine is not available. Please run `pip install --no-build-isolation transformer_engine[pytorch]`"
     )
 
+
 @dataclass
 class MoELogging:
     """
@@ -39,6 +40,18 @@ class MoELogging:
     """
 
     num_local_tokens: List[torch.Tensor]
+
+
+# def gather_tensor_along_dim(tensor, dim, group):
+#     list_tensor = [torch.empty_like(tensor) for _ in range(group.size())]
+#     dist.all_gather(list_tensor, tensor, group=group)
+#     return torch.cat(list_tensor, dim=dim)
+
+
+# def scatter_tensor_along_dim(tensor, dim, group):
+#     list_tensor = torch.chunk(tensor, group.size(), dim=dim)
+#     rank = dist.get_rank(group)
+#     return list_tensor[rank]
 
 
 class Qwen2MoEMLPLayer(nn.Module):
@@ -57,7 +70,6 @@ class Qwen2MoEMLPLayer(nn.Module):
         self.intermediate_size = moe_config.moe_intermediate_size
 
         # MoE specific configurations
-        num_experts = config.moe_config.num_experts  # Total number of experts
         num_local_experts = config.moe_config.num_experts // parallel_config.expert_parallel_size  # Experts per device
         self.num_experts_per_token = config.moe_config.top_k  # Number of experts used per token (top-k)
         self.expert_parallel_size = parallel_config.expert_parallel_size
@@ -71,15 +83,13 @@ class Qwen2MoEMLPLayer(nn.Module):
 
         assert self.config.moe_config.num_experts % self.expert_parallel_size == 0
         self.num_local_experts = self.config.moe_config.num_experts // self.expert_parallel_size
-        local_expert_indices_offset = (dist.get_rank(parallel_context.ep_pg) * self.num_local_experts)
+        local_expert_indices_offset = dist.get_rank(parallel_context.ep_pg) * self.num_local_experts
 
         self.use_shared_expert = self.config.moe_config.enable_shared_expert
         # self.shared_expert_overlap = self.config.moe_config.shared_expert_overlap
 
-        self.local_expert_indices = [
-            local_expert_indices_offset + i for i in range(self.num_local_experts)
-        ]
-        assert all(map(lambda x: x < self.config.moe_config.num_experts, self.local_expert_indices))
+        self.local_expert_indices = [local_expert_indices_offset + i for i in range(self.num_local_experts)]
+        assert all((x < self.config.moe_config.num_experts for x in self.local_expert_indices))
         self.router = None
         self.experts = None
         self.shared_experts = None
@@ -89,7 +99,6 @@ class Qwen2MoEMLPLayer(nn.Module):
         # Router for selecting experts
         # self.router = Router(config, parallel_config, layer_idx)
         self.router = TopKRouter(config=self.config, parallel_context=parallel_context)
-
 
         # self.token_dispatcher = AllToAllDispatcher(num_local_experts, num_experts, parallel_context.ep_pg)
         self.token_dispatcher = MoEAllGatherTokenDispatcher(
@@ -101,7 +110,7 @@ class Qwen2MoEMLPLayer(nn.Module):
 
         # Enable shared experts if configured
         self.enable_shared_expert = config.moe_config.enable_shared_expert
-        if self.enable_shared_expert: # TODO: check shared
+        if self.enable_shared_expert:  # TODO: check shared
             from nanotron.models.qwen import Qwen2MLP
 
             self.shared_expert = Qwen2MLP(
@@ -120,7 +129,6 @@ class Qwen2MoEMLPLayer(nn.Module):
 
         # self.experts = GroupedMLP(config, parallel_config, ep_pg=parallel_context.ep_pg)
         self.experts = TEGroupedMLP(self.num_local_experts, config, parallel_config, parallel_context)
-
 
         # Whether to recompute MoE layer during backward pass for memory efficiency
         self.recompute_layer = parallel_config.recompute_layer
@@ -147,13 +155,10 @@ class Qwen2MoEMLPLayer(nn.Module):
         # routing_weights, routing_indices = self.router(hidden_states)  # [num_tokens, num_experts_per_token]
         probs, indices = self.router(hidden_states)
 
-
         # output, num_local_tokens_per_expert = self._compute_expert_outputs(
         #     hidden_states, routing_weights, routing_indices
         # )
-        (dispatched_input, tokens_per_expert) = self.token_dispatcher.token_permutation(
-            hidden_states, probs, indices
-        )
+        (dispatched_input, tokens_per_expert) = self.token_dispatcher.token_permutation(hidden_states, probs, indices)
         expert_output, mlp_bias = self.experts(dispatched_input, tokens_per_expert)
         output, mlp_bias = self.token_dispatcher.token_unpermutation(expert_output, mlp_bias)
 
@@ -180,14 +185,21 @@ class Qwen2MoEMLPLayer(nn.Module):
 
         return outputs
 
-from .moe_utils import sinkhorn, z_loss_func, topk_softmax_with_capacity, switch_load_balancing_loss_func, MoEAuxLossAutoScaler
+
+from .moe_utils import (
+    MoEAuxLossAutoScaler,
+    sinkhorn,
+    switch_load_balancing_loss_func,
+    topk_softmax_with_capacity,
+    z_loss_func,
+)
+
 
 class TopKRouter(nn.Module):
     """Route each token to the top-k experts."""
 
     def __init__(self, config: Qwen2Config, parallel_context: ParallelContext) -> None:
-        """Initialize the zero token dropping router.
-        """
+        """Initialize the zero token dropping router."""
         super().__init__()
         self.config = config
         self.num_experts = self.config.moe_config.num_experts
@@ -228,9 +240,7 @@ class TopKRouter(nn.Module):
         assert self.config.moe_config.moe_aux_loss_coeff == 0, "Sinkhorn routing does not support aux loss."
         if self.training:
             with torch.no_grad():
-                norm_logits = sinkhorn(
-                    logits.to(dtype=torch.float32)
-                )  # explicit fp32 conversion for stability
+                norm_logits = sinkhorn(logits.to(dtype=torch.float32))  # explicit fp32 conversion for stability
                 _, indices = torch.topk(norm_logits, k=self.topk, dim=1)
             logits = _sinkhorn_activation(logits)
             scores = torch.gather(logits, 1, indices)
@@ -242,12 +252,12 @@ class TopKRouter(nn.Module):
     def aux_loss_load_balancing(self, logits: torch.Tensor):
         """Apply loss-based load balancing to the logits tensor.
 
-            Args:
-                logits (torch.Tensor): the logits tensor after gating, shape: [num_tokens, num_experts].
+        Args:
+            logits (torch.Tensor): the logits tensor after gating, shape: [num_tokens, num_experts].
 
-            Returns:
-                probs (torch.Tensor): the probabilities tensor after load balancing.
-                indices (torch.Tensor): the indices tensor after top-k selection.
+        Returns:
+            probs (torch.Tensor): the probabilities tensor after load balancing.
+            indices (torch.Tensor): the indices tensor after top-k selection.
         """
         probs, indices, tokens_per_expert = topk_softmax_with_capacity(
             logits,
@@ -278,12 +288,8 @@ class TopKRouter(nn.Module):
         Returns:
             torch.Tensor: The activation tensor with the attached gradient function.
         """
-        moe_aux_loss_coeff = (
-            self.config.moe_config.moe_aux_loss_coeff / self.tp_size
-        )
-        aux_loss = switch_load_balancing_loss_func(
-            probs, num_local_tokens_per_expert, self.topk, moe_aux_loss_coeff
-        )
+        moe_aux_loss_coeff = self.config.moe_config.moe_aux_loss_coeff / self.tp_size
+        aux_loss = switch_load_balancing_loss_func(probs, num_local_tokens_per_expert, self.topk, moe_aux_loss_coeff)
         # save_to_aux_losses_tracker(
         #     "load_balancing_loss",
         #     aux_loss / moe_aux_loss_coeff,
@@ -304,9 +310,7 @@ class TopKRouter(nn.Module):
             torch.Tensor: The logits after applying the z-loss.
         """
         if self.config.moe_config.moe_z_loss_coeff is not None:
-            moe_z_loss_coeff = (
-                self.config.moe_config.moe_z_loss_coeff / self.tp_size
-            )
+            moe_z_loss_coeff = self.config.moe_config.moe_z_loss_coeff / self.tp_size
             z_loss = z_loss_func(logits, moe_z_loss_coeff)
             logits = MoEAuxLossAutoScaler.apply(logits, z_loss)
             # save_to_aux_losses_tracker(
@@ -347,18 +351,18 @@ class TopKRouter(nn.Module):
         Returns:
             torch.Tensor: Logits tensor.
         """
-        if self.weight.device.type == 'cpu':
+        if self.weight.device.type == "cpu":
             # move weights to GPU
             self.weight.data = self.weight.data.to(device=torch.cuda.current_device())
         # Convert to specified datatype for routing computation if enabled
         router_dtype = input.dtype
-        if self.config.moe_config.moe_router_dtype == 'fp32':
+        if self.config.moe_config.moe_router_dtype == "fp32":
             router_dtype = torch.float32
-        elif self.config.moe_config.moe_router_dtype == 'fp64':
+        elif self.config.moe_config.moe_router_dtype == "fp64":
             router_dtype = torch.float64
         logits = torch.nn.functional.linear(input.to(router_dtype), self.weight.to(router_dtype))
         return logits
-    
+
     def routing(self, logits: torch.Tensor):
         """Top-k routing function
 
@@ -374,10 +378,7 @@ class TopKRouter(nn.Module):
         # Apply Z-Loss
         logits = self.apply_z_loss(logits)
 
-        if (
-            self.tp_size > 1
-            and self.config.moe_config.moe_token_dispatcher_type == "alltoall"
-        ):
+        if self.tp_size > 1 and self.config.moe_config.moe_token_dispatcher_type == "alltoall":
             # Gather the logits from the TP region
             raise NotImplementedError("fix TP in router")
             logits = gather_from_sequence_parallel_region(logits)
@@ -467,10 +468,14 @@ class TEGroupedLinear(te.pytorch.GroupedLinear):
 
         if self.explicit_expert_comm:
             if parallel_mode == "column":
-                assert output_size % tp_group.size() == 0, f"output_size {output_size} must be divisible by tp_group.size() {tp_group.size()}"
+                assert (
+                    output_size % tp_group.size() == 0
+                ), f"output_size {output_size} must be divisible by tp_group.size() {tp_group.size()}"
                 output_size = output_size // tp_group.size()
             elif parallel_mode == "row":
-                assert input_size % tp_group.size() == 0, f"input_size {input_size} must be divisible by tp_group.size() {tp_group.size()}"
+                assert (
+                    input_size % tp_group.size() == 0
+                ), f"input_size {input_size} must be divisible by tp_group.size() {tp_group.size()}"
                 input_size = input_size // tp_group.size()
             parallel_mode = None
             tp_group = None
@@ -483,7 +488,7 @@ class TEGroupedLinear(te.pytorch.GroupedLinear):
             fuse_wgrad_accumulation=config.moe_config.gradient_accumulation_fusion,
             tp_group=tp_group,
             tp_size=tp_group.size() if tp_group is not None else 1,
-            init_method=None, #TODO:
+            init_method=None,  # TODO:
             bias=bias,
             return_bias=self.te_return_bias,
             parallel_mode=parallel_mode,
@@ -495,13 +500,13 @@ class TEGroupedLinear(te.pytorch.GroupedLinear):
         )
 
         for param in self.parameters():
-            setattr(param, 'allreduce', not (is_expert and self.expert_parallel)) # TODO: does this work with TE or megatron?
+            setattr(
+                param, "allreduce", not (is_expert and self.expert_parallel)
+            )  # TODO: does this work with TE or megatron?
 
     def forward(self, x, m_splits):
         """Forward."""
-        _is_first_microbatch = (
-            None if self.disable_parameter_transpose_cache else self.is_first_microbatch
-        )
+        _is_first_microbatch = None if self.disable_parameter_transpose_cache else self.is_first_microbatch
         out = super().forward(x, m_splits, is_first_microbatch=_is_first_microbatch)
         self.is_first_microbatch = False
 
@@ -513,14 +518,19 @@ class TEGroupedLinear(te.pytorch.GroupedLinear):
         return out, None
 
 
-
 class TEGroupedMLP(nn.Module):
     """An efficient implementation of the Experts layer using TE's GroupedLinear.
 
     Executes multiple experts in parallel to maximize computational efficiency.
     """
 
-    def __init__(self, num_local_experts, config: Qwen2Config, parallel_config: ParallelismArgs, parallel_context: ParallelContext):
+    def __init__(
+        self,
+        num_local_experts,
+        config: Qwen2Config,
+        parallel_config: ParallelismArgs,
+        parallel_context: ParallelContext,
+    ):
         super().__init__()
         self.num_local_experts = num_local_experts
         self.input_size = config.hidden_size
@@ -528,12 +538,12 @@ class TEGroupedMLP(nn.Module):
 
         # Double the output width with gated linear unit, see https://arxiv.org/pdf/2002.05202.pdf
         ffn_hidden_size = config.moe_config.moe_intermediate_size
-        if config.hidden_act == "silu": # gated_linear_unit
+        if config.hidden_act == "silu":  # gated_linear_unit
             ffn_hidden_size *= 2
         else:
             raise ValueError(f"Unsupported activation function: {config.hidden_act}")
 
-        self.linear_fc1 = TEGroupedLinear( # TEColumnParallelGroupedLinear
+        self.linear_fc1 = TEGroupedLinear(  # TEColumnParallelGroupedLinear
             num_gemms=self.num_local_experts,
             input_size=self.input_size,
             output_size=ffn_hidden_size,
@@ -541,15 +551,16 @@ class TEGroupedMLP(nn.Module):
             config=config,
             parallel_config=parallel_config,
             parallel_context=parallel_context,
-            bias=False, # TODO: no bias right?
+            bias=False,  # TODO: no bias right?
             skip_bias_add=True,
             is_expert=True,
-            tp_comm_buffer_name='fc1',
+            tp_comm_buffer_name="fc1",
         )
 
         self.linear_fc2 = TEGroupedLinear(  # TERowParallelGroupedLinear
             num_gemms=self.num_local_experts,
-            input_size=ffn_hidden_size//2, # TODO: hack for now. AssertionError: GEMM not possible: inp.shape[-1] = 1024, in_features = 2048
+            input_size=ffn_hidden_size
+            // 2,  # TODO: hack for now. AssertionError: GEMM not possible: inp.shape[-1] = 1024, in_features = 2048
             output_size=config.hidden_size,
             parallel_mode="row",
             config=config,
@@ -558,7 +569,7 @@ class TEGroupedMLP(nn.Module):
             bias=False,
             skip_bias_add=True,
             is_expert=True,
-            tp_comm_buffer_name='fc2',
+            tp_comm_buffer_name="fc2",
         )
 
         self.act = ACT2FN[config.hidden_act]
@@ -578,12 +589,12 @@ class TEGroupedMLP(nn.Module):
         """
         tokens_per_expert = tokens_per_expert.tolist()
 
-        intermediate_parallel, bias_parallel = self.linear_fc1(
-            permuted_local_hidden_states, tokens_per_expert
-        )
+        intermediate_parallel, bias_parallel = self.linear_fc1(permuted_local_hidden_states, tokens_per_expert)
 
-        if self.config.moe_config.bias_activation_fusion: # TODO: is this useful?
-            assert "silu" in self.config.hidden_act or "swiglu" in self.config.hidden_act, "Only support fusion of silu and swiglu"
+        if self.config.moe_config.bias_activation_fusion:  # TODO: is this useful?
+            assert (
+                "silu" in self.config.hidden_act or "swiglu" in self.config.hidden_act
+            ), "Only support fusion of silu and swiglu"
             # intermediate_parallel = bias_swiglu_impl(
             #     intermediate_parallel,
             #     bias_parallel,
@@ -607,7 +618,11 @@ class MoEAllGatherTokenDispatcher(nn.Module):
     """
 
     def __init__(
-        self, num_local_experts: int, local_expert_indices: List[int], config: Qwen2Config, parallel_context: ParallelContext
+        self,
+        num_local_experts: int,
+        local_expert_indices: List[int],
+        config: Qwen2Config,
+        parallel_context: ParallelContext,
     ) -> None:
         """
         Initialize the zero token dropping router.
@@ -617,22 +632,21 @@ class MoEAllGatherTokenDispatcher(nn.Module):
         self.shared_experts = None
         self.etp_size = parallel_context.expert_tensor_parallel_size
         self.ep_size = parallel_context.expert_parallel_size
-        
+        self.ep_pg = parallel_context.ep_pg
+
         self.num_local_experts = num_local_experts
         assert self.num_local_experts > 0, "Expected at least one expert"
         self.local_expert_indices = local_expert_indices
         assert len(self.local_expert_indices) > 0, "Expected at least one local expert index"
         self.router_topk = config.moe_config.top_k
-        self.add_bias = False # TODO: assume no bias 
+        self.add_bias = False  # TODO: assume no bias
 
         # self.global_local_map: 2D tensor. A mask of mapping between global and local tokens where
         # each element is True if it's between the local_expert_indices. Only useful when cross
         # device token permutation is enabled and **AllGahter** is performed.
         self.global_local_map = None
 
-    def token_permutation(
-        self, hidden_states: torch.Tensor, probs: torch.Tensor, routing_map: torch.Tensor
-    ):
+    def token_permutation(self, hidden_states: torch.Tensor, probs: torch.Tensor, routing_map: torch.Tensor):
         """Dispatch tokens to local experts. It's composed of two stages:
         (1) Gather the tokens across the expert parallel devices. After this stage,
         each device receives all of the tokens assigned to its local set of experts
@@ -651,40 +665,45 @@ class MoEAllGatherTokenDispatcher(nn.Module):
             permuted_local_hidden_states: Permutation of tokens to local experts group.
             tokens_per_expert: the number of tokens each local expert to process.
         """
-        self.hidden_shape = hidden_states.shape
+        self.hidden_shape = hidden_states.shape  # [bs*seq_len, hidden_size]
         # [S/TP, B, H] -> [S*B/TP, H]
         hidden_states = hidden_states.view(-1, self.hidden_shape[-1])
 
         # Permute the tokens across the expert parallel devices.
+        # if self.etp_size > 1 or self.ep_size > 1:
         if self.etp_size > 1 or self.ep_size > 1:
-            raise NotImplementedError("etp_size>1 not implemented")
+            assert self.etp_size == 1, "Expert tensor parallelism currently not supported"
+
             ## local_indices calculation
             with torch.no_grad():
                 # [num_local_tokens, num_experts] -> [num_global_tokens, num_experts], where:
                 #     num_local_tokens=(S/TP)*B, num_global_tokens=S*B*EP
-                routing_map = gather_from_sequence_parallel_region(
-                    routing_map, group=self.tp_ep_group
-                )
+                # routing_map = gather_tensor_along_dim(routing_map, dim=0, group=self.ep_pg)
+                routing_map = gather_to_tensor_group(routing_map, dim=0, group=self.ep_pg)
 
             ## local_probs calculation
             # max_prob: [S/TP*B, num_experts] -> global_probs: [S*B*EP, num_experts]
-            probs = gather_from_sequence_parallel_region(probs, group=self.tp_ep_group)
+            # probs = gather_tensor_along_dim(probs, dim=0, group=self.ep_pg)
+            probs = gather_to_tensor_group(probs, dim=0, group=self.ep_pg)
 
             # Note that this allgather spans the communication domain of TP*EP.
             #  [(S/TP)*B, H] -> [((S/TP)*B)*(TP*EP), H] = [S*B*EP, H]
-            hidden_states = gather_from_sequence_parallel_region(
-                hidden_states, group=self.tp_ep_group, use_global_buffer=True
-            )
+            # hidden_states = gather_from_sequence_parallel_region(
+            #     hidden_states, group=self.tp_ep_group, use_global_buffer=True
+            # )
+            # hidden_states = gather_from_sequence_parallel_region(
+            #     hidden_states, group=self.ep_pg, use_global_buffer=True
+            # )
+
+            # hidden_states = gather_tensor_along_dim(hidden_states, dim=0, group=self.ep_pg)
+            hidden_states = gather_to_tensor_group(hidden_states, dim=0, group=self.ep_pg)
+
         self.hidden_shape_before_permute = hidden_states.shape
 
         # The routing map and probs that for local experts.
-        self.local_map = routing_map[
-            :, self.local_expert_indices[0] : self.local_expert_indices[-1] + 1
-        ].contiguous()
+        self.local_map = routing_map[:, self.local_expert_indices[0] : self.local_expert_indices[-1] + 1].contiguous()
         # probs of global token assignment to local experts.
-        self.local_probs = probs[
-            :, self.local_expert_indices[0] : self.local_expert_indices[-1] + 1
-        ].contiguous()
+        self.local_probs = probs[:, self.local_expert_indices[0] : self.local_expert_indices[-1] + 1].contiguous()
 
         tokens_per_expert = self.local_map.sum(dim=0).long().cpu()
         (permuted_local_hidden_states, self.reversed_local_input_permutation_mapping) = permute(
@@ -713,9 +732,7 @@ class MoEAllGatherTokenDispatcher(nn.Module):
         """
         # Scale the expert output prior to reduction and subsequent to local unpermutation if k > 1.
         # Unpermute the expert output and bias
-        permuted_probs = self.local_probs.T.contiguous().masked_select(
-            self.local_map.T.contiguous()
-        )
+        permuted_probs = self.local_probs.T.contiguous().masked_select(self.local_map.T.contiguous())
         # Here may change permuted_tokens to higher precision if probs use fp32/fp64.
         weighted_hidden_states = hidden_states * permuted_probs.unsqueeze(-1)
         unpermuted_local_hidden = unpermute(
@@ -742,20 +759,21 @@ class MoEAllGatherTokenDispatcher(nn.Module):
         output_bias_total = unpermuted_local_bias
 
         # Unpermute the tokens across ranks.
-        if self.etp_size > 1 or self.ep_size > 1:
-            raise NotImplementedError("etp_size>1 not implemented")
-            output_total = reduce_scatter_to_sequence_parallel_region(
-                output_total, group=self.tp_ep_group
-            )
-            if self.add_bias:
-                # Unpermute the bias across expert parallel devices.
-                # bias is duplicated across tensor parallelism ranks;
-                output_bias_total = (
-                    reduce_scatter_to_sequence_parallel_region(
-                        output_bias_total, group=self.tp_ep_group
+        # if self.etp_size > 1 or self.ep_size > 1:
+        if self.ep_size > 1:
+            if self.etp_size > 1:
+                raise NotImplementedError("etp_size>1 not implemented")
+                output_total = reduce_scatter_to_sequence_parallel_region(output_total, group=self.tp_ep_group)
+                if self.add_bias:
+                    # Unpermute the bias across expert parallel devices.
+                    # bias is duplicated across tensor parallelism ranks;
+                    output_bias_total = (
+                        reduce_scatter_to_sequence_parallel_region(output_bias_total, group=self.tp_ep_group)
+                        / self.etp_size
                     )
-                    / self.etp_size
-                )
+
+            # output_total = scatter_tensor_along_dim(output_total, dim=0, group=self.ep_pg)
+            output_total = scatter_to_tensor_group(output_total, dim=0, group=self.ep_pg)
 
         output_total = output_total.view(self.hidden_shape)
         if self.add_bias:
@@ -766,5 +784,3 @@ class MoEAllGatherTokenDispatcher(nn.Module):
         if bias is not None:
             output_bias_total = output_bias_total.to(bias.dtype)
         return output_total, output_bias_total
-
-

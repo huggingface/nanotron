@@ -384,7 +384,7 @@ class Qwen2DecoderLayer(nn.Module):
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
 
-            if config.moe_config.moe_impl == 'nanotron':
+            if config.moe_config.moe_impl == "nanotron":
                 from nanotron.nn.moe import Qwen2MoEMLPLayer
 
                 self.mlp = Qwen2MoEMLPLayer(
@@ -393,8 +393,9 @@ class Qwen2DecoderLayer(nn.Module):
                     parallel_context=parallel_context,
                     layer_idx=layer_idx,
                 )
-            elif config.moe_config.moe_impl == 'transformer_engine':
+            elif config.moe_config.moe_impl == "transformer_engine":
                 from nanotron.nn.te_moe import Qwen2MoEMLPLayer
+
                 self.mlp = Qwen2MoEMLPLayer(
                     config=config,
                     parallel_config=parallel_config,
@@ -565,9 +566,12 @@ class Qwen2Model(nn.Module):
     ):
         # debugging
         import joblib
-        sample_batch = joblib.load('/fsx/nouamane/projects/OLMoE/sample_batch.pkl')
-        assert sample_batch['input_ids'].shape == input_ids.shape, f"input_ids.shape: {input_ids.shape}, sample_batch['input_ids'].shape: {sample_batch['input_ids'].shape}"
-        input_ids = sample_batch['input_ids'].to(input_ids.device)
+
+        sample_batch = joblib.load("/fsx/nouamane/projects/OLMoE/sample_batch.pkl")
+        assert (
+            sample_batch["input_ids"].shape == input_ids.shape
+        ), f"input_ids.shape: {input_ids.shape}, sample_batch['input_ids'].shape: {sample_batch['input_ids'].shape}"
+        input_ids = sample_batch["input_ids"].to(input_ids.device)
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
         # Compute cu_seqlens
         if position_ids.numel() > 0:
@@ -777,7 +781,7 @@ class Qwen2ForTraining(NanotronModel):
                 continue
 
             module = model.get_submodule(module_name)
-            parametrizator.parametrize(param_name, module)
+            parametrizator.parametrize(full_param_name, module)
 
             assert full_param_name not in initialized_parameters
             initialized_parameters.add(full_param_name)

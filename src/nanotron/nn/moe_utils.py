@@ -4,6 +4,7 @@ import math
 from typing import Optional
 
 import torch
+import torch.distributed as dist
 
 try:
     from transformer_engine.pytorch.permutation import (
@@ -11,6 +12,7 @@ try:
         moe_sort_chunks_by_index,
         moe_unpermute,
     )
+
     fused_permute = moe_permute
     fused_unpermute = moe_unpermute
     fused_sort_chunks_by_index = moe_sort_chunks_by_index
@@ -109,9 +111,7 @@ def sequence_load_balancing_loss_func(
     if sequence_partition_group is not None:
         num_sub_sequence = torch.distributed.get_world_size(sequence_partition_group)
         seq_length *= num_sub_sequence
-        probs_for_aux_loss = gather_from_sequence_parallel_region(
-            probs_for_aux_loss, group=sequence_partition_group
-        )
+        probs_for_aux_loss = gather_from_sequence_parallel_region(probs_for_aux_loss, group=sequence_partition_group)
 
     cost_coeff = routing_map.sum(dim=0, dtype=torch.float).div_(seq_length * topk / num_experts)
     seq_aux_loss = (cost_coeff * probs_for_aux_loss.mean(dim=0)).sum(dim=1).mean()
@@ -250,16 +250,14 @@ def permute(
 
     num_tokens, hidden = tokens.shape
     num_experts = routing_map.shape[1]
-    if drop_and_pad and not (num_out_tokens is None):
+    if drop_and_pad and num_out_tokens is not None:
         capacity = num_out_tokens // num_experts
         assert not routing_map.requires_grad
         # mask [num_tokens, num_experts] -> [num_experts, num_tokens]
         routing_map = routing_map.to(dtype=torch.int8).T.contiguous()
         # use argsort to put indices of all non-zeros in the beginning of list
         # and keep the first `capacity` number of indices
-        sorted_indices = routing_map.argsort(dim=-1, descending=True, stable=True)[
-            :, :capacity
-        ].contiguous()
+        sorted_indices = routing_map.argsort(dim=-1, descending=True, stable=True)[:, :capacity].contiguous()
         # flatten from [num_experts, capacity] to 1D
         sorted_indices = sorted_indices.view(-1)
     else:
@@ -267,9 +265,7 @@ def permute(
         routing_map = routing_map.bool().T.contiguous()
 
         # Create a dense expert-to-token mapping from the sparse token-to-expert mapping
-        token_indices = (
-            torch.arange(num_tokens, device=routing_map.device).unsqueeze(0).expand(num_experts, -1)
-        )
+        token_indices = torch.arange(num_tokens, device=routing_map.device).unsqueeze(0).expand(num_experts, -1)
         sorted_indices = token_indices.masked_select(routing_map)
 
     # use the mapping to permute the tokens
@@ -346,9 +342,7 @@ def unpermute(
         permuted_tokens = permuted_tokens * permuted_probs.unsqueeze(-1)
 
     # Create an output tensor filled with zeros
-    output_tokens = torch.zeros(
-        restore_shape, dtype=permuted_tokens.dtype, device=permuted_tokens.device
-    )
+    output_tokens = torch.zeros(restore_shape, dtype=permuted_tokens.dtype, device=permuted_tokens.device)
     # Scatter add the permuted_input back to the original positions
     output_tokens.scatter_add_(0, sorted_indices.unsqueeze(1).expand(-1, hidden), permuted_tokens)
     return output_tokens.to(dtype=input_dtype)
@@ -360,9 +354,7 @@ def sort_chunks_by_idxs(
     """Split and sort the input tensor based on the split_sizes and sorted indices."""
     if fused:
         if not HAVE_TE or fused_sort_chunks_by_index is None:
-            raise ValueError(
-                "fused_sort_chunks_by_index is not available. Please install TE >= 2.1.0."
-            )
+            raise ValueError("fused_sort_chunks_by_index is not available. Please install TE >= 2.1.0.")
         return fused_sort_chunks_by_index(input, split_sizes, sorted_idxs)
 
     input = torch.split(input, split_sizes.tolist(), dim=0)
@@ -414,12 +406,10 @@ def group_limited_topk(
 
     # Mask the experts based on selection groups
     score_mask = (
-        group_mask.unsqueeze(-1)
-        .expand(num_tokens, num_groups, num_experts // num_groups)
-        .reshape(num_tokens, -1)
+        group_mask.unsqueeze(-1).expand(num_tokens, num_groups, num_experts // num_groups).reshape(num_tokens, -1)
     )
 
-    masked_scores = scores.masked_fill(~score_mask.bool(), float('-inf'))
+    masked_scores = scores.masked_fill(~score_mask.bool(), float("-inf"))
     probs, top_indices = torch.topk(masked_scores, k=topk, dim=-1)
 
     return probs, top_indices
@@ -522,9 +512,7 @@ def topk_softmax_with_capacity(
 
         # Maskout exceeded tokens
         if drop_policy == "probs":
-            _, capacity_indices = torch.topk(
-                topk_masked_gates, k=expert_capacity, dim=0, sorted=False
-            )
+            _, capacity_indices = torch.topk(topk_masked_gates, k=expert_capacity, dim=0, sorted=False)
             capacity_mask = torch.zeros_like(logits).scatter(0, capacity_indices, 1).bool()
         elif drop_policy == "position":
             _, capacity_indices = torch.topk(topk_map.int(), k=expert_capacity, dim=0, sorted=False)
@@ -587,27 +575,21 @@ def reduce_aux_losses_tracker_across_ranks():
     for name in tracker:
         values = tracker[name]["values"]
         # Collect aux losses across PP.
-        torch.distributed.all_reduce(
-            values, group=parallel_state.get_pipeline_model_parallel_group()
-        )
+        torch.distributed.all_reduce(values, group=parallel_state.get_pipeline_model_parallel_group())
         # Reduce aux losses across ranks.
-        if tracker[name].get('reduce_group') is not None:
-            torch.distributed.all_reduce(values, group=tracker[name].get('reduce_group'))
-        if tracker[name].get('avg_group') is not None:
-            torch.distributed.all_reduce(
-                values, group=tracker[name]['avg_group'], op=torch.distributed.ReduceOp.AVG
-            )
+        if tracker[name].get("reduce_group") is not None:
+            torch.distributed.all_reduce(values, group=tracker[name].get("reduce_group"))
+        if tracker[name].get("avg_group") is not None:
+            torch.distributed.all_reduce(values, group=tracker[name]["avg_group"], op=torch.distributed.ReduceOp.AVG)
 
 
-def track_moe_metrics(
-    loss_scale, iteration, writer, wandb_writer=None, total_loss_dict=None, per_layer_logging=False
-):
+def track_moe_metrics(loss_scale, iteration, writer, wandb_writer=None, total_loss_dict=None, per_layer_logging=False):
     """Track the MoE metrics for logging."""
     # Aux loss logging
     reduce_aux_losses_tracker_across_ranks()
     tracker = parallel_state.get_moe_layer_wise_logging_tracker()
     if writer is not None:
-        aux_losses = {k: v['values'].float() * loss_scale for k, v in tracker.items()}
+        aux_losses = {k: v["values"].float() * loss_scale for k, v in tracker.items()}
         for name, loss_list in aux_losses.items():
             if total_loss_dict is not None:
                 if name not in total_loss_dict:
@@ -617,7 +599,7 @@ def track_moe_metrics(
 
             # currently when using add_scalars,
             # torch.utils.add_scalars makes each timer its own run, which
-            # polutes the runs list, so we just add each as a scalar
+            # pollutes the runs list, so we just add each as a scalar
             writer.add_scalar(name, loss_list.mean(), iteration)
             if per_layer_logging:
                 for i, loss in enumerate(loss_list.tolist()):
@@ -630,10 +612,7 @@ def track_moe_metrics(
                 wandb_writer.log({f"{name}": loss_list.mean()}, iteration)
                 if per_layer_logging:
                     wandb_writer.log(
-                        {
-                            f"moe/{name}_layer_{i}": loss
-                            for i, loss in enumerate(loss_list.tolist())
-                        },
+                        {f"moe/{name}_layer_{i}": loss for i, loss in enumerate(loss_list.tolist())},
                         iteration,
                     )
 
@@ -658,3 +637,143 @@ def get_updated_expert_bias(tokens_per_expert, expert_bias, expert_bias_update_r
         offset = average_tokens - tokens_per_expert
         updated_expert_bias = expert_bias + torch.sign(offset) * expert_bias_update_rate
         return updated_expert_bias
+
+
+# class _Gather(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx: Any, input: torch.Tensor, dim: int, parallel_context: ParallelContext) -> torch.Tensor:
+#         ctx.dim = dim
+#         ctx.parallel_context = parallel_context
+
+#         dist.all_gather(tensor_list=tensor_list, tensor=tensor, group=group)
+
+#         return all_gather(input, dim=dim, async_op=False, parallel_context=parallel_context, parallel_mode=ParallelMode.TENSOR)
+
+#     @staticmethod
+#     def backward(ctx: Any, grad: torch.Tensor) -> Tuple[torch.Tensor, None, None]:
+#         dim = ctx.dim
+#         parallel_context = ctx.parallel_context
+
+#         return (
+#             scatter(grad, dim=dim, parallel_context=parallel_context, parallel_mode=ParallelMode.TENSOR),
+#             None,
+#             None,
+#         )
+
+
+# def gather_from_sequence_parallel_region(
+#     tensor: torch.Tensor,
+#     dim: int = 0,
+#     group = None,
+# ) -> torch.Tensor:
+#     """All gather tensors from all processes in parallel group.
+
+#     Args:
+#         input (torch.Tensor): The tensor you want to gather.
+#         dim (int, optional): The dimension along which to gather the tensor.. Defaults to 0.
+#         group (Optional[dist.ProcessGroup], optional): _description_. Defaults to None.
+#     """
+#     world_size = dist.get_world_size(group)
+
+#     if world_size == 1:
+#         return tensor
+
+#     tensor_list = [torch.empty_like(tensor) for _ in range(world_size)]
+#     dist.all_gather(tensor_list=tensor_list, tensor=tensor, group=group)
+
+#     if tensor.dim() == 0:
+#         tensor_list = [tensor.unsqueeze(dim=0) for tensor in tensor_list]
+
+#     tensor_list = torch.cat(tensor_list, dim=dim)
+
+#     return tensor_list
+
+
+### Distributed Primitives
+from typing import Any, Tuple
+
+
+def scatter(
+    tensor: torch.Tensor,
+    dim: int,
+    group: dist.ProcessGroup,
+) -> torch.Tensor:
+    """Scatter tensors to all ranks in parallel group."""
+    world_size = dist.get_world_size(group)
+    rank = dist.get_rank(group)
+
+    if world_size == 1:
+        return tensor
+
+    assert tensor.size(dim) % world_size == 0
+
+    tensor_list = torch.chunk(tensor, world_size, dim=dim)
+    return tensor_list[rank]
+
+
+def all_gather(
+    tensor: torch.Tensor,
+    dim: int,
+    group: dist.ProcessGroup,
+) -> torch.Tensor:
+    world_size = dist.get_world_size(group)
+
+    if world_size == 1:
+        return tensor
+
+    tensor_list = [torch.empty_like(tensor) for _ in range(world_size)]
+    dist.all_gather(tensor_list=tensor_list, tensor=tensor, group=group)
+
+    if tensor.dim() == 0:
+        tensor_list = [tensor.unsqueeze(dim=0) for tensor in tensor_list]
+
+    tensor_list = torch.cat(tensor_list, dim=dim)
+
+    return tensor_list
+
+
+class _Gather(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, input: torch.Tensor, dim: int, group: dist.ProcessGroup) -> torch.Tensor:
+        ctx.dim = dim
+        ctx.group = group
+
+        return all_gather(input, dim=dim, group=group)
+
+    @staticmethod
+    def backward(ctx: Any, grad: torch.Tensor) -> Tuple[torch.Tensor, None, None]:
+        dim = ctx.dim
+        group = ctx.group
+
+        return (
+            scatter(grad, dim=dim, group=group),
+            None,
+            None,
+        )
+
+
+class _Scatter(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, input: torch.Tensor, dim: int, group: dist.ProcessGroup) -> torch.Tensor:
+        ctx.dim = dim
+        ctx.group = group
+        return scatter(input, dim=dim, group=group)
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: torch.Tensor) -> Tuple[torch.Tensor, None, None]:
+        dim = ctx.dim
+        group = ctx.group
+
+        return (
+            all_gather(grad_output, dim=dim, group=group),
+            None,
+            None,
+        )
+
+
+def gather_to_tensor_group(input: torch.Tensor, dim: int, group: dist.ProcessGroup):
+    return _Gather.apply(input, dim, group)
+
+
+def scatter_to_tensor_group(input: torch.Tensor, dim: int, group: dist.ProcessGroup):
+    return _Scatter.apply(input, dim, group)

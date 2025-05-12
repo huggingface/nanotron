@@ -7,7 +7,7 @@ from nanotron.config import Config, ModelArgs
 from nanotron.config.models_config import InitScalingMethod
 from nanotron.nn.layer_norm import LlamaRMSNorm, TritonRMSNorm
 from nanotron.nn.moe import GroupedMLP, Router
-from nanotron.nn.te_moe import TopKRouter, TEGroupedLinear
+from nanotron.nn.te_moe import TEGroupedLinear, TopKRouter
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -29,7 +29,6 @@ class Parametrizator:
     def parametrize(self, param_name: str, module: nn.Module):
         if not isinstance(module, tuple(self.MODULE_TO_PARAMETRIZE.keys())):
             raise Exception(f"Module {type(module)} with parameter {param_name} is not supported for initialization")
-
         return self.MODULE_TO_PARAMETRIZE[type(module)](param_name, module)
 
 
@@ -58,20 +57,32 @@ class StandardParametrizator(Parametrizator):
         self.hidden_size = config.model.model_config.hidden_size
 
     def _parametrize_column_linear(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
-        if "weight" == param_name:
+        if "weight" in param_name:
             # TODO @nouamane: should we use trunc_normal_
             init.normal_(module.weight, mean=0.0, std=self.std)
-        elif "bias" == param_name:
+        elif "bias" in param_name:
             module.bias.zero_()
 
     def _parametrize_grouped_mlp(self, param_name: str, module: nn.Module):
+        COLUMN_LINEAR_PARAMS = [
+            "gate_up_proj",  # nanotron's moe modeling
+            "linear_fc1",  # TEGroupedLinear's first linear layer
+        ]
+        ROW_LINEAR_PARAMS = [
+            "down_proj",  # nanotron's moe modeling
+            "linear_fc2",  # TEGroupedLinear's second linear layer
+        ]
+
         for n, p in module.named_parameters():
-            if n in ["merged_gate_up_proj"] or ("weight" in n and module.parallel_mode == "column"):
+            if any(x in param_name for x in COLUMN_LINEAR_PARAMS) or (
+                "weight" in n and module.parallel_mode == "column"
+            ):
                 # NOTE: the same as parametrization of column linear
                 init.normal_(p, mean=0.0, std=self.std)
-            elif n in ["merged_down_proj"] or ("weight" in n and module.parallel_mode == "row"):
+            elif any(x in param_name for x in ROW_LINEAR_PARAMS) or ("weight" in n and module.parallel_mode == "row"):
                 # NOTE: the same as parametrization of row linear
                 scaling = self._compute_scaling_factor()
                 adjusted_std = self.std / scaling
@@ -81,9 +92,9 @@ class StandardParametrizator(Parametrizator):
                 raise ValueError(f"Unknown parameter {n}")
 
     def _parametrize_router(self, param_name: str, module: nn.Module):
-        if "weight" == param_name:
+        if "weight" in param_name:
             init.normal_(module.weight, mean=0.0, std=self.std)
-        elif "bias" == param_name:
+        elif "bias" in param_name:
             module.bias.zero_()
 
     def _compute_scaling_factor(self) -> float:
@@ -100,28 +111,29 @@ class StandardParametrizator(Parametrizator):
             raise ValueError(f"Invalid scaling method: {self.scaling_method}")
 
     def _parametrize_row_linear(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
-        if "weight" == param_name:
+        if "weight" in param_name:
             scaling = self._compute_scaling_factor()
             adjusted_std = self.std / scaling
             # TODO @nouamane: should we use trunc_normal_
             init.normal_(module.weight, mean=0.0, std=adjusted_std)
-        elif "bias" == param_name:
+        elif "bias" in param_name:
             module.bias.zero_()
 
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
-        if "weight" == param_name:
+        if "weight" in param_name:
             module.weight.fill_(1)
-        elif "bias" == param_name:
+        elif "bias" in param_name:
             module.bias.zero_()
 
     def _parametrize_embedding(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight"]
+        assert "weight" in param_name
 
-        if "weight" == param_name:
+        if "weight" in param_name:
             init.normal_(module.weight, mean=0.0, std=self.std)
 
 
@@ -152,9 +164,11 @@ class SpectralMupParametrizator(Parametrizator):
         return (std / math.sqrt(fan_in)) * min(1, math.sqrt(fan_out / fan_in))
 
     def _parametrize_mup_weight(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
-        data = module.weight if param_name == "weight" else module.bias
+        # data = module.weight if param_name == "weight" else module.bias
+        data = module.weight if "weight" in param_name else module.bias
         fan_in, fan_out = init._calculate_fan_in_and_fan_out(data)
         world_size = module.world_size
 
@@ -169,20 +183,22 @@ class SpectralMupParametrizator(Parametrizator):
         init.normal_(data, mean=0.0, std=std)
 
     def _parametrize_layer_norm(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight", "bias"]
+        # assert param_name in ["weight", "bias"]
+        assert any(x in param_name for x in ["weight", "bias"])
 
         # NOTE: you're free to change the initialization of layer norm
         # as it's not a part of µTransfer
-        if "weight" == param_name:
+        if "weight" in param_name:
             module.weight.fill_(1)
-        elif "bias" == param_name:
+        elif "bias" in param_name:
             module.bias.zero_()
 
     def _parametrize_embedding(self, param_name: str, module: nn.Module):
-        assert param_name in ["weight"]
+        # assert param_name in ["weight"]
+        assert "weight" in param_name
 
         # NOTE: you're free to change the initialization of input embedding/lm head
-        if "weight" == param_name:
+        if "weight" in param_name:
             init.normal_(module.weight, mean=0.0, std=self.std)
 
 
