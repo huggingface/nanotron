@@ -48,7 +48,7 @@ class MoEConfig:
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
     enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
     token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
-    use_haojun_permute: bool = True  # Whether to use Haojun's permute
+    use_torch_permute: bool = True  # Whether to use Haojun's permute
 
     moe_impl: str = "transformer_engine"
     # Transformer-Engine specific config
@@ -177,9 +177,9 @@ class Qwen2Config:
     no_rope_layer: Optional[
         int
     ] = None  # Skip rope every no_rope_layer layers (see https://arxiv.org/abs/2501.18795 https://arxiv.org/abs/2305.19466 and Llama4)
-    _fused_rotary_emb: bool = False
-    _fused_rms_norm: bool = False
-    _use_qkv_packed: bool = False
+    _fused_rotary_emb: bool = True
+    _fused_rms_norm: bool = True
+    _use_qkv_packed: bool = True
     _use_doc_masking: bool = False
 
     # MoE configuration

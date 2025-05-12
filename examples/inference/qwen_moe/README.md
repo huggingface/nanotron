@@ -7,7 +7,7 @@ This guide explains how to convert Hugging face Qwen-MoE models to Nanotron form
 Navigate to the `inference/qwen_moe` directory and run:
 
 ```bash
-torchrun --nproc-per-node 1 convert.py \
+torchrun --nproc-per-node 1 examples/inference/qwen_moe/convert.py \
     --nanotron-checkpoint-path nanotron_checkpoints/Qwen1.5-MoE-A2.7B \
     --pretrained-model-name-or-path Qwen/Qwen1.5-MoE-A2.7B
 ```

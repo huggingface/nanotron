@@ -232,6 +232,7 @@ def test_grouped_mlp():
         tp_mode="REDUCE_SCATTER",
         tp_linear_async_communication=True,
     )
+
     # NOTE: num_tokens_per_experts.shape = (num_experts,)
     # it should match the number of experts in TINY_MOE_QWEN_CONFIG
     num_tokens_per_experts = torch.tensor([1, 2, 3, 4])
