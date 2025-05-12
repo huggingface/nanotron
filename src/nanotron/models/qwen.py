@@ -193,12 +193,12 @@ class Qwen2Attention(nn.Module):
             async_communication=tp_linear_async_communication,
         )
         if config._use_qkv_packed:
-            from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
-
+            from nanotron.nn.rotary import FlashRotaryEmbedding
             self.rotary_emb = FlashRotaryEmbedding(
                 dim=self.head_dim,
                 base=config.rope_theta,
                 interleaved=config.rope_interleaved,
+                seq_len_interpolation_factor=config.rope_seq_len_interpolation_factor,
             )
         else:
             self.rotary_emb = RotaryEmbedding(
@@ -206,7 +206,7 @@ class Qwen2Attention(nn.Module):
                 max_seq_len=config.max_position_embeddings,
                 base=config.rope_theta,
                 interleaved=config.rope_interleaved,
-                seq_len_scaling_factor=None,
+                seq_len_scaling_factor=config.rope_seq_len_scaling_factor,
                 fused=config._fused_rotary_emb,
             )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)

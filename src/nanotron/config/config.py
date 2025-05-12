@@ -27,6 +27,7 @@ from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger, human_format
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
+from nanotron.config.models_config import Qwen2Config
 
 logger = get_logger(__name__)
 
@@ -301,7 +302,6 @@ class ProfilerArgs:
     with_stack: bool = True
     export_chrome_trace: bool = False
 
-
 @dataclass
 class ModelArgs:
     """Arguments related to model architecture"""
@@ -317,6 +317,9 @@ class ModelArgs:
             self.dtype = torch.bfloat16
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
+
+        if isinstance(self.model_config, dict):
+            self.model_config = Qwen2Config(**self.model_config)
 
         self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 

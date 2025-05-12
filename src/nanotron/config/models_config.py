@@ -134,6 +134,7 @@ class Qwen2Config:
     rope_scaling: Optional[dict] = None
     rope_theta: float = 10000.0
     rope_interleaved: bool = False
+    rope_seq_len_interpolation_factor: Optional[float] = None  # if not None, discrete positions will be interpolated by this factor via the trick in https://arxiv.org/abs/2306.15595
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
@@ -193,6 +194,10 @@ class Qwen2Config:
                 self.num_hidden_layers % self.no_rope_layer == 0
             ), "no_rope_layer must be a multiple of num_hidden_layers"
 
+        # rope_seq_len_interpolation_factor = seqlen / 4096
+        if self.max_position_embeddings > 4096:
+            assert self.rope_seq_len_interpolation_factor == self.max_position_embeddings / 4096, f"rope_seq_len_interpolation_factor must be equal to max_position_embeddings / 4096 = {self.max_position_embeddings / 4096}"
+    
     @property
     def is_using_mup(self) -> bool:
         return self._is_using_mup
