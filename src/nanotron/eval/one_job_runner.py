@@ -60,6 +60,15 @@ class LightEvalRunner:
         logger.warning(
             f"Lighteval Runner got {len(uploaded_files)} files. Using {checkpoint_path} as checkpoint path."
         )
+
+
+        slurm_job_id, slurm_log = run_slurm_one_job(
+            config=self.config,
+            lighteval_config=self.lighteval_config,
+            model_checkpoint_path=checkpoint_path,
+            current_step=self.config.general.step,
+        )
+
         if self.config.general.step % self.lighteval_config.eval_interval == 0:
             slurm_job_id, slurm_log = run_slurm_one_job(
                 config=self.config,
@@ -72,6 +81,7 @@ class LightEvalRunner:
                 f"Skipping evaluation at step {self.config.general.step} because it's not a multiple of {self.lighteval_config.eval_interval}"
             )
             return None, None
+
 
         return slurm_job_id, slurm_log
 
@@ -135,8 +145,12 @@ def run_slurm_one_job(
 #SBATCH --exclusive
 #SBATCH --qos={slurm_config.qos}
 #SBATCH --time={slurm_config.time}
+
+#SBATCH --output={eval_logs_path}/%j-{timestamp}.out"""
+
 #SBATCH --output={eval_logs_path}/%j-{timestamp}.out
 #SBATCH --requeue"""
+
 
     if slurm_config.reservation:
         slurm_script += f"\n#SBATCH --reservation={slurm_config.reservation}"
@@ -256,6 +270,9 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun \\
     --cache-dir {slurm_config.hf_cache}"""
     if lighteval_config.output_dir is not None and lighteval_config.s3_save_path is not None:
         slurm_script += f"""
+
+s5cmd cp --if-size-differ "{lighteval_config.output_dir}*" {lighteval_config.s3_save_path}
+
 s5cmd cp --if-size-differ "{lighteval_config.output_dir}*" {lighteval_config.s3_save_path}/
 """
     if lighteval_config.upload_to_wandb:
@@ -273,6 +290,7 @@ python {nanotron_path}/src/nanotron/eval/upload_to_wandb.py \\
     --results_path {lighteval_config.s3_save_path}/results/results/{general_run_name}/{current_step}/ \\
     --train_step {current_step} \\
     --consumed_tokens {current_step*gbs_tok}
+
 """
     slurm_script += """
 echo "Cleaning up downloaded checkpoints..."

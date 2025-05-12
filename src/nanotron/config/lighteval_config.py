@@ -109,6 +109,9 @@ class LightEvalConfig:
     logging: Optional[LightEvalLoggingArgs] = None
     wandb: Optional[LightEvalWandbLoggerConfig] = None
     slurm: Optional[LightEvalSlurm] = None
+
+    s3_save_path: Optional[str] = None # should not be dependent of the run_name
+    output_dir: Optional[str] = None # we should sanity check that it's the same as the one in the eval_config_override
     s3_save_path: Optional[str] = None  # should not be dependent of the run_name
     upload_to_wandb: Optional[bool] = False
     wandb_project: Optional[str] = None

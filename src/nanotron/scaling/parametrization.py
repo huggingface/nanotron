@@ -59,6 +59,8 @@ class StandardParametrizator(Parametrizator):
 
         if "weight" == param_name:
             # TODO @nouamane: should we use trunc_normal_
+
+
             init.normal_(module.weight, mean=0.0, std=self.std)
         elif "bias" == param_name:
             module.bias.zero_()
@@ -79,6 +81,7 @@ class StandardParametrizator(Parametrizator):
 
     def _parametrize_router(self, param_name: str, module: nn.Module):
         if "weight" == param_name:
+
             init.normal_(module.weight, mean=0.0, std=self.std)
         elif "bias" == param_name:
             module.bias.zero_()
