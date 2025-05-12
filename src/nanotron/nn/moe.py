@@ -25,7 +25,7 @@ except ImportError:
     )
 
 # Try to debug the topk version
-topk_version = True
+topk_version = False
 native_torch_version = True
 
 
@@ -120,7 +120,10 @@ class Router(nn.Module):
 
     def apply_aux_loss(self, logits: torch.Tensor):
         probs, routing_map = self.top_k_softmax(logits)
-        tokens_per_expert = routing_map.sum(dim=0)
+        if topk_version:
+            tokens_per_expert = torch.bincount(routing_map.flatten(), minlength=self.num_experts)
+        else:
+            tokens_per_expert = routing_map.sum(dim=0)
         aux_loss = switch_aux_loss(
             probs, tokens_per_expert, self.aux_loss_coeff, self.num_experts_per_token, self.sequence_partition_group
         )
@@ -224,11 +227,11 @@ class Qwen2MoELayer(nn.Module):
                 intermediate_size=config.moe_config.shared_expert_intermediate_size,
             )
             # TODO: duplicte the shared expert gate
-            self.shared_expert_gate = nn.Linear(
-                self.hidden_size,
-                1,
-                bias=False,
-            )  # TODO: ensure shared_expert_gate is tied across TP
+            # self.shared_expert_gate = nn.Linear(
+            #     self.hidden_size,
+            #     1,
+            #     bias=False,
+            # )  # TODO: ensure shared_expert_gate is tied across TP
 
         # Create the expert MLPs
         self.experts = GroupedMLP(config, parallel_config)
@@ -378,9 +381,9 @@ class Qwen2MoELayer(nn.Module):
         # Add shared expert contribution if enabled
         if self.enable_shared_expert:
             shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
-            shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
-            output = output + shared_gate * shared_expert_output
-
+            # shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states)) # to match the megatron version
+            # output = output + shared_gate * shared_expert_output
+            output = output + shared_expert_output
         return output
 
     def _checkpointed_forward(self, hidden_states):
