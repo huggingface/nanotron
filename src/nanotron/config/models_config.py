@@ -50,6 +50,31 @@ class MoEConfig:
     token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
     use_haojun_permute: bool = True  # Whether to use Haojun's permute
 
+    moe_impl: str = "transformer_engine"
+    # Transformer-Engine specific config
+    num_shared_experts: int = None
+    rotary_base: int = None
+    rotary_scaling_factor: int = None
+    max_position_embeddings: int = None
+    moe_aux_loss_coeff: float = 0.0
+
+    gradient_accumulation_fusion: bool = False # 
+    disable_parameter_transpose_cache: bool = False # When set to true, the parameter transposes are not cached for subsequent iterations.
+    bias_activation_fusion: bool = False 
+    permute_fusion: bool = False
+    input_jitter_eps: float = None # Add noise to the input tensor. https://arxiv.org/abs/2101.03961
+    # The load balancing strategy for the router. "aux_loss" corresponds to the load balancing loss 
+    # used in GShard and SwitchTransformer; "seq_aux_loss" corresponds to the loss used in DeepSeekV2, 
+    # which computes the loss for each individual sample; "sinkhorn" corresponds to the balancing 
+    # algorithm used in S-BASE, and "none" implies no load balancing. The default is "aux_loss".
+    router_load_balancing_type: str = "aux_loss" 
+    moe_expert_capacity_factor: float = 1.0
+    moe_pad_expert_input_to_capacity: bool = False
+    moe_token_drop_policy: str = "probs"
+    moe_z_loss_coeff: float = 0.0
+    moe_token_dispatcher_type: str = "alltoall"
+    moe_router_dtype: str = "fp32"
+
     def __post_init__(self):
         # Validate the configuration
         if self.top_k > self.num_experts:

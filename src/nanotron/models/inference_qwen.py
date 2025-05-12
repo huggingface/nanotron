@@ -15,7 +15,6 @@ from nanotron.nn.activations import ACT2FN
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
 from nanotron.nn.layer_norm import LlamaRMSNorm as RMSNorm
 from nanotron.nn.layer_norm import TritonRMSNorm
-from nanotron.nn.moe import MoELogging
 from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
@@ -193,7 +192,7 @@ class Qwen2Attention(nn.Module):
             async_communication=tp_linear_async_communication,
         )
         if config._use_qkv_packed:
-            from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
+            from nanotron.nn.rotary import FlashRotaryEmbedding
 
             self.rotary_emb = FlashRotaryEmbedding(
                 dim=self.head_dim,
@@ -220,20 +219,26 @@ class Qwen2Attention(nn.Module):
         hidden_states: torch.Tensor,  # [batch_size*seq_length, hidden_size]
         position_ids: torch.Tensor,  # [batch_size, seq_length] where -1 is padding
         cu_seqlens: Optional[torch.Tensor] = None,  # Added cu_seqlens argument
+        inference_max_seqlen: Optional[int] = None,
     ):
         # [0, 1, 2, 3, 4, 0, 1, 2, -1, -1, -1] # 2 documents with 5 and 3 tokens then padding
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] # 1 document with 11 tokens
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, -1, -1] # 1 document with 10 tokens then padding
         # Replace -1 with 0 in position_ids to mark every padding token as a separate sequence. Ideally we want to get rid of padding tokens from qkv
         # position_ids = position_ids.masked_fill(position_ids == -1, 0)
-        seq_length = position_ids.shape[1]
-        # Keep original position_ids shape for return, flatten for internal use
-        position_ids = position_ids.view(-1)  # [batch_size*seq_length]
-
+        if position_ids.ndim == 2:
+            seq_length = position_ids.shape[1]
+            flat_position_ids = position_ids.view(-1)  # [batch_size*seq_length]
+        else:
+            assert (
+                inference_max_seqlen is not None
+            ), "inference_max_seqlen must be provided if position_ids is a 1D tensor"
+            seq_length = inference_max_seqlen
+            flat_position_ids = position_ids
         qkv = self.qkv_proj(hidden_states)
 
         if self._use_qkv_packed:
-            attn_output = self._forward_packed(qkv, seq_length, position_ids, cu_seqlens)
+            attn_output = self._forward_packed(qkv, seq_length, flat_position_ids, cu_seqlens)
         else:
             q, k, v = qkv.split(
                 [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
@@ -243,7 +248,7 @@ class Qwen2Attention(nn.Module):
             v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
             if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
                 rotary_pos_emb = self.rotary_emb(
-                    position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+                    position_ids=flat_position_ids if not self.simple_causal_mask else None, seq_length=seq_length
                 )  # [b*s, dim] or [seq_length, dim]
                 q = self.rotary_emb.apply_rotary_pos_emb(
                     q, rotary_pos_emb, seq_length=seq_length
@@ -254,27 +259,40 @@ class Qwen2Attention(nn.Module):
             else:
                 log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
             attn_output = self.attention(
-                q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
+                q, k, v, position_ids=flat_position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
             )
         output = self.o_proj(attn_output)
-        # Return original position_ids shape
-        return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
+        return {"hidden_states": output, "position_ids": position_ids}
 
     def _forward_packed(self, qkv, seq_length, position_ids, cu_seqlens):
         assert cu_seqlens is not None, "cu_seqlens must be provided for packed attention"
         q = qkv[..., : self.local_num_heads * self.head_dim]  # Not contiguous, similar to flash_attn
         kv = qkv[..., self.local_num_heads * self.head_dim :]  # Not contiguous, similar to flash_attn
-        q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
-        kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
+
         if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
-            q, kv = self.rotary_emb(
-                q, kv, seqlen_offset=0, max_seqlen=None
-            )  # TODO: should we use position_ids here? flash_attn doesn't
+            if self.training:
+                q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
+                kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
+                q, kv = self.rotary_emb(
+                    q, kv, seqlen_offset=0, max_seqlen=None
+                )  # TODO: should we use position_ids here? flash_attn doesn't
+            else:
+                # TODO: support seqlen_offsets in case of use_cache
+                # qkv = qkv.view(-1, self.local_num_heads + 2 * self.local_num_kv_heads, self.head_dim)
+                # self.rotary_emb.varlen_forward(qkv, seqlen_offsets=0, cu_seqlens=cu_seqlens, max_seqlen=seq_length)
+                # qkv = qkv.view(-1, (self.local_num_heads + 2 * self.local_num_kv_heads) * self.head_dim)
+                # q = qkv[..., : self.local_num_heads * self.head_dim]
+                # kv = qkv[..., self.local_num_heads * self.head_dim :]
+                q = q.view(-1, self.local_num_heads, self.head_dim)
+                kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
+                k = kv[:, 0]
+                self.rotary_emb.varlen_forward(q, seqlen_offsets=0, cu_seqlens=cu_seqlens, max_seqlen=seq_length)
+                self.rotary_emb.varlen_forward(k, seqlen_offsets=0, cu_seqlens=cu_seqlens, max_seqlen=seq_length)
         else:
             log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
         q = q.view(-1, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
-        max_seqlen = seq_length  # TODO: should this be max position_ids?
+        max_seqlen = seq_length  # TODO: should this be max position_ids? As long as it doesn't change often it and not too big should be fine
 
         assert cu_seqlens.dtype == torch.int32
         assert max_seqlen is not None
@@ -303,7 +321,6 @@ class Qwen2MLP(nn.Module):
         config: Qwen2Config,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
-        hidden_size: int,
         intermediate_size: int,
     ) -> None:
         super().__init__()
@@ -320,7 +337,7 @@ class Qwen2MLP(nn.Module):
         )
 
         self.gate_up_proj = TensorParallelColumnLinear(
-            hidden_size,
+            config.hidden_size,
             2 * intermediate_size,
             pg=tp_pg,
             mode=tp_mode,
@@ -333,7 +350,7 @@ class Qwen2MLP(nn.Module):
         # Define down projection
         self.down_proj = TensorParallelRowLinear(
             intermediate_size,
-            hidden_size,
+            config.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,  # Qwen2 doesn't use bias for down_proj
@@ -364,7 +381,6 @@ class Qwen2DecoderLayer(nn.Module):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         cp_pg: dist.ProcessGroup,
-        parallel_context: ParallelContext,
         layer_idx: int,
     ) -> None:
         super().__init__()
@@ -372,6 +388,8 @@ class Qwen2DecoderLayer(nn.Module):
         # Use fused RMSNorm if configured
         norm_class = TritonRMSNorm if config._fused_rms_norm else RMSNorm
         self.input_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = Qwen2Attention(
             config=config,
             parallel_config=parallel_config,
@@ -380,34 +398,22 @@ class Qwen2DecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
         self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
-        self.layer_idx = layer_idx
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
+            from nanotron.nn.moe import Qwen2MoELayer
 
-            if config.moe_config.moe_impl == 'nanotron':
-                from nanotron.nn.moe import Qwen2MoEMLPLayer
-
-                self.mlp = Qwen2MoEMLPLayer(
-                    config=config,
-                    parallel_config=parallel_config,
-                    parallel_context=parallel_context,
-                    layer_idx=layer_idx,
-                )
-            elif config.moe_config.moe_impl == 'transformer_engine':
-                from nanotron.nn.te_moe import Qwen2MoEMLPLayer
-                self.mlp = Qwen2MoEMLPLayer(
-                    config=config,
-                    parallel_config=parallel_config,
-                    parallel_context=parallel_context,
-                    layer_idx=layer_idx,
-                )
+            self.mlp = Qwen2MoELayer(
+                config=config,
+                parallel_config=parallel_config,
+                tp_pg=tp_pg,
+                layer_idx=layer_idx,
+            )
         else:
             self.mlp = Qwen2MLP(
                 config=config,
                 parallel_config=parallel_config,
                 tp_pg=tp_pg,
-                hidden_size=config.hidden_size,
                 intermediate_size=config.intermediate_size,
             )
 
@@ -418,21 +424,26 @@ class Qwen2DecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],  # [batch_size*seq_length, hidden_size]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
         cu_seqlens: Union[torch.Tensor, TensorPointer],
-        moe_logging: Optional[MoELogging] = None,
+        inference_max_seqlen: Optional[int] = None,
     ) -> List[Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
-        output = self.attn(hidden_states=hidden_states, position_ids=position_ids, cu_seqlens=cu_seqlens)
+        output = self.attn(
+            hidden_states=hidden_states,
+            position_ids=position_ids,
+            cu_seqlens=cu_seqlens,
+            inference_max_seqlen=inference_max_seqlen,
+        )
         hidden_states = output["hidden_states"]
         hidden_states = hidden_states + residual
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states=hidden_states, moe_logging=moe_logging)["hidden_states"]
+        hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
         hidden_states = hidden_states + residual
 
-        return hidden_states, position_ids, cu_seqlens, moe_logging
+        return hidden_states, position_ids, cu_seqlens
 
     def _checkpointed_forward(
         self,
@@ -447,22 +458,22 @@ class Qwen2DecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],
         position_ids: Union[torch.Tensor, TensorPointer],
         cu_seqlens: Union[torch.Tensor, TensorPointer],
-        moe_logging: Optional[MoELogging] = None,
+        inference_max_seqlen: Optional[int] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, position_ids, cu_seqlens, moe_logging = self._checkpointed_forward(
-                hidden_states, position_ids, cu_seqlens, moe_logging
+            hidden_states, position_ids, cu_seqlens = self._checkpointed_forward(
+                hidden_states, position_ids, cu_seqlens, inference_max_seqlen
             )
         else:
-            hidden_states, position_ids, cu_seqlens, moe_logging = self._core_forward(
-                hidden_states, position_ids, cu_seqlens, moe_logging
+            hidden_states, position_ids, cu_seqlens = self._core_forward(
+                hidden_states, position_ids, cu_seqlens, inference_max_seqlen
             )
 
         return {
             "hidden_states": hidden_states,
             "position_ids": position_ids,
             "cu_seqlens": cu_seqlens,
-            "moe_logging": moe_logging,
+            "inference_max_seqlen": inference_max_seqlen,
         }
 
 
@@ -478,9 +489,8 @@ class Embedding(nn.Module):
         )
         self.pg = tp_pg
 
-    def forward(self, input_ids: torch.Tensor, position_ids: torch.Tensor):  # [batch_size, seq_length]
-        input_ids = input_ids.view(-1)  # [batch_size*seq_length]
-        input_embeds = self.token_embedding(input_ids)  # [batch_size*seq_length, hidden_size]
+    def forward(self, input_ids: torch.Tensor, position_ids: torch.Tensor):  # [...]
+        input_embeds = self.token_embedding(input_ids)  # [..., hidden_size]
         return {"input_embeds": input_embeds, "position_ids": position_ids}
 
 
@@ -528,12 +538,10 @@ class Qwen2Model(nn.Module):
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "cp_pg": parallel_context.cp_pg,
-                        # TODO: directly pass the ep_pg process group instead of the parallel_context
-                        "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
-                    module_input_keys={"hidden_states", "position_ids", "cu_seqlens", "moe_logging"},
-                    module_output_keys={"hidden_states", "position_ids", "cu_seqlens", "moe_logging"},
+                    module_input_keys={"hidden_states", "position_ids", "cu_seqlens", "inference_max_seqlen"},
+                    module_output_keys={"hidden_states", "position_ids", "cu_seqlens", "inference_max_seqlen"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -569,40 +577,89 @@ class Qwen2Model(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
     ):
-        # debugging
-        import joblib
-        sample_batch = joblib.load('/fsx/nouamane/projects/OLMoE/sample_batch.pkl')
-        assert sample_batch['input_ids'].shape == input_ids.shape, f"input_ids.shape: {input_ids.shape}, sample_batch['input_ids'].shape: {sample_batch['input_ids'].shape}"
-        input_ids = sample_batch['input_ids'].to(input_ids.device)
-        output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
-        # Compute cu_seqlens
-        if position_ids.numel() > 0:
-            start_indices = torch.where(position_ids.view(-1) == 0)[0]
+        if not self.training:  # inference case:
+            assert (
+                position_ids.ndim == 2
+            ), "position_ids must be 2D for inference, otherwise how do we know when to separate samples?"
+            inference_max_seqlen = position_ids.shape[1]
+            inference_batch_size = position_ids.shape[0]
+            # This gives the number of non-padding tokens per sequence in the batch
+            seqlens_in_batch = (position_ids != -1).sum(dim=-1, dtype=torch.int32)
+            input_ids = input_ids.view(-1)
+            position_ids = position_ids.view(-1)
+            # Find indices of non-padding tokens using the flattened position_ids
+            unpad_indices = torch.nonzero(position_ids != -1, as_tuple=False).flatten()
             cu_seqlens = torch.cat(
-                [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
-            ).to(torch.int32)
-        else:
-            cu_seqlens = None
+                [
+                    torch.zeros(1, dtype=torch.int32, device=seqlens_in_batch.device),
+                    torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32),
+                ]
+            )
+            unpadded_input_ids = input_ids[unpad_indices]  # (total_tokens) = (total_unpadded_tokens)
+            unpadded_position_ids = position_ids[unpad_indices]  # (total_tokens)
 
-        # moe_logging = MoELogging(num_local_tokens=[]) if self.config.moe_config is not None else None
-        num_local_experts = self.config.moe_config.num_experts // self.parallel_config.expert_parallel_size
-        moe_logging = torch.zeros((self.config.num_hidden_layers, num_local_experts), device="cuda", dtype=torch.int32)
+            # TODO: compute this in dataloader to avoid cpu-gpu sync
+            cu_seqlens = cu_seqlens.to(input_ids.device)
 
-        decoder_states = {
-            "hidden_states": output["input_embeds"],
-            "position_ids": output["position_ids"],
-            "cu_seqlens": cu_seqlens,
-            "moe_logging": moe_logging,
-        }
+            output = self.token_position_embeddings(
+                input_ids=unpadded_input_ids, position_ids=unpadded_position_ids
+            )  # (total_tokens, hidden_size)
+            decoder_states = {
+                "hidden_states": output["input_embeds"],  # Unpadded embeds [total_tokens, hidden_size]
+                "position_ids": output["position_ids"],  # Unpadded pos_ids [total_tokens]
+                "cu_seqlens": cu_seqlens,  # cu_seqlens for unpadded sequence [batch_size + 1]
+                "inference_max_seqlen": inference_max_seqlen,  # original seq_length using for inference
+            }
 
+        else:  # Training case (handles potential packing)
+            # Get embeddings for the original (potentially padded/packed) sequence
+            output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
+            # output["position_ids"] is the original position_ids [batch_size, seq_length]
+
+            # Compute cu_seqlens based on document starts (position_id == 0) if data is packed
+            if position_ids.numel() > 0:
+                start_indices = torch.where(position_ids.view(-1) == 0)[0]
+                cu_seqlens = torch.cat(
+                    [
+                        start_indices,
+                        torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device),
+                    ]
+                ).to(torch.int32)
+            else:
+                cu_seqlens = None  # Or handle empty tensor case appropriately
+
+            # Prepare state for decoder layers using original/padded/packed data
+            decoder_states = {
+                "hidden_states": output["input_embeds"],  # Padded embeds [batch*seq_len, hidden_size]
+                "position_ids": output["position_ids"],  # Original pos_ids [batch_size, seq_len]
+                "cu_seqlens": cu_seqlens,  # Based on packing, might be None
+            }
+
+        # Pass the prepared decoder_states dictionary to the decoder layers
         for decoder_layer in self.decoder:
+            # Decoder layers need to handle both inference (unpadded) and training (padded/packed) states
             decoder_states = decoder_layer(**decoder_states)
 
+        # Final layer norm and LM head operate on the output hidden_states from the last decoder layer
         hidden_states = self.final_layer_norm(input=decoder_states["hidden_states"])["hidden_states"]
-
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 
-        return sharded_logits, moe_logging
+        # Pad logits back to original shape if in inference mode
+        if not self.training:
+            assert inference_batch_size is not None and inference_max_seqlen is not None and unpad_indices is not None
+            # Create zero tensor with the full padded shape (flattened batch/seq)
+            padded_sharded_logits = torch.zeros(
+                inference_batch_size * inference_max_seqlen,
+                sharded_logits.shape[-1],  # vocab_shard_size
+                dtype=sharded_logits.dtype,
+                device=sharded_logits.device,
+            )
+            # Scatter the unpadded logits back into the zero tensor
+            padded_sharded_logits[unpad_indices] = sharded_logits
+            # Reshape to (batch_size, sequence_length, vocab_shard_size)
+            sharded_logits = padded_sharded_logits.view(inference_batch_size, inference_max_seqlen, -1)
+
+        return sharded_logits
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model for load balancing."""
@@ -727,7 +784,7 @@ class Qwen2ForTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        sharded_logits, moe_logging = self.model(
+        sharded_logits = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
         )
@@ -736,14 +793,10 @@ class Qwen2ForTraining(NanotronModel):
             label_ids=label_ids,
             label_mask=label_mask,
         )
-        outputs = {"loss": loss["loss"]}
-
         if self.config.z_loss_enabled:
-            outputs["z_loss"] = loss["z_loss"]
-        if moe_logging is not None:
-            outputs["moe_logging"] = moe_logging
-
-        return outputs
+            return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
+        else:
+            return {"loss": loss["loss"]}
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):

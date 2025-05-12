@@ -15,7 +15,6 @@ from nanotron.nn.activations import ACT2FN
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
 from nanotron.nn.layer_norm import LlamaRMSNorm as RMSNorm
 from nanotron.nn.layer_norm import TritonRMSNorm
-from nanotron.nn.moe import MoELogging
 from nanotron.nn.rotary import RotaryEmbedding
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
@@ -303,7 +302,6 @@ class Qwen2MLP(nn.Module):
         config: Qwen2Config,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
-        hidden_size: int,
         intermediate_size: int,
     ) -> None:
         super().__init__()
@@ -320,7 +318,7 @@ class Qwen2MLP(nn.Module):
         )
 
         self.gate_up_proj = TensorParallelColumnLinear(
-            hidden_size,
+            config.hidden_size,
             2 * intermediate_size,
             pg=tp_pg,
             mode=tp_mode,
@@ -333,7 +331,7 @@ class Qwen2MLP(nn.Module):
         # Define down projection
         self.down_proj = TensorParallelRowLinear(
             intermediate_size,
-            hidden_size,
+            config.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,  # Qwen2 doesn't use bias for down_proj
@@ -364,7 +362,6 @@ class Qwen2DecoderLayer(nn.Module):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         cp_pg: dist.ProcessGroup,
-        parallel_context: ParallelContext,
         layer_idx: int,
     ) -> None:
         super().__init__()
@@ -372,6 +369,8 @@ class Qwen2DecoderLayer(nn.Module):
         # Use fused RMSNorm if configured
         norm_class = TritonRMSNorm if config._fused_rms_norm else RMSNorm
         self.input_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = Qwen2Attention(
             config=config,
             parallel_config=parallel_config,
@@ -380,34 +379,22 @@ class Qwen2DecoderLayer(nn.Module):
             layer_idx=layer_idx,
         )
         self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
-        self.layer_idx = layer_idx
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
+            from nanotron.nn.moe import Qwen2MoELayer
 
-            if config.moe_config.moe_impl == 'nanotron':
-                from nanotron.nn.moe import Qwen2MoEMLPLayer
-
-                self.mlp = Qwen2MoEMLPLayer(
-                    config=config,
-                    parallel_config=parallel_config,
-                    parallel_context=parallel_context,
-                    layer_idx=layer_idx,
-                )
-            elif config.moe_config.moe_impl == 'transformer_engine':
-                from nanotron.nn.te_moe import Qwen2MoEMLPLayer
-                self.mlp = Qwen2MoEMLPLayer(
-                    config=config,
-                    parallel_config=parallel_config,
-                    parallel_context=parallel_context,
-                    layer_idx=layer_idx,
-                )
+            self.mlp = Qwen2MoELayer(
+                config=config,
+                parallel_config=parallel_config,
+                tp_pg=tp_pg,
+                layer_idx=layer_idx,
+            )
         else:
             self.mlp = Qwen2MLP(
                 config=config,
                 parallel_config=parallel_config,
                 tp_pg=tp_pg,
-                hidden_size=config.hidden_size,
                 intermediate_size=config.intermediate_size,
             )
 
@@ -418,7 +405,6 @@ class Qwen2DecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],  # [batch_size*seq_length, hidden_size]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
         cu_seqlens: Union[torch.Tensor, TensorPointer],
-        moe_logging: Optional[MoELogging] = None,
     ) -> List[Union[torch.Tensor, TensorPointer]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -429,10 +415,10 @@ class Qwen2DecoderLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states=hidden_states, moe_logging=moe_logging)["hidden_states"]
+        hidden_states = self.mlp(hidden_states=hidden_states)["hidden_states"]
         hidden_states = hidden_states + residual
 
-        return hidden_states, position_ids, cu_seqlens, moe_logging
+        return hidden_states, position_ids, cu_seqlens
 
     def _checkpointed_forward(
         self,
@@ -447,22 +433,18 @@ class Qwen2DecoderLayer(nn.Module):
         hidden_states: Union[torch.Tensor, TensorPointer],
         position_ids: Union[torch.Tensor, TensorPointer],
         cu_seqlens: Union[torch.Tensor, TensorPointer],
-        moe_logging: Optional[MoELogging] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         if self.recompute_layer and not isinstance(hidden_states, TensorPointer):
-            hidden_states, position_ids, cu_seqlens, moe_logging = self._checkpointed_forward(
-                hidden_states, position_ids, cu_seqlens, moe_logging
+            hidden_states, position_ids, cu_seqlens = self._checkpointed_forward(
+                hidden_states, position_ids, cu_seqlens
             )
         else:
-            hidden_states, position_ids, cu_seqlens, moe_logging = self._core_forward(
-                hidden_states, position_ids, cu_seqlens, moe_logging
-            )
+            hidden_states, position_ids, cu_seqlens = self._core_forward(hidden_states, position_ids, cu_seqlens)
 
         return {
             "hidden_states": hidden_states,
             "position_ids": position_ids,
             "cu_seqlens": cu_seqlens,
-            "moe_logging": moe_logging,
         }
 
 
@@ -528,12 +510,10 @@ class Qwen2Model(nn.Module):
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "cp_pg": parallel_context.cp_pg,
-                        # TODO: directly pass the ep_pg process group instead of the parallel_context
-                        "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
-                    module_input_keys={"hidden_states", "position_ids", "cu_seqlens", "moe_logging"},
-                    module_output_keys={"hidden_states", "position_ids", "cu_seqlens", "moe_logging"},
+                    module_input_keys={"hidden_states", "position_ids", "cu_seqlens"},
+                    module_output_keys={"hidden_states", "position_ids", "cu_seqlens"},
                 )
                 for layer_idx in range(config.num_hidden_layers)
             ]
@@ -569,11 +549,6 @@ class Qwen2Model(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
     ):
-        # debugging
-        import joblib
-        sample_batch = joblib.load('/fsx/nouamane/projects/OLMoE/sample_batch.pkl')
-        assert sample_batch['input_ids'].shape == input_ids.shape, f"input_ids.shape: {input_ids.shape}, sample_batch['input_ids'].shape: {sample_batch['input_ids'].shape}"
-        input_ids = sample_batch['input_ids'].to(input_ids.device)
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
         # Compute cu_seqlens
         if position_ids.numel() > 0:
@@ -584,15 +559,10 @@ class Qwen2Model(nn.Module):
         else:
             cu_seqlens = None
 
-        # moe_logging = MoELogging(num_local_tokens=[]) if self.config.moe_config is not None else None
-        num_local_experts = self.config.moe_config.num_experts // self.parallel_config.expert_parallel_size
-        moe_logging = torch.zeros((self.config.num_hidden_layers, num_local_experts), device="cuda", dtype=torch.int32)
-
         decoder_states = {
             "hidden_states": output["input_embeds"],
             "position_ids": output["position_ids"],
             "cu_seqlens": cu_seqlens,
-            "moe_logging": moe_logging,
         }
 
         for decoder_layer in self.decoder:
@@ -602,7 +572,7 @@ class Qwen2Model(nn.Module):
 
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
 
-        return sharded_logits, moe_logging
+        return sharded_logits
 
     def get_block_compute_costs(self):
         """Computes the compute cost of each block in the model for load balancing."""
@@ -727,7 +697,7 @@ class Qwen2ForTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        sharded_logits, moe_logging = self.model(
+        sharded_logits = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
         )
@@ -736,14 +706,10 @@ class Qwen2ForTraining(NanotronModel):
             label_ids=label_ids,
             label_mask=label_mask,
         )
-        outputs = {"loss": loss["loss"]}
-
         if self.config.z_loss_enabled:
-            outputs["z_loss"] = loss["z_loss"]
-        if moe_logging is not None:
-            outputs["moe_logging"] = moe_logging
-
-        return outputs
+            return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
+        else:
+            return {"loss": loss["loss"]}
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):

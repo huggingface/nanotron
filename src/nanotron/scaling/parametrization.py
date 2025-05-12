@@ -7,6 +7,7 @@ from nanotron.config import Config, ModelArgs
 from nanotron.config.models_config import InitScalingMethod
 from nanotron.nn.layer_norm import LlamaRMSNorm, TritonRMSNorm
 from nanotron.nn.moe import GroupedMLP, Router
+from nanotron.nn.te_moe import TopKRouter, TEGroupedLinear
 from nanotron.parallel.tensor_parallel.nn import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -46,6 +47,8 @@ class StandardParametrizator(Parametrizator):
             GroupedMLP: self._parametrize_grouped_mlp,
             Router: self._parametrize_router,
             nn.Linear: self._parametrize_column_linear,
+            TopKRouter: self._parametrize_router,
+            TEGroupedLinear: self._parametrize_grouped_mlp,
         }
 
         self.std = config.model.init_method.std
@@ -65,10 +68,10 @@ class StandardParametrizator(Parametrizator):
 
     def _parametrize_grouped_mlp(self, param_name: str, module: nn.Module):
         for n, p in module.named_parameters():
-            if n == "merged_gate_up_proj":
+            if n in ["merged_gate_up_proj"] or ("weight" in n and module.parallel_mode == "column"):
                 # NOTE: the same as parametrization of column linear
                 init.normal_(p, mean=0.0, std=self.std)
-            elif n == "merged_down_proj":
+            elif n in ["merged_down_proj"] or ("weight" in n and module.parallel_mode == "row"):
                 # NOTE: the same as parametrization of row linear
                 scaling = self._compute_scaling_factor()
                 adjusted_std = self.std / scaling
