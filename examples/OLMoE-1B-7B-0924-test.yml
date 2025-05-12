@@ -90,7 +90,6 @@ model:
       router_aux_loss_coef: 0.01
       enable_shared_expert: false
       token_dispatcher_type: alltoall
-      use_haojun_permute: true
 optimizer:
   accumulate_grad_in_fp32: true
   clip_grad: 1.0
