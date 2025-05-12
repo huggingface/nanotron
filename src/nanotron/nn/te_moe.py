@@ -549,7 +549,7 @@ class TEGroupedMLP(nn.Module):
 
         self.linear_fc2 = TEGroupedLinear(  # TERowParallelGroupedLinear
             num_gemms=self.num_local_experts,
-            input_size=ffn_hidden_size,
+            input_size=ffn_hidden_size//2, # TODO: hack for now. AssertionError: GEMM not possible: inp.shape[-1] = 1024, in_features = 2048
             output_size=config.hidden_size,
             parallel_mode="row",
             config=config,

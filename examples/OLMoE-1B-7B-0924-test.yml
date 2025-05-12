@@ -37,7 +37,7 @@ general:
   step: null
 lighteval: null
 logging:
-  iteration_step_info_interval: 10
+  iteration_step_info_interval: 1
   log_level: info
   log_level_replica: info
 metrics_logging: null
