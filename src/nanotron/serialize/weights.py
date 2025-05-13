@@ -41,6 +41,10 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
 
     # We chunk everything by `tp_world_size` in order to make sure that we gather all the weights into a single device before saving it
     for name, param_or_buffer in tqdm(model.state_dict().items(), desc="Saving weights"):
+        # NOTE: skipping TE's extra_state
+        if "_extra_state" in name:
+            continue
+
         # exp_rank=0 saves all weights whereas exp_rank>0 save only MLP weights
         if dist.get_rank(parallel_context.ep_pg) != 0:
             if "experts" not in name:
@@ -172,7 +176,9 @@ def load_sharded_param_latest(
             if param_shard_metadata is not None:
                 # NOTE: store how does model parameter are sharded
                 # so that we can shard optimizer checkpoints in this way
-                pp_rank, tp_rank = extract_tp_pp_rank_from_shard_path(shard_path)
+                checkpoint_parallel_ranks = extract_tp_pp_rank_from_shard_path(shard_path)
+                pp_rank = checkpoint_parallel_ranks.pp_rank
+                tp_rank = checkpoint_parallel_ranks.tp_rank
                 param_shard_metadata[(pp_rank, tp_rank)] = param_metadata
 
     assert checkpoint_unsharded_shape is not None

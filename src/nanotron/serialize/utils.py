@@ -98,13 +98,15 @@ def get_path(
 
 
 def extract_tp_pp_rank_from_shard_path(shard_path: Path):
-    from nanotron.serialize.weights import CheckpointParallelRanks
+    from nanotron.serialize.utils import CheckpointParallelRanks
 
-    pattern = r"pp-rank-(\d+)-of-\d+_tp-rank-(\d+)-of-\d+"
+    pattern = r"pp-rank-(\d+)-of-(\d+)_tp-rank-(\d+)-of-(\d+)"
     match = re.search(pattern, str(shard_path))
-    pp_rank, tp_rank = match.groups()
-    # return pp_rank, tp_rank
-    return CheckpointParallelRanks(pp_rank=int(pp_rank), tp_rank=int(tp_rank))
+    pp_rank, pp_size, tp_rank, tp_size = match.groups()
+
+    return CheckpointParallelRanks(
+        pp_rank=int(pp_rank), pp_world_size=int(pp_size), tp_rank=int(tp_rank), tp_world_size=int(tp_size)
+    )
 
 
 def merge_and_shard_tp_tensors(
