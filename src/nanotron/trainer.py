@@ -1178,7 +1178,7 @@ class DistributedTrainer:
 
     def pre_save_checkpoint(self) -> Path:
         # Check if eval_interval should be updated from file
-        eval_interval_file = self.config.lighteval.eval_interval_file if self.config.lighteval is not None else None
+        eval_interval_file = self.config.lighteval.eval_interval_file
         if eval_interval_file is not None and Path(eval_interval_file).exists():
             try:
                 with open(eval_interval_file, "r") as f:
