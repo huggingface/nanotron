@@ -32,7 +32,7 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
 
     # We save only `dist.get_rank(parallel_context.dp_pg) == 0`
     # TODO @thomasw21: Figure how this works with Zero-3
-    if dist.get_rank(parallel_context.dp_pg) != 0:
+    if dist.get_rank(parallel_context.dp_pg) != 0 and dist.get_rank(parallel_context.ep_dp_pg) != 0:
         return
 
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
@@ -40,24 +40,7 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
     module_id_to_prefix[id(model)] = ""
 
     # We chunk everything by `tp_world_size` in order to make sure that we gather all the weights into a single device before saving it
-    _params = []
     for name, param_or_buffer in tqdm(model.state_dict().items(), desc="Saving weights"):
-        _params.append((name, param_or_buffer))
-
-    for name, param_or_buffer in tqdm(model.state_dict().items(), desc="Saving weights"):
-        # NOTE: skipping TE's extra_state
-        if "_extra_state" in name:
-            continue
-
-        if "attn.o_proj.weight" in name:
-            assert 1 == 1
-
-        if "mlp.experts" in name:
-            assert 1 == 1
-
-        if "router" in name:
-            assert 1 == 1
-
         # exp_rank=0 saves all weights whereas exp_rank>0 save only MLP weights
         if dist.get_rank(parallel_context.ep_pg) != 0:
             if "experts" not in name:
@@ -87,10 +70,6 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
             if param.is_sharded:
                 sharded_info: ShardedInfo = param.get_sharded_info()
                 group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
-                # exp_tp_pp_rank_and_size = get_exp_tp_pp_rank_and_size_from(
-                #     world_rank=get_global_rank(group=group, group_rank=dist.get_rank(group)),
-                #     parallel_context=parallel_context,
-                # )
                 checkpoint_parallel_ranks = get_exp_tp_pp_rank_and_size_from(
                     world_rank=get_global_rank(group=group, group_rank=dist.get_rank(group)),
                     parallel_context=parallel_context,
@@ -101,10 +80,13 @@ def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folde
                     local_global_slices_pairs=sharded_info.local_global_slices_pairs,
                     unsharded_shape=sharded_info.unsharded_shape,
                 ).to_str_dict()
-
             else:
                 checkpoint_parallel_ranks = None
                 is_expert_sharded = False
+
+            # NOTE: we only save weights of the first replicas of dense
+            if dist.get_rank(parallel_context.dp_pg) != 0 and is_expert_sharded is False:
+                continue
 
             path = get_path(
                 base_name,
@@ -234,6 +216,10 @@ def load_weights(
     for name, param_or_buffer in tqdm(
         filtered_state_dict.items(), disable=dist.get_rank(parallel_context.world_pg) != 0, desc="Loading weights"
     ):
+        # NOTE: skipping TE's extra_state
+        if "_extra_state" in name:
+            continue
+
         # NOTE: extract how does the current model parameter are sharded
         # so that we can load optimizer checkpoints in this way
         param_shard_metadata[name] = {}
@@ -261,19 +247,19 @@ def load_weights(
                     group = parallel_context.world_ranks_to_pg[sharded_info.global_ranks]
                     group_rank = dist.get_rank(group)
 
-                exp_tp_pp_rank_and_size = get_exp_tp_pp_rank_and_size_from(
+                checkpoint_parallel_ranks = get_exp_tp_pp_rank_and_size_from(
                     world_rank=get_global_rank(group=group, group_rank=group_rank), parallel_context=parallel_context
                 )
                 # TODO @nouamane: do we consider exp_size=1 expert_sharded?
                 is_expert_sharded = sharded_info.is_expert_sharded(parallel_context)
             else:
-                exp_tp_pp_rank_and_size = None
+                checkpoint_parallel_ranks = None
                 is_expert_sharded = False
 
             path = get_path(
                 base_name,
                 type=ObjectType.MODEL,
-                exp_tp_pp_rank_and_size=exp_tp_pp_rank_and_size,
+                checkpoint_parallel_ranks=checkpoint_parallel_ranks,
                 prefix=param_root_folder,
                 is_expert_sharded=is_expert_sharded,
             )

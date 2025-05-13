@@ -40,11 +40,6 @@ def get_exp_tp_pp_rank_and_size_from(
 ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
     result = parallel_context.get_local_ranks(world_rank=world_rank)
 
-    # return (
-    #     (0, 1),
-    #     (result["tp"], parallel_context.tp_pg.size()),
-    #     (result["pp"], parallel_context.pp_pg.size()),
-    # )
     if parallel_context.enabled_moe is True:
         return CheckpointParallelRanks(
             pp_rank=result["pp"],
@@ -61,51 +56,6 @@ def get_exp_tp_pp_rank_and_size_from(
             tp_rank=result["tp"],
             tp_world_size=parallel_context.tp_pg.size(),
         )
-
-
-# def get_path(
-#     tensor_name: str,
-#     type: ObjectType,
-#     # exp_tp_pp_rank_and_size: Tuple[Tuple[int, int], Tuple[int, int]],
-#     checkpoint_parallel_ranks: CheckpointParallelRanks,
-#     is_expert_sharded: bool,
-#     prefix: Optional[Path] = None,
-# ) -> List[str]:
-#     suffix = tensor_name.split(".")
-#     suffix_path, suffix_name = suffix[:-1], suffix[-1]
-
-#     # if exp_tp_pp_rank_and_size:
-#     if checkpoint_parallel_ranks:
-#         # We always show pp_rank and tp_rank if `exp_tp_pp_rank_and_size` is provided
-#         # (exp_rank, exp_size), (tp_rank, tp_size), (pp_rank, pp_size) = exp_tp_pp_rank_and_size
-#         # TODO: refactor a unified checkpoint naming if possible regardless of parallelism config
-#         # NOTE: just like TP, either the expert is sharded or not, if the model is an moe, then
-#         # we follow the TP naming convention
-#         # if not is_expert_sharded or exp_size == 1:
-#         #     suffix_name = (
-#         #         f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}.safetensors"
-#         #     )
-#         # else:
-#         #     # We only show exp_rank if tensor is exp_sharded and exp_size > 1
-#         #     suffix_name = f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}_exp-rank-{exp_rank}-of-{exp_size}.safetensors"
-
-#         if not is_expert_sharded or exp_size == 1:
-#             suffix_name = (
-#                 f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}.safetensors"
-#             )
-#         else:
-#             # We only show exp_rank if tensor is exp_sharded and exp_size > 1
-#             suffix_name = f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}_exp-rank-{exp_rank}-of-{exp_size}.safetensors"
-
-#     else:
-#         suffix_name = f"{type.value}_{suffix_name}.safetensors"
-
-#     suffix_path.append(suffix_name)
-#     if prefix is None:
-#         return suffix_path
-#     else:
-#         return prefix.joinpath(*suffix_path)
-
 
 
 def get_path(
@@ -130,25 +80,12 @@ def get_path(
         else:
             return f"pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}_exp-rank-{ep_rank}-of-{ep_size}"
 
-
     suffix = tensor_name.split(".")
     suffix_path, suffix_name = suffix[:-1], suffix[-1]
 
     if checkpoint_parallel_ranks:
         # We always show pp_rank and tp_rank if `exp_tp_pp_rank_and_size` is provided
-        # (exp_rank, exp_size), (tp_rank, tp_size), (pp_rank, pp_size) = checkpoint_parallel_ranks
-
-        # if not is_expert_sharded or exp_size == 1:
-        #     suffix_name = (
-        #         f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}.safetensors"
-        #     )
-        # else:
-        #     # We only show exp_rank if tensor is exp_sharded and exp_size > 1
-        #     suffix_name = f"{type.value}_{suffix_name}_pp-rank-{pp_rank}-of-{pp_size}_tp-rank-{tp_rank}-of-{tp_size}_exp-rank-{exp_rank}-of-{exp_size}.safetensors"
-
-        suffix_name = (
-            f"{type.value}_{get_checkpoint_name_from_parallel_ranks(checkpoint_parallel_ranks, is_moe=is_expert_sharded)}.safetensors"
-        )
+        suffix_name = f"{type.value}_{suffix_name}_{get_checkpoint_name_from_parallel_ranks(checkpoint_parallel_ranks, is_moe=is_expert_sharded)}.safetensors"
     else:
         # NOTE: for params that aren't sharded, we don't need to add any parallel ranks
         suffix_name = f"{type.value}_{suffix_name}.safetensors"
@@ -162,18 +99,12 @@ def get_path(
 
 def extract_tp_pp_rank_from_shard_path(shard_path: Path):
     from nanotron.serialize.weights import CheckpointParallelRanks
+
     pattern = r"pp-rank-(\d+)-of-\d+_tp-rank-(\d+)-of-\d+"
     match = re.search(pattern, str(shard_path))
     pp_rank, tp_rank = match.groups()
     # return pp_rank, tp_rank
     return CheckpointParallelRanks(pp_rank=int(pp_rank), tp_rank=int(tp_rank))
-
-
-# def extract_parallel_ranks_from_sharded_path(shard_path: Path):
-#     pattern = r"pp-rank-(\d+)-of-\d+_tp-rank-(\d+)-of-\d+"
-#     match = re.search(pattern, str(shard_path))
-#     pp_rank, tp_rank = match.groups()
-#     return int(pp_rank), int(tp_rank)
 
 
 def merge_and_shard_tp_tensors(

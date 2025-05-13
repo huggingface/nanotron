@@ -537,8 +537,6 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
-        # torch.cuda.set_sync_debug_mode(1)
-
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
@@ -1298,8 +1296,11 @@ class DistributedTrainer:
             model=self.unwrapped_model,
             optimizer=self.optimizer,
             lr_scheduler=self.lr_scheduler,
+            # NOTE: we save a model weights if
+            # 1. the first replicas of dense
+            # 2. the first replicas of moe's experts
             should_save_model=bool(
-                dist.get_rank(self.parallel_context.dp_pg) == 0
+                dist.get_rank(self.parallel_context.dp_pg) == 0 or dist.get_rank(self.parallel_context.ep_dp_pg) == 0
             ),  # We only save the weights on DP==0
             should_save_optimizer=True,
             should_save_lr_scheduler=True,
