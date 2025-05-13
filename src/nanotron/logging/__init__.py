@@ -29,6 +29,7 @@ from nanotron.logging.base import (
 
 # Export timer functionality
 from nanotron.logging.timers import TimerRecord, Timers, nanotron_timer
+from nanotron.logging.logmixin import LogMixin, LoggingCollectorMixin
 
 __all__ = [
     "CRITICAL",
@@ -56,4 +57,6 @@ __all__ = [
     "TimerRecord",
     "Timers",
     "nanotron_timer",
+    "LogMixin",
+    "LoggingCollectorMixin",
 ]
