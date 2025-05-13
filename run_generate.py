@@ -12,6 +12,7 @@ export CUDA_VISIBLE_DEVICES=2,3
 torchrun --rdzv_endpoint=127.0.0.1:12356 --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000 --use-cache
 export CUDA_VISIBLE_DEVICES=4,5
 torchrun --rdzv_endpoint=127.0.0.1:12355 --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000 --max-micro-batch-size 2 --use-decode-tokenized
+torchrun --rdzv_endpoint=127.0.0.1:12355 --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000 --use-decode-tokenized
 ```
 """
 
@@ -235,6 +236,7 @@ def main():
             padding=True,
             truncation=True,
             return_tensors="pt",
+            add_special_tokens=False, # TODO: this is important to avoid adding bos token to the input
         )
         input_ids = tokenized_inputs["input_ids"].to(device="cuda")
         attention_mask = tokenized_inputs["attention_mask"].to(device="cuda")
@@ -248,6 +250,7 @@ def main():
             max_micro_batch_size=args.max_micro_batch_size,
             max_new_tokens=args.max_new_tokens,
             returns_logits=False,
+            bos_token_id=tokenizer.bos_token_id,
         )
         for output in outputs:
             input_ids = output.input_ids
