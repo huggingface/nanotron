@@ -379,10 +379,10 @@ class TopKRouter(nn.Module):
         # Apply Z-Loss
         logits = self.apply_z_loss(logits)
 
-        if self.tp_size > 1 and self.config.moe_config.moe_token_dispatcher_type == "alltoall":
-            # Gather the logits from the TP region
-            raise NotImplementedError("fix TP in router")
-            logits = gather_from_sequence_parallel_region(logits)
+        # if self.tp_size > 1 and self.config.moe_config.moe_token_dispatcher_type == "alltoall":
+        #     # Gather the logits from the TP region
+        #     raise NotImplementedError("fix TP in router")
+        #     logits = gather_from_sequence_parallel_region(logits)
 
         if self.routing_type == "sinkhorn":
             scores, indices = self.sinkhorn_load_balancing(logits)
