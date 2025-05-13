@@ -11,7 +11,7 @@ torchrun --rdzv_endpoint=127.0.0.1:12357 --nproc_per_node=2 run_generate.py --ck
 export CUDA_VISIBLE_DEVICES=2,3
 torchrun --rdzv_endpoint=127.0.0.1:12356 --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000 --use-cache
 export CUDA_VISIBLE_DEVICES=4,5
-torchrun --rdzv_endpoint=127.0.0.1:12355 --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000 --max-micro-batch-size 2
+torchrun --rdzv_endpoint=127.0.0.1:12355 --nproc_per_node=2 run_generate.py --ckpt-path /scratch/1044000 --max-micro-batch-size 2 --use-decode-tokenized
 ```
 """
 
@@ -52,10 +52,7 @@ from nanotron.random import (
 from nanotron.serialize import load_weights
 from nanotron.trainer import CONFIG_TO_MODEL_CLASS, mark_tied_parameters
 
-try:
-    from transformers import AutoTokenizer
-except ImportError:
-    AutoTokenizer = None
+from transformers import AutoTokenizer
 
 # import lovely_tensors as lt
 
@@ -75,6 +72,7 @@ def get_args():
     parser.add_argument(
         "--max-micro-batch-size", type=int, default=1, help="Maximum number of micro batches to generate"
     )
+    parser.add_argument("--use-decode-tokenized", action="store_true", help="Use decode_tokenized to generate text")
     return parser.parse_args()
 
 
@@ -82,6 +80,17 @@ def main():
     args = get_args()
 
     assert args.ckpt_path.exists(), f"Checkpoint path {args.ckpt_path} does not exist"
+
+    dummy_inputs = [
+        # "The future of AI is",
+        # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
+        "def fib(n)",
+        # 'Here is an extract from a webpage: "Have you ever experienced heel pain after a heavy physical activity, or even right after a long period of standing? If you regard this as something usual and normal, then think again. Miscalled as heel pain, plantar fasciitis causes these frequent mild pains experienced in the soles of the feet. It is the inflammation and enlargement the plantar fascia tissue that is located in the heels of the feet, stretching to the base of the toes. This tissue is responsible for absorbing shock in the feet and for supporting the arches. It also plays a vital role in foot movements during walking and standing. Many factors such as excessive walking, standing, and running trigger heel pain and plantar fasciitis. A sudden increase in intensity of activities, increase in weight, and abrupt change of footwear also cause the swelling of the ligament. Non-supportive footwear lacking arch cushions and improper and worn out running or training can also lead to the problem. It is also most evident among those". Write an extensive and detailed course unit suitable for a textbook targeted at college students, related to the given extract, within the context of "Medicine". Do not just list concepts, but develop each one in detail before moving to the next, as we prioritize depth of understanding and comprehensive exploration of the subject matter over breadth. Focus on: - Rigor: Ensure in-depth coverage of the concepts/sections. - Engagement: Write with an academic, professional and engaging tone that captivates interest. - Application: Incorporate specific, practical examples, such as proofs in calculus or critical dates and figures in history. Do not include a title or an introduction, simply write the content without headlines and introductory phrases. Do not use images.',
+        # "Advancements in technology will lead to",
+        # "Tomorrow's world is shaped by",
+        # "What is the meaning of the word chutzpah?\nThe word chutzpah means",
+    ]
+
 
     config = get_config_from_file((args.ckpt_path / "config.yaml").as_posix())
     model_config = config.model.model_config
@@ -164,30 +173,22 @@ def main():
     load_weights(model=model, parallel_context=parallel_context, root_folder=checkpoint_path)
 
     model.eval()
-    if AutoTokenizer is not None:
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-        # tokenizer.pad_token_id = tokenizer.eos_token_id
-        if tokenizer.pad_token_id is None:
-            if tokenizer.eos_token_id is not None:
-                tokenizer.pad_token_id = tokenizer.eos_token_id
-            elif getattr(model.config, "pad_token_id", None) is not None:
-                tokenizer.pad_token_id = int(model.config.pad_token_id)
-            elif getattr(model.config, "eos_token_id", None) is not None:
-                tokenizer.pad_token_id = int(model.config.eos_token_id)
-            else:
-                tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        tokenizer.padding_side = "left"
-        tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
-        dummy_inputs = [
-            # "The future of AI is",
-            # "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
-            "def fib(n)",
-            # 'Here is an extract from a webpage: "Have you ever experienced heel pain after a heavy physical activity, or even right after a long period of standing? If you regard this as something usual and normal, then think again. Miscalled as heel pain, plantar fasciitis causes these frequent mild pains experienced in the soles of the feet. It is the inflammation and enlargement the plantar fascia tissue that is located in the heels of the feet, stretching to the base of the toes. This tissue is responsible for absorbing shock in the feet and for supporting the arches. It also plays a vital role in foot movements during walking and standing. Many factors such as excessive walking, standing, and running trigger heel pain and plantar fasciitis. A sudden increase in intensity of activities, increase in weight, and abrupt change of footwear also cause the swelling of the ligament. Non-supportive footwear lacking arch cushions and improper and worn out running or training can also lead to the problem. It is also most evident among those". Write an extensive and detailed course unit suitable for a textbook targeted at college students, related to the given extract, within the context of "Medicine". Do not just list concepts, but develop each one in detail before moving to the next, as we prioritize depth of understanding and comprehensive exploration of the subject matter over breadth. Focus on: - Rigor: Ensure in-depth coverage of the concepts/sections. - Engagement: Write with an academic, professional and engaging tone that captivates interest. - Application: Incorporate specific, practical examples, such as proofs in calculus or critical dates and figures in history. Do not include a title or an introduction, simply write the content without headlines and introductory phrases. Do not use images.',
-            # "Advancements in technology will lead to",
-            # "Tomorrow's world is shaped by",
-            # "What is the meaning of the word chutzpah?\nThe word chutzpah means",
-        ]
 
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    # tokenizer.pad_token_id = tokenizer.eos_token_id
+    if tokenizer.pad_token_id is None:
+        if tokenizer.eos_token_id is not None:
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+        elif getattr(model.config, "pad_token_id", None) is not None:
+            tokenizer.pad_token_id = int(model.config.pad_token_id)
+        elif getattr(model.config, "eos_token_id", None) is not None:
+            tokenizer.pad_token_id = int(model.config.eos_token_id)
+        else:
+            tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    tokenizer.padding_side = "left"
+    tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
+
+    if not args.use_decode_tokenized:    
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
             tokenizer=tokenizer,
@@ -228,14 +229,24 @@ def main():
                 rank=0,
             )
     else:
+        # Tokenize dummy inputs
+        tokenized_inputs = tokenizer(
+            dummy_inputs,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+        )
+        input_ids = tokenized_inputs["input_ids"].to(device="cuda")
+        attention_mask = tokenized_inputs["attention_mask"].to(device="cuda")
+
         outputs = decode_tokenized(
-            input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
-            input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
+            input_ids=input_ids,
+            input_mask=attention_mask,
             model=model.model,
             parallel_context=parallel_context,
             generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
-            max_micro_batch_size=1,
-            max_new_tokens=12,
+            max_micro_batch_size=args.max_micro_batch_size,
+            max_new_tokens=args.max_new_tokens,
             returns_logits=False,
         )
         for output in outputs:
@@ -245,8 +256,16 @@ def main():
                 assert isinstance(generated_ids, TensorPointer)
                 continue
             assert isinstance(generated_ids, torch.Tensor)
+            
             log_rank(
-                f"generation: {generated_ids[len(input_ids) :]}",
+                f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+
+            log_rank(
+                f"generation: {tokenizer.decode(generated_ids[len(input_ids):], clean_up_tokenization_spaces=False)}",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,

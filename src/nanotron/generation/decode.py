@@ -557,7 +557,6 @@ def decode_tokenized(
     generation_config: GenerationArgs,
     max_micro_batch_size: int,
     max_new_tokens: int,
-    tokenizer: "PreTrainedTokenizer",
     returns_logits: Optional[bool] = False,
 ) -> Generator[GenerationOutput, None, None]:
     """We assume the following:
@@ -631,7 +630,7 @@ def decode_tokenized(
                     new_decoder_states.append(state)
                     # Get the new logits
                     with attach_store(model=model, store=state.store):
-                        position_ids = get_position_ids(state.new_input_ids, tokenizer)
+                        position_ids = None
                         sharded_logits = model(
                             input_ids=state.new_input_ids,
                             position_ids=position_ids,  # [batch_size, seq_len]
