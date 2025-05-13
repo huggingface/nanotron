@@ -13,6 +13,7 @@ from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.moe_utils import gather_to_tensor_group, scatter_to_tensor_group
 from nanotron.parallel.context import ParallelContext
+from nanotron.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 
 logger = logging.get_logger(__name__)
@@ -504,6 +505,18 @@ class TEGroupedLinear(te.pytorch.GroupedLinear):
                 param, "allreduce", not (is_expert and self.expert_parallel)
             )  # TODO: does this work with TE or megatron?
 
+        # self._te_state_cleanup()
+
+    # def _te_state_cleanup(self):
+    #     """
+    #     Remove uncessary TE states.
+    #     """
+
+    #     # remove extra_state because it seems to be related to FP8 training
+    #     # https://github.com/NVIDIA/Megatron-LM/blob/460e9611ba7fe07dbfb40219515c91572f622db9/megatron/core/extensions/transformer_engine.py#L1068-L1107
+    #     # and it keeps it, it fails
+    #     pass
+
     def forward(self, x, m_splits):
         """Forward."""
         _is_first_microbatch = None if self.disable_parameter_transpose_cache else self.is_first_microbatch
@@ -573,6 +586,12 @@ class TEGroupedMLP(nn.Module):
         )
 
         self.act = ACT2FN[config.hidden_act]
+
+        mark_all_parameters_in_module_as_sharded(
+            self,
+            pg=parallel_context.ep_pg,
+            split_config=SplitConfig(split_dim=0),
+        )
 
     def forward(
         self, permuted_local_hidden_states: torch.Tensor, tokens_per_expert: torch.Tensor

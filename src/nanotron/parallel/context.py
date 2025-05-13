@@ -97,7 +97,6 @@ class ParallelContext:
         self._group_to_ranks = {}
 
         self._init_process_group()
-        self.parallel_order = ["dp", "pp", "cp", "tp"]
 
     def _init_process_group(self):
         """
@@ -176,6 +175,7 @@ class ParallelContext:
             ParallelMode.PP: pp_ranks,
             ParallelMode.DP: dp_ranks,
         }
+        self.parallel_order = ["dp", "pp", "cp", "tp"]
 
         if self.enabled_moe is True:
 
@@ -227,6 +227,7 @@ class ParallelContext:
             _group_to_ranks[ParallelMode.EP_TP] = ep_tp_ranks
             _group_to_ranks[ParallelMode.EP_PP] = ep_pp_ranks
             _group_to_ranks[ParallelMode.EP_DP] = ep_dp_ranks
+            self.parallel_ep_order = ["ep_dp", "ep_pp", "ep", "ep_tp"]
 
         self._group_to_ranks = _group_to_ranks
         self.world_rank_matrix = attn_ranks
@@ -261,8 +262,16 @@ class ParallelContext:
 
     def get_local_ranks(self, world_rank: int) -> Dict[str, int]:
         # return tuple(i.item() for i in np.where(self.world_rank_matrix == world_rank))
+        # NOTE: return ep ranks
         local_ranks = np.where(self.world_rank_matrix == world_rank)
-        return {ax: local_ranks[i].item() for i, ax in enumerate(self.parallel_order)}
+        mappings = {ax: local_ranks[i].item() for i, ax in enumerate(self.parallel_order)}
+        if self.enabled_moe is True:
+            mappings["ep"] = dist.get_rank(self.ep_pg)
+            mappings["ep_dp"] = dist.get_rank(self.ep_dp_pg)
+            mappings["ep_pp"] = dist.get_rank(self.ep_pp_pg)
+            mappings["ep_tp"] = dist.get_rank(self.ep_tp_pg)
+
+        return mappings
 
     def destroy(self):
         if not dist.is_initialized():
