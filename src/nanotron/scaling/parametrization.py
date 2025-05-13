@@ -62,6 +62,26 @@ class StandardParametrizator(Parametrizator):
             init.normal_(module.weight, mean=0.0, std=self.std)
         elif "bias" == param_name:
             module.bias.zero_()
+    
+    def _parametrize_grouped_mlp(self, param_name: str, module: nn.Module):
+        for n, p in module.named_parameters():
+            if n == "merged_gate_up_proj":
+                # NOTE: the same as parametrization of column linear
+                init.normal_(p, mean=0.0, std=self.std)
+            elif n == "merged_down_proj":
+                # NOTE: the same as parametrization of row linear
+                scaling = self._compute_scaling_factor()
+                adjusted_std = self.std / scaling
+                # TODO @nouamane: should we use trunc_normal_
+                init.normal_(p, mean=0.0, std=adjusted_std)
+            else:
+                raise ValueError(f"Unknown parameter {n}")
+
+    def _parametrize_router(self, param_name: str, module: nn.Module):
+        if "weight" == param_name:
+            init.normal_(module.weight, mean=0.0, std=self.std)
+        elif "bias" == param_name:
+            module.bias.zero_()
 
     def _compute_scaling_factor(self) -> float:
         """Compute initialization scaling based on selected method"""

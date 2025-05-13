@@ -149,9 +149,9 @@ class Qwen2Config:
     no_rope_layer: Optional[
         int
     ] = None  # Skip rope every no_rope_layer layers (see https://arxiv.org/abs/2501.18795 https://arxiv.org/abs/2305.19466 and Llama4)
-    _fused_rotary_emb: bool = False
-    _fused_rms_norm: bool = False
-    _use_qkv_packed: bool = False
+    _fused_rotary_emb: bool = True
+    _fused_rms_norm: bool = True
+    _use_qkv_packed: bool = True
     _use_doc_masking: bool = False
 
     # MoE configuration

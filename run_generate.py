@@ -229,14 +229,14 @@ def main():
             )
     else:
         outputs = decode_tokenized(
-            input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
-            input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
+            input_ids=torch.zeros(16, 3636).to(dtype=torch.int64, device="cuda"),
+            input_mask=torch.ones(16, 3636).to(dtype=torch.bool, device="cuda"),
             model=model.model,
             parallel_context=parallel_context,
             generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
-            max_micro_batch_size=1,
+            max_micro_batch_size=16,
             max_new_tokens=12,
-            returns_logits=False,
+            returns_logits=True,
         )
         for output in outputs:
             input_ids = output.input_ids
