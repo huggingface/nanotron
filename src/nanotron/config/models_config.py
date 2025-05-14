@@ -197,10 +197,6 @@ class Qwen2Config:
                 self.num_hidden_layers % self.no_rope_layer == 0
             ), "no_rope_layer must be a multiple of num_hidden_layers"
 
-        # rope_seq_len_interpolation_factor = seqlen / 4096
-        if self.max_position_embeddings > 4096:
-            assert self.rope_seq_len_interpolation_factor == self.max_position_embeddings / 4096, f"rope_seq_len_interpolation_factor must be equal to max_position_embeddings / 4096 = {self.max_position_embeddings / 4096}"
-    
         if self._attn_implementation == "llama3_ring_attention":
             assert self.ring_attn_heads_k_stride is not None, "ring_attn_heads_k_stride must be specified for llama3 ring attention"
         else:
