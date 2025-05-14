@@ -83,7 +83,7 @@ def llama3_flash_attn_varlen_forward(
 
     nheads = q.shape[1]
     total_k, nheads_k, head_dim = k.shape
-    assert nheads_k % heads_k_stride == 0
+    assert nheads_k % heads_k_stride == 0, f"nheads_k={nheads_k} must be divisible by heads_k_stride={heads_k_stride}"
 
     world_size = dist.get_world_size(process_group)
     kv_buffer = torch.empty(
