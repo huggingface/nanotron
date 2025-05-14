@@ -275,7 +275,7 @@ class Qwen2Attention(LogMixin, nn.Module):
             )  # TODO: should we use position_ids here? flash_attn doesn't
         else:
             log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
-            # self.sliding_window_size = None # WARNING: we skip sliding window for no-rope
+            self.sliding_window_size = None # WARNING: we skip sliding window for no-rope
 
         q = q.view(-1, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
