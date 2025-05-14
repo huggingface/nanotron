@@ -30,6 +30,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
+from nanotron.logging import LogMixin
 
 logger = logging.get_logger(__name__)
 
@@ -132,8 +133,7 @@ class CoreAttention(nn.Module):
             -1, self.local_num_heads * self.head_dim
         )  # [b*s, num_heads, head_dim] -> [b*s, num_heads*head_dim]
 
-
-class Qwen2Attention(nn.Module):
+class Qwen2Attention(LogMixin, nn.Module):
     def __init__(
         self,
         config: Qwen2Config,
@@ -213,6 +213,7 @@ class Qwen2Attention(nn.Module):
         self.simple_causal_mask = True
         self._use_qkv_packed = config._use_qkv_packed
         self.sliding_window_size = config.sliding_window_size
+        self.log_attn_probs = config.log_attn_probs
         # TODO: support SFT
 
     def forward(
@@ -293,7 +294,12 @@ class Qwen2Attention(nn.Module):
             alibi_slopes=None,
             window_size=(self.sliding_window_size - 1, 0) if self.sliding_window_size is not None else (-1, -1),
             deterministic=False,
+            return_attn_probs=self.log_attn_probs,
         )  # Not contiguous, similar to flash_attn
+        if self.log_attn_probs:
+            attn_output, attn_probs, _ = attn_output
+            # log attn_probs
+            self.tbi_logger({"attn_probs": attn_probs})
         # flash_attn use rearrange instead of reshape https://github.com/Dao-AILab/flash-attention/blob/1a58058a6da83bd7baaf4c512e8a1abe0240bb77/flash_attn/modules/mha.py#L730
         return attn_output.reshape(-1, self.local_num_heads * self.head_dim)  # [b*s, num_heads*head_dim]
 
@@ -831,8 +837,8 @@ class LossWithZLoss(Loss):
         z_loss = masked_mean(z_loss.detach(), label_mask, dtype=torch.float)
         return {"loss": loss, "z_loss": z_loss}
 
-
-class Qwen2ForTraining(NanotronModel):
+from nanotron.logging import LoggingCollectorMixin
+class Qwen2ForTraining(NanotronModel, LoggingCollectorMixin):
     def __init__(
         self,
         config: Qwen2Config,

@@ -12,7 +12,7 @@ from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.pipeline_parallel.block import PipelineBlock
-
+from nanotron.logging import LoggingCollectorMixin
 if TYPE_CHECKING:
     from nanotron.config import NanotronConfigs
     from nanotron.parallel.parameters import NanotronParameter
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
-class NanotronModel(nn.Module, metaclass=ABCMeta):
+class NanotronModel(nn.Module, LoggingCollectorMixin, metaclass=ABCMeta):
     """Abstract class for Nanotron models
     We make the following assumptions:
     - When building PP blocks, we assume that the modules order are in the same order as the forward pass."""

@@ -152,6 +152,8 @@ class Qwen2Config:
     _use_qkv_packed: bool = False
     _use_doc_masking: bool = False
 
+    log_attn_probs: bool = True # Whether to log the attention probabilities
+
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
 

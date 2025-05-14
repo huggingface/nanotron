@@ -420,7 +420,7 @@ class DistributedTrainer:
                 )
 
     def post_train_step(self):
-
+        self.unwrapped_model.clear_all_tbi_logs()
         # Update our background upload/removal of checkpoints
         if self.s3_mover is not None:
             self.s3_mover.update()
@@ -565,7 +565,7 @@ class DistributedTrainer:
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
 
                 # Training step
-                outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
+                outputs, loss_avg, z_loss_avg, tbi_logs = self.training_step(dataloader=self.current_dataloader)
 
                 # Update consumption tracking for current batch
                 if hasattr(self.current_base_dl, "dataset") and hasattr(self.current_base_dl.dataset, "update_consumption_metrics"):
@@ -594,7 +594,7 @@ class DistributedTrainer:
                 assert self.metadata.current_stage.sequence_length == self.sequence_length, "Sequence length mismatch between the current stage and the global sequence length"
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
-                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg)
+                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg, tbi_logs=tbi_logs)
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -713,6 +713,9 @@ class DistributedTrainer:
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.optimizer
         )
 
+        # get_tbi_logs in a non-blocking way since we don't need to wait for it
+        tbi_logs = self.unwrapped_model.get_tbi_logs(non_blocking=True)
+
         # Apply gradient
         nanotron_timer("optimizer_step", "cuda").start()
         self.optimizer.step()
@@ -729,7 +732,7 @@ class DistributedTrainer:
 
         self.post_train_step()
 
-        return outputs, loss_avg, z_loss_avg
+        return outputs, loss_avg, z_loss_avg, tbi_logs
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         outputs = self.pipeline_engine.validate_batch_iter(
@@ -744,6 +747,7 @@ class DistributedTrainer:
         outputs: Iterable[Dict[str, Union[torch.Tensor, TensorPointer]]],
         loss_avg: Optional[torch.Tensor],
         z_loss_avg: Optional[torch.Tensor],
+        tbi_logs: Optional[Dict[str, torch.Tensor]],
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
@@ -861,6 +865,20 @@ class DistributedTrainer:
         if dist.get_rank(self.parallel_context.world_pg) in self.logger_ranks:
             assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
             self.loggerwriter.add_scalars_from_list(basic_log_entries, self.iteration_step)
+
+        if tbi_logs is not None:
+            for name, tensor in tbi_logs.items():
+                # attn_probs is [num_local_heads, mbs * seq_len]
+                basic_log_entries.append(LogItem(f"tbi_logs/{name}_mean", tensor.mean().item(), "human_format"))
+                basic_log_entries.append(LogItem(f"tbi_logs/{name}_std", tensor.std().item(), "human_format"))
+                basic_log_entries.append(LogItem(f"tbi_logs/{name}_max", tensor.max().item(), "human_format"))
+                basic_log_entries.append(LogItem(f"tbi_logs/{name}_min", tensor.min().item(), "human_format"))
+                # per head logs
+                for head_idx in range(tensor.shape[0]):
+                    basic_log_entries.append(LogItem(f"tbi_logs/{name}/head_{head_idx}_mean", tensor[head_idx].mean().item(), "human_format"))
+                    basic_log_entries.append(LogItem(f"tbi_logs/{name}/head_{head_idx}_std", tensor[head_idx].std().item(), "human_format"))
+                    basic_log_entries.append(LogItem(f"tbi_logs/{name}/head_{head_idx}_max", tensor[head_idx].max().item(), "human_format"))
+                    basic_log_entries.append(LogItem(f"tbi_logs/{name}/head_{head_idx}_min", tensor[head_idx].min().item(), "human_format"))
 
         if os.environ.get("DEBUG_CPU", "0") == "1":
             basic_log_entries.extend(get_cpu_logitems())
