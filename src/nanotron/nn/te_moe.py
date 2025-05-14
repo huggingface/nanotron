@@ -11,9 +11,10 @@ from nanotron.config import ParallelismArgs
 from nanotron.config.models_config import Qwen2Config
 from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
-from nanotron.nn.moe_utils import gather_to_tensor_group, scatter_to_tensor_group
+from nanotron.nn.moe_utils import scatter_to_tensor_group
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
+from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import differentiable_all_gather
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
 
 logger = logging.get_logger(__name__)
@@ -43,16 +44,18 @@ class MoELogging:
     num_local_tokens: List[torch.Tensor]
 
 
-# def gather_tensor_along_dim(tensor, dim, group):
-#     list_tensor = [torch.empty_like(tensor) for _ in range(group.size())]
-#     dist.all_gather(list_tensor, tensor, group=group)
-#     return torch.cat(list_tensor, dim=dim)
+def fake_gather_to_tensor_group(tensor, dim, group):
+    """Fake gather that returns random data with correct shape for performance testing"""
+    # Calculate expected size after all_gather
+    gather_size = list(tensor.size())
+    gather_size[dim] *= group.size()
 
+    # Create uninitialized tensor with same device/dtype as input
+    fake_tensor = torch.empty(gather_size, dtype=tensor.dtype, device=tensor.device)
 
-# def scatter_tensor_along_dim(tensor, dim, group):
-#     list_tensor = torch.chunk(tensor, group.size(), dim=dim)
-#     rank = dist.get_rank(group)
-#     return list_tensor[rank]
+    # Fill with random values (mimic real data but no communication)
+    # fake_tensor.normal_()
+    return fake_tensor
 
 
 class Qwen2MoEMLPLayer(nn.Module):
@@ -606,6 +609,7 @@ class TEGroupedMLP(nn.Module):
         Return:
             output (torch.Tensor): The output of the local experts.
         """
+        # NOTE: transformer engine requires this to be a list
         tokens_per_expert = tokens_per_expert.tolist()
 
         intermediate_parallel, bias_parallel = self.linear_fc1(permuted_local_hidden_states, tokens_per_expert)
@@ -697,13 +701,13 @@ class MoEAllGatherTokenDispatcher(nn.Module):
             with torch.no_grad():
                 # [num_local_tokens, num_experts] -> [num_global_tokens, num_experts], where:
                 #     num_local_tokens=(S/TP)*B, num_global_tokens=S*B*EP
-                # routing_map = gather_tensor_along_dim(routing_map, dim=0, group=self.ep_pg)
-                routing_map = gather_to_tensor_group(routing_map, dim=0, group=self.ep_pg)
+                routing_map = differentiable_all_gather(routing_map, group=self.ep_pg)
+                # routing_map = fake_gather_to_tensor_group(routing_map, dim=0, group=self.ep_pg)
 
             ## local_probs calculation
             # max_prob: [S/TP*B, num_experts] -> global_probs: [S*B*EP, num_experts]
-            # probs = gather_tensor_along_dim(probs, dim=0, group=self.ep_pg)
-            probs = gather_to_tensor_group(probs, dim=0, group=self.ep_pg)
+            probs = differentiable_all_gather(probs, group=self.ep_pg)
+            # probs = fake_gather_to_tensor_group(probs, dim=0, group=self.ep_pg)
 
             # Note that this allgather spans the communication domain of TP*EP.
             #  [(S/TP)*B, H] -> [((S/TP)*B)*(TP*EP), H] = [S*B*EP, H]
@@ -713,9 +717,8 @@ class MoEAllGatherTokenDispatcher(nn.Module):
             # hidden_states = gather_from_sequence_parallel_region(
             #     hidden_states, group=self.ep_pg, use_global_buffer=True
             # )
-
-            # hidden_states = gather_tensor_along_dim(hidden_states, dim=0, group=self.ep_pg)
-            hidden_states = gather_to_tensor_group(hidden_states, dim=0, group=self.ep_pg)
+            hidden_states = differentiable_all_gather(hidden_states, group=self.ep_pg)
+            # hidden_states = fake_gather_to_tensor_group(hidden_states, dim=0, group=self.ep_pg)
 
         self.hidden_shape_before_permute = hidden_states.shape
 
@@ -724,7 +727,8 @@ class MoEAllGatherTokenDispatcher(nn.Module):
         # probs of global token assignment to local experts.
         self.local_probs = probs[:, self.local_expert_indices[0] : self.local_expert_indices[-1] + 1].contiguous()
 
-        tokens_per_expert = self.local_map.sum(dim=0).long().cpu()
+        # tokens_per_expert = self.local_map.sum(dim=0).long().cpu()
+        tokens_per_expert = self.local_map.sum(dim=0).long()
         (permuted_local_hidden_states, self.reversed_local_input_permutation_mapping) = permute(
             hidden_states,
             self.local_map,
