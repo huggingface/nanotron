@@ -148,6 +148,7 @@ class Qwen2Attention(LogMixin, nn.Module):
         self.hidden_size = config.hidden_size
         self.tp_pg_size = tp_pg.size()
         self.cp_pg_size = cp_pg.size()
+        self.cp_pg = cp_pg
 
         # Head configuration
         self.num_heads = config.num_attention_heads
@@ -270,9 +271,10 @@ class Qwen2Attention(LogMixin, nn.Module):
         q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
         if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+            seqlen_offset = dist.get_rank(self.cp_pg) * seq_length
             q, kv = self.rotary_emb(
-                q, kv, seqlen_offset=0, max_seqlen=None
-            )  # TODO: should we use position_ids here? flash_attn doesn't
+                q, kv, seqlen_offset=seqlen_offset, max_seqlen=seq_length*self.cp_pg_size
+            )
         else:
             log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
             self.sliding_window_size = None # WARNING: we skip sliding window for no-rope
@@ -299,6 +301,7 @@ class Qwen2Attention(LogMixin, nn.Module):
                 window_size=(self.sliding_window_size - 1, 0) if self.sliding_window_size is not None else (-1, -1),
                 deterministic=False,
                 return_attn_probs=self.log_attn_probs,
+                group=self.cp_pg,
             )  # Not contiguous, similar to flash_attn
         else:
             assert cu_seqlens.dtype == torch.int32
@@ -319,7 +322,7 @@ class Qwen2Attention(LogMixin, nn.Module):
                 deterministic=False,
                 return_attn_probs=self.log_attn_probs,
             )  # Not contiguous, similar to flash_attn
-            
+
         if self.log_attn_probs:
             attn_output, attn_probs, _ = attn_output
             # log attn_probs
