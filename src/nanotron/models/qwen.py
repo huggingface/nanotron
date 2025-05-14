@@ -31,8 +31,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.logging import LogMixin
-from nanotron.nn.llama3_ring_attention import llama3_flash_attn_varlen_kvpacked_func
-
+from nanotron.nn.llama3_ring_attention import llama3_flash_attn_varlen_kvpacked_func, llama3_flash_attn_prepare_cu_seqlens
 logger = logging.get_logger(__name__)
 
 
@@ -276,6 +275,8 @@ class Qwen2Attention(LogMixin, nn.Module):
             )  # TODO: should we use position_ids here? flash_attn doesn't
         else:
             log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
+            # self.sliding_window_size = None # WARNING: we skip sliding window for no-rope
+
         q = q.view(-1, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
         max_seqlen = seq_length  # TODO: should this be max position_ids?
@@ -451,7 +452,7 @@ class Qwen2MoELayer(nn.Module):
         )
 
         # Whether to recompute MoE layer during backward pass for memory efficiency
-        self.recompute_layer = getattr(parallel_config, "recompute_layer", False)
+        self.recompute_layer = parallel_config.recompute_layer
 
         # Token dispatcher type - determines communication pattern
         self.token_dispatcher_type = getattr(config.moe_config, "token_dispatcher_type", "alltoall")
@@ -764,7 +765,6 @@ class Qwen2Model(nn.Module):
 
             # llama3 ring attention
             if self.config._attn_implementation == "llama3_ring_attention":
-                from nanotron.nn.llama3_ring_attention import llama3_flash_attn_prepare_cu_seqlens
                 local_sequence_length = input_ids.shape[1]
                 sequence_length = position_ids.shape[1]
                 assert sequence_length == local_sequence_length * self.parallel_context.cp_pg.size(), f"sequence_length={sequence_length} must be equal to local_sequence_length={local_sequence_length} * cp_pg.size()={self.parallel_context.cp_pg.size()}"
