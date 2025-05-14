@@ -124,8 +124,10 @@ class Router(nn.Module):
             tokens_per_expert = torch.bincount(routing_map.flatten(), minlength=self.num_experts)
         else:
             tokens_per_expert = routing_map.sum(dim=0)
+        assert topk_version is False, "aux loss is not supported for topk version"
+        scores = torch.softmax(logits, dim=-1, dtype=torch.float32)
         aux_loss = switch_aux_loss(
-            probs, tokens_per_expert, self.aux_loss_coeff, self.num_experts_per_token, self.sequence_partition_group
+            scores, tokens_per_expert, self.aux_loss_coeff, self.num_experts_per_token, self.sequence_partition_group
         )
         probs = MoEAuxLossAutoScaler.apply(probs, aux_loss)
 

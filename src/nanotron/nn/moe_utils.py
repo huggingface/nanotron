@@ -23,7 +23,6 @@ def save_token_per_expert(
         moe_token_distribution_tracker["token_per_expert"][layer_number] = torch.zeros(
             num_experts, device=routing_indices.device
         )
-        moe_token_distribution_tracker["total_tokens"] = torch.zeros(num_layers, device=routing_indices.device)
 
     num_tokens_per_expert = torch.bincount(routing_indices.flatten(), minlength=num_experts)
     for expert_idx in range(num_experts):
@@ -31,21 +30,17 @@ def save_token_per_expert(
             expert_idx
         ]
 
-    total_tokens = routing_indices.numel()
-    moe_token_distribution_tracker["total_tokens"][layer_number] += total_tokens
-
 
 def log_token_distribution_per_layer(name: str, iteration: int, wandb_writer):
     token_data = moe_token_distribution_tracker["token_per_expert"]
-    total_tokens = moe_token_distribution_tracker["total_tokens"]
+    total_tokens = moe_token_distribution_tracker["token_per_expert"][0].sum()
 
     for layer, expert_counts in token_data.items():
-        total = total_tokens[layer]
-        if total == 0:
+        if total_tokens == 0:
             raise ValueError(f"Total tokens for layer {layer} is 0")
 
         # Fraction of tokens per expert
-        fractions = (expert_counts / total).tolist()
+        fractions = (expert_counts / total_tokens).tolist()
         num_experts = len(fractions)
 
         # Store the current iteration's fractions

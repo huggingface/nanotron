@@ -124,9 +124,6 @@ class MoEAuxLossAutoScaler(torch.autograd.Function):
             Tuple[torch.Tensor, torch.Tensor]: The gradient of the output, scaled auxiliary loss
                                                gradient.
         """
-        import debugpy
-
-        debugpy.breakpoint()
         (aux_loss,) = ctx.saved_tensors
         if MoEAuxLossAutoScaler.main_loss_backward_scale is None:
             MoEAuxLossAutoScaler.main_loss_backward_scale = torch.tensor(1.0, device=aux_loss.device)

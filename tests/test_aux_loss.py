@@ -22,29 +22,45 @@ def test_switch_aux_loss_basic():
 def test_switch_aux_loss():
     num_tokens = 4
     num_experts = 6
-    top_k = 2
+    top_k = 3
     hidden_size = 8
     router = _create_router(num_experts, top_k, hidden_size)
 
-    logits = torch.ones(num_tokens, num_experts, device="cuda") / num_experts
+    logits = torch.randn(num_tokens, num_experts, device="cuda")
 
-    # copy logics from  apply_aux_loss
+    # copy logics from apply_aux_loss
     # need to pay attention to the top k
-    probs, routing_indices = router.top_k_softmax(logits)
-    num_tokens_per_expert = routing_indices.sum(dim=0)
+    _, routing_indices = router.top_k_softmax(logits)
+    tokens_per_expert = routing_indices.sum(dim=0)
     total_tokens = num_tokens * top_k
+    scores = torch.softmax(logits, dim=-1, dtype=torch.float32)
 
-    assert probs.shape == (num_tokens, num_experts)
+    # not use the top k version
+    assert scores.shape == (num_tokens, num_experts)
     assert routing_indices.shape == (num_tokens, num_experts)
-    assert num_tokens_per_expert.shape == (num_experts,)
-    assert num_tokens_per_expert.sum() == total_tokens
+    assert tokens_per_expert.shape == (num_experts,)
+    assert tokens_per_expert.sum() == total_tokens
 
-    aux_loss_coeff = 0.1
+    # copy logics aux loss
+    total_num_tokens = scores.shape[0]
+    experts_num = scores.shape[1]
+    assert total_num_tokens == num_tokens
+    assert experts_num == num_experts
+    assert scores.dtype == torch.float32
+    assert torch.allclose(scores.sum(dim=1), torch.ones(num_tokens, device=scores.device))
 
-    print(probs.shape, num_tokens_per_expert.shape)
+    aggregated_probs_per_expert = scores.sum(dim=0)
+    assert aggregated_probs_per_expert.shape == (num_experts,)
 
-    loss = switch_aux_loss(probs, num_tokens_per_expert, aux_loss_coeff, top_k)
-    print(loss)
+    aux_loss_coeff = 1
+    aux_loss = (
+        aux_loss_coeff
+        * num_experts
+        * torch.sum(aggregated_probs_per_expert * tokens_per_expert)
+        / (total_num_tokens**2 * top_k)
+    )
+    assert aux_loss.shape == ()
+    assert aux_loss.item() >= 1.0
 
 
 def _create_router(num_experts, top_k, hidden_size):
@@ -98,7 +114,7 @@ def test_router():
     hidden_size = 8
     router = _create_router(num_experts, top_k, hidden_size)
 
-    x = torch.ones(num_tokens, hidden_size, device="cuda")
+    x = torch.randn(num_tokens, hidden_size, device="cuda")
 
     routing_weights, routing_indices = router(x)
 
@@ -107,6 +123,8 @@ def test_router():
     assert routing_indices.shape == (num_tokens, num_experts)
     assert torch.all(routing_weights >= 0)
     assert torch.all(torch.sum(routing_weights, dim=1) < 1)
+    assert torch.all(routing_indices >= 0)
+    assert torch.all(routing_indices < num_experts)
     assert routing_weights.dtype == torch.float32
 
 
