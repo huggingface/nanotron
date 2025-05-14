@@ -148,6 +148,7 @@ class Qwen2Attention(LogMixin, nn.Module):
         self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
         self.tp_pg_size = tp_pg.size()
+        self.cp_pg_size = cp_pg.size()
 
         # Head configuration
         self.num_heads = config.num_attention_heads
@@ -229,7 +230,7 @@ class Qwen2Attention(LogMixin, nn.Module):
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, -1, -1] # 1 document with 10 tokens then padding
         # Replace -1 with 0 in position_ids to mark every padding token as a separate sequence. Ideally we want to get rid of padding tokens from qkv
         # position_ids = position_ids.masked_fill(position_ids == -1, 0)
-        seq_length = position_ids.shape[1]
+        seq_length = position_ids.shape[1] // self.cp_pg_size # in CP, position_ids are global
         # Keep original position_ids shape for return, flatten for internal use
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
 
@@ -764,7 +765,9 @@ class Qwen2Model(nn.Module):
             # llama3 ring attention
             if self.config._attn_implementation == "llama3_ring_attention":
                 from nanotron.nn.llama3_ring_attention import llama3_flash_attn_prepare_cu_seqlens
+                local_sequence_length = input_ids.shape[1]
                 sequence_length = position_ids.shape[1]
+                assert sequence_length == local_sequence_length * self.parallel_context.cp_pg.size(), f"sequence_length={sequence_length} must be equal to local_sequence_length={local_sequence_length} * cp_pg.size()={self.parallel_context.cp_pg.size()}"
                 assert sequence_length % (2 * self.parallel_context.cp_pg.size()) == 0, f"Sequence length {sequence_length} must be divisible by {2 * self.parallel_context.cp_pg.size()} when using llama3 ring attention"
                 (
                 cu_seqlens_q,
@@ -773,7 +776,7 @@ class Qwen2Model(nn.Module):
                 max_seqlen_k,
                 local_k_slice,
                 ) = llama3_flash_attn_prepare_cu_seqlens(
-                    cu_seqlens * self.parallel_context.cp_pg.size(),
+                    cu_seqlens, # global cu_seqlens
                     causal=True,
                     rank=self.parallel_context.cp_pg.rank(),
                     world_size=self.parallel_context.cp_pg.size(),
