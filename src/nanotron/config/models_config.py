@@ -153,6 +153,7 @@ class Qwen2Config:
     _use_doc_masking: bool = False
 
     log_attn_probs: bool = True # Whether to log the attention probabilities
+    ring_attn_heads_k_stride: Optional[int] = None # Stride of the heads in the key tensor for llama3 ring attention
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
@@ -200,6 +201,11 @@ class Qwen2Config:
         if self.max_position_embeddings > 4096:
             assert self.rope_seq_len_interpolation_factor == self.max_position_embeddings / 4096, f"rope_seq_len_interpolation_factor must be equal to max_position_embeddings / 4096 = {self.max_position_embeddings / 4096}"
     
+        if self._attn_implementation == "llama3_ring":
+            assert self.ring_attn_heads_k_stride is not None, "ring_attn_heads_k_stride must be specified for llama3 ring attention"
+        else:
+            assert self.ring_attn_heads_k_stride is None, f"ring_attn_heads_k_stride must be None for non-llama3 ring attention, got attn_implementation={self._attn_implementation}"
+
     @property
     def is_using_mup(self) -> bool:
         return self._is_using_mup

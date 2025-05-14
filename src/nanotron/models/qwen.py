@@ -31,6 +31,7 @@ from nanotron.parallel.tensor_parallel.nn import (
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
 from nanotron.logging import LogMixin
+from nanotron.nn.llama3_ring_attention import llama3_flash_attn_varlen_kvpacked_func
 
 logger = logging.get_logger(__name__)
 
@@ -214,13 +215,14 @@ class Qwen2Attention(LogMixin, nn.Module):
         self._use_qkv_packed = config._use_qkv_packed
         self.sliding_window_size = config.sliding_window_size
         self.log_attn_probs = config.log_attn_probs
+        self.heads_k_stride = config.ring_attn_heads_k_stride
         # TODO: support SFT
 
     def forward(
         self,
         hidden_states: torch.Tensor,  # [batch_size*seq_length, hidden_size]
         position_ids: torch.Tensor,  # [batch_size, seq_length] where -1 is padding
-        cu_seqlens: Optional[torch.Tensor] = None,  # Added cu_seqlens argument
+        cu_seqlens: Optional[Union[torch.Tensor, Dict[str, torch.Tensor]]] = None,  # Added cu_seqlens argument
     ):
         # [0, 1, 2, 3, 4, 0, 1, 2, -1, -1, -1] # 2 documents with 5 and 3 tokens then padding
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] # 1 document with 11 tokens
@@ -235,28 +237,28 @@ class Qwen2Attention(LogMixin, nn.Module):
 
         if self._use_qkv_packed:
             attn_output = self._forward_packed(qkv, seq_length, position_ids, cu_seqlens)
-        else:
-            q, k, v = qkv.split(
-                [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
-            )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
-            q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
-            k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-            v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-            if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
-                rotary_pos_emb = self.rotary_emb(
-                    position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
-                )  # [b*s, dim] or [seq_length, dim]
-                q = self.rotary_emb.apply_rotary_pos_emb(
-                    q, rotary_pos_emb, seq_length=seq_length
-                )  # [b*s, num_heads, head_dim]
-                k = self.rotary_emb.apply_rotary_pos_emb(
-                    k, rotary_pos_emb, seq_length=seq_length
-                )  # [b*s, num_kv_heads, head_dim]
-            else:
-                log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
-            attn_output = self.attention(
-                q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
-            )
+        # else:
+        #     q, k, v = qkv.split(
+        #         [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
+        #     )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
+        #     q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
+        #     k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+        #     v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+        #     if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+        #         rotary_pos_emb = self.rotary_emb(
+        #             position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+        #         )  # [b*s, dim] or [seq_length, dim]
+        #         q = self.rotary_emb.apply_rotary_pos_emb(
+        #             q, rotary_pos_emb, seq_length=seq_length
+        #         )  # [b*s, num_heads, head_dim]
+        #         k = self.rotary_emb.apply_rotary_pos_emb(
+        #             k, rotary_pos_emb, seq_length=seq_length
+        #         )  # [b*s, num_kv_heads, head_dim]
+        #     else:
+        #         log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
+        #     attn_output = self.attention(
+        #         q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
+        #     )
         output = self.o_proj(attn_output)
         # Return original position_ids shape
         return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
@@ -277,25 +279,45 @@ class Qwen2Attention(LogMixin, nn.Module):
         kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
         max_seqlen = seq_length  # TODO: should this be max position_ids?
 
-        assert cu_seqlens.dtype == torch.int32
-        assert max_seqlen is not None
-        assert isinstance(max_seqlen, int)
 
-        attn_output = flash_attn_varlen_kvpacked_func(
-            q,
-            kv,
-            cu_seqlens,
-            cu_seqlens,
-            max_seqlen,
-            max_seqlen,
-            0.0,
-            softmax_scale=None,
-            causal=True,
-            alibi_slopes=None,
-            window_size=(self.sliding_window_size - 1, 0) if self.sliding_window_size is not None else (-1, -1),
-            deterministic=False,
-            return_attn_probs=self.log_attn_probs,
-        )  # Not contiguous, similar to flash_attn
+        if self.config._attn_implementation == "llama3_ring_attention":
+            attn_output = llama3_flash_attn_varlen_kvpacked_func(
+                q,
+                kv,
+                cu_seqlens_q=cu_seqlens["cu_seqlens_q"],
+                cu_seqlens_k=cu_seqlens["cu_seqlens_k"],
+                max_seqlen_q=cu_seqlens["max_seqlen_q"],
+                max_seqlen_k=cu_seqlens["max_seqlen_k"],
+                heads_k_stride=self.heads_k_stride,
+                local_k_slice=cu_seqlens["local_k_slice"],
+                dropout_p=0.0,
+                softmax_scale=None,
+                causal=True,
+                alibi_slopes=None,
+                window_size=(self.sliding_window_size - 1, 0) if self.sliding_window_size is not None else (-1, -1),
+                deterministic=False,
+                return_attn_probs=self.log_attn_probs,
+            )  # Not contiguous, similar to flash_attn
+        else:
+            assert cu_seqlens.dtype == torch.int32
+            assert max_seqlen is not None
+            assert isinstance(max_seqlen, int)
+            attn_output = flash_attn_varlen_kvpacked_func(
+                q,
+                kv,
+                cu_seqlens,
+                cu_seqlens,
+                max_seqlen,
+                max_seqlen,
+                0.0,
+                softmax_scale=None,
+                causal=True,
+                alibi_slopes=None,
+                window_size=(self.sliding_window_size - 1, 0) if self.sliding_window_size is not None else (-1, -1),
+                deterministic=False,
+                return_attn_probs=self.log_attn_probs,
+            )  # Not contiguous, similar to flash_attn
+            
         if self.log_attn_probs:
             attn_output, attn_probs, _ = attn_output
             # log attn_probs
@@ -732,13 +754,37 @@ class Qwen2Model(nn.Module):
     ):
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
         # Compute cu_seqlens
+        cu_seqlens: Optional[Union[torch.Tensor, Dict[str, torch.Tensor]]] = None
         if position_ids.numel() > 0:
             start_indices = torch.where(position_ids.view(-1) == 0)[0]
             cu_seqlens = torch.cat(
                 [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
             ).to(torch.int32)
-        else:
-            cu_seqlens = None
+
+            # llama3 ring attention
+            if self.config._attn_implementation == "llama3_ring_attention":
+                from nanotron.nn.llama3_ring_attention import llama3_flash_attn_prepare_cu_seqlens
+                sequence_length = position_ids.shape[1]
+                assert sequence_length % (2 * self.parallel_context.cp_pg.size()) == 0, f"Sequence length {sequence_length} must be divisible by {2 * self.parallel_context.cp_pg.size()} when using llama3 ring attention"
+                (
+                cu_seqlens_q,
+                cu_seqlens_k,
+                max_seqlen_q,
+                max_seqlen_k,
+                local_k_slice,
+                ) = llama3_flash_attn_prepare_cu_seqlens(
+                    cu_seqlens * self.parallel_context.cp_pg.size(),
+                    causal=True,
+                    rank=self.parallel_context.cp_pg.rank(),
+                    world_size=self.parallel_context.cp_pg.size(),
+                )
+                cu_seqlens = {
+                    "cu_seqlens_q": cu_seqlens_q,
+                    "cu_seqlens_k": cu_seqlens_k,
+                    "max_seqlen_q": max_seqlen_q,
+                    "max_seqlen_k": max_seqlen_k,
+                    "local_k_slice": local_k_slice,
+                }
 
         decoder_states = {
             "hidden_states": output["input_embeds"],
