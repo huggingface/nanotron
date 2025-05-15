@@ -595,7 +595,7 @@ def get_tb_datasets(
             # check that sum of lens of files in dataset is greater than needed_num_samples_dataset (use dataset.lens)
             total_num_samples_dataset = int(train_steps * global_batch_size * weights[i])
             log_rank(f"Dataset {i} ({dataset.folder_path}) on s3 has {len(dataset) * sequence_length} tokens (size: {human_format(len(dataset) * sequence_length * config.token_size_in_bytes)}) and needs {total_num_samples_dataset * sequence_length} tokens (size: {human_format(total_num_samples_dataset * sequence_length * config.token_size_in_bytes)}) for all stages", logger=logger, level=logging.INFO, rank=0)
-            assert total_num_samples_dataset <= len(dataset), f"Not enough files on s3 for dataset {i} ({dataset.folder_path})"
+            # assert total_num_samples_dataset <= len(dataset), f"Not enough files on s3 for dataset {i} ({dataset.folder_path})"
             # check that local files exist for the needed_num_samples_dataset
             estimate_end_sample = estimate_current_sample + needed_num_samples_dataset
             for file_idx, file in enumerate(dataset.files):

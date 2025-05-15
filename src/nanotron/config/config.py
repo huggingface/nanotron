@@ -399,13 +399,25 @@ class AdamWOptimizerArgs:
     adam_beta2: float
     torch_adam_is_fused: bool
     name: str = "adamW"
-
+    
+@dataclass
+class MuonOptimizerArgs:
+    momentum: float
+    nesterov: bool
+    ns_steps: int
+    adamw_beta1: float
+    adamw_beta2: float
+    adamw_eps: float
+    sign_muon: bool
+    spectral_mup_scaling: bool
+    moonlight_scaling: bool
+    name: str = "muon"
 
 @dataclass
 class OptimizerArgs:
     """Arguments related to the optimizer and learning rate"""
 
-    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs]
+    optimizer_factory: Union[SGDOptimizerArgs, AdamWOptimizerArgs,MuonOptimizerArgs]
     zero_stage: int
     weight_decay: float
     clip_grad: Optional[float]
