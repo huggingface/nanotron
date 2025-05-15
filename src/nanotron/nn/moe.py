@@ -25,7 +25,7 @@ except ImportError:
     )
 
 # Try to debug the topk version
-topk_version = False
+topk_version = True
 native_torch_version = True
 
 
@@ -124,7 +124,6 @@ class Router(nn.Module):
             tokens_per_expert = torch.bincount(routing_map.flatten(), minlength=self.num_experts)
         else:
             tokens_per_expert = routing_map.sum(dim=0)
-        assert topk_version is False, "aux loss is not supported for topk version"
         scores = torch.softmax(logits, dim=-1, dtype=torch.float32)
         aux_loss = switch_aux_loss(
             scores, tokens_per_expert, self.aux_loss_coeff, self.num_experts_per_token, self.sequence_partition_group

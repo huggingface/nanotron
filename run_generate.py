@@ -63,7 +63,7 @@ def get_args():
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
-    parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
+    parser.add_argument("--max-new-tokens", type=int, default=50, help="Maximum number of new tokens to generate")
     parser.add_argument("--use-cache", action="store_true", help="Use KV cache to speed up generation")
     return parser.parse_args()
 
