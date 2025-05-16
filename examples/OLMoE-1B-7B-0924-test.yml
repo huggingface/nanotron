@@ -22,7 +22,7 @@ data_stages:
     #   token_size_in_bytes: 4
     #   tokenizer_name: meta-llama/Llama-3.2-1B
     #   use_old_brrr_dataloader: false
-    #   vocab_size: 50304
+    #   vocab_size: 128256
     num_loading_workers: 1
     seed: 6198
   name: Stable Training Stage
@@ -46,7 +46,7 @@ model:
   dtype: bfloat16
   init_method:
     std: 0.02
-    scaling_method: NONE
+    # scaling_method: NONE
   make_vocab_size_divisible_by: 1
   model_config:
     _attn_implementation: flash_attention_2
@@ -77,19 +77,19 @@ model:
     sliding_window_size: 20
     tie_word_embeddings: false
     use_cache: true
-    vocab_size: 50304
+    vocab_size: 128256
     z_loss_coefficient: 0.001
     z_loss_enabled: true
     moe_config:
-      num_experts: 64
-      top_k: 8
+      num_experts: 8
+      top_k: 2
       moe_hidden_size: 2048
       moe_intermediate_size: 1024 # output_multiplier=0.5 for swiglu
       shared_expert_hidden_size: 2048
       shared_expert_intermediate_size: 1024
       router_aux_loss_coef: 0.01
       enable_shared_expert: false
-      token_dispatcher_type: alltoall
+      token_dispatcher_type: allgather
 optimizer:
   accumulate_grad_in_fp32: true
   clip_grad: 1.0

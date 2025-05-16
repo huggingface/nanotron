@@ -106,12 +106,15 @@ class Qwen2MoEMLPLayer(nn.Module):
         self.router = TopKRouter(config=self.config, parallel_context=parallel_context)
 
         # self.token_dispatcher = AllToAllDispatcher(num_local_experts, num_experts, parallel_context.ep_pg)
-        self.token_dispatcher = MoEAllGatherTokenDispatcher(
-            num_local_experts=self.num_local_experts,
-            local_expert_indices=self.local_expert_indices,
-            config=self.config,
-            parallel_context=parallel_context,
-        )
+        if self.config.moe_config.token_dispatcher_type == "allgather":
+            self.token_dispatcher = MoEAllGatherTokenDispatcher(
+                num_local_experts=self.num_local_experts,
+                local_expert_indices=self.local_expert_indices,
+                config=self.config,
+                parallel_context=parallel_context,
+            )
+        else: # TODO: alltoall
+            raise ValueError(f"Unsupported token dispatcher type: {self.config.moe_config.token_dispatcher_type}")
 
         # Enable shared experts if configured
         self.enable_shared_expert = config.moe_config.enable_shared_expert
@@ -282,6 +285,12 @@ class TopKRouter(nn.Module):
             score_function="softmax",
             scaling_factor=None,
             drop_policy=self.config.moe_config.moe_token_drop_policy,
+            use_pre_softmax=self.config.moe_config.moe_router_pre_softmax,
+            num_groups=self.config.moe_config.moe_router_num_groups,
+            group_topk=self.config.moe_config.moe_router_group_topk,
+            scaling_factor=self.config.moe_config.moe_router_topk_scaling_factor,
+            score_function=self.config.moe_config.moe_router_score_function,
+            expert_bias=False, # TODO: no bias
         )
 
         # Apply load balancing loss
@@ -308,7 +317,7 @@ class TopKRouter(nn.Module):
         Returns:
             torch.Tensor: The activation tensor with the attached gradient function.
         """
-        moe_aux_loss_coeff = self.config.moe_config.moe_aux_loss_coeff / self.tp_size
+        moe_aux_loss_coeff = self.config.moe_config.router_aux_loss_coef / self.tp_size
         aux_loss = switch_load_balancing_loss_func(probs, num_local_tokens_per_expert, self.topk, moe_aux_loss_coeff)
         # save_to_aux_losses_tracker(
         #     "load_balancing_loss",
@@ -630,7 +639,7 @@ class TEGroupedMLP(nn.Module):
 
         intermediate_parallel, bias_parallel = self.linear_fc1(permuted_local_hidden_states, tokens_per_expert)
 
-        if self.config.moe_config.bias_activation_fusion:  # TODO: is this useful?
+        if self.config.moe_config.bias_activation_fusion:  # TODO: need to fix this, it's true by default in megatron
             assert (
                 "silu" in self.config.hidden_act or "swiglu" in self.config.hidden_act
             ), "Only support fusion of silu and swiglu"
