@@ -768,12 +768,7 @@ class DistributedTrainer:
         eta_seconds = int(remaining_steps * (elapsed_time_per_iteration_ms / 1000))
         basic_log_entries = [
             # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
-            LogItem(
-                "consumed_tokens",
-                self.metadata.consumed_train_samples
-                * self.config.tokens.sequence_length,  # TODO: not true if we change seqlen
-                "human_format",
-            ),  # , "12d"),
+            LogItem("consumed_tokens", self.metadata.consumed_tokens_total, "human_format"),
             LogItem("time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
             LogItem("tokens_per_sec", tokens_per_sec, "human_format"),  # , "1.6E"),
             LogItem(
@@ -1260,7 +1255,7 @@ class DistributedTrainer:
 
         # Update step/samples numbers before we save the config
         self.config.general.step = self.metadata.last_train_step
-        self.config.general.consumed_train_samples = self.metadata.consumed_train_samples
+        self.config.general.consumed_train_samples = self.metadata.consumed_train_samples # TODO: idc abt this
 
         save(
             model=self.unwrapped_model,

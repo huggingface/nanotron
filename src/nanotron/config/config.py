@@ -274,7 +274,7 @@ class GeneralArgs:
     run: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
-    consumed_train_samples: Optional[int] = None
+    consumed_train_samples: Optional[int] = None # TODO: remove this
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = True
 
