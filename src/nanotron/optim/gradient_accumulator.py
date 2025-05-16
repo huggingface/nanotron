@@ -428,10 +428,10 @@ def get_fp32_accum_hook(
                 rank=0,
             )
 
-            if len(expert_params) > 0:
+            if dist.get_world_size(ep_dp_pg) > 1 and len(expert_params) > 0:
                 execute_all_reduce(expert_params, pg=ep_dp_pg)
 
-            if len(non_expert_params) > 0:
+            if dist.get_world_size(dp_pg) > 1 and len(non_expert_params) > 0:
                 execute_all_reduce(non_expert_params, pg=dp_pg)
 
             # we shouldn't wait for this future for the rest of the backward

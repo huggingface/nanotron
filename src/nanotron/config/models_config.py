@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 from nanotron.config.utils_config import InitScalingMethod
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, AttentionImplementation
@@ -51,6 +51,8 @@ class MoEConfig:
     use_torch_permute: bool = True  # Whether to use Haojun's permute
 
     moe_impl: str = "transformer_engine"
+    grouped_gemm_imple: Literal["transformer_engine", "megablock_grouped_gemm"] = "megablock_grouped_gemm"
+
     # Transformer-Engine specific config
     num_shared_experts: int = None
     rotary_base: int = None
@@ -58,16 +60,18 @@ class MoEConfig:
     max_position_embeddings: int = None
     moe_aux_loss_coeff: float = 0.0
 
-    gradient_accumulation_fusion: bool = False # 
-    disable_parameter_transpose_cache: bool = False # When set to true, the parameter transposes are not cached for subsequent iterations.
-    bias_activation_fusion: bool = False 
+    gradient_accumulation_fusion: bool = False  #
+    disable_parameter_transpose_cache: bool = (
+        False  # When set to true, the parameter transposes are not cached for subsequent iterations.
+    )
+    bias_activation_fusion: bool = False
     permute_fusion: bool = False
-    input_jitter_eps: float = None # Add noise to the input tensor. https://arxiv.org/abs/2101.03961
-    # The load balancing strategy for the router. "aux_loss" corresponds to the load balancing loss 
-    # used in GShard and SwitchTransformer; "seq_aux_loss" corresponds to the loss used in DeepSeekV2, 
-    # which computes the loss for each individual sample; "sinkhorn" corresponds to the balancing 
+    input_jitter_eps: float = None  # Add noise to the input tensor. https://arxiv.org/abs/2101.03961
+    # The load balancing strategy for the router. "aux_loss" corresponds to the load balancing loss
+    # used in GShard and SwitchTransformer; "seq_aux_loss" corresponds to the loss used in DeepSeekV2,
+    # which computes the loss for each individual sample; "sinkhorn" corresponds to the balancing
     # algorithm used in S-BASE, and "none" implies no load balancing. The default is "aux_loss".
-    router_load_balancing_type: str = "aux_loss" 
+    router_load_balancing_type: str = "aux_loss"
     moe_expert_capacity_factor: float = 1.0
     moe_pad_expert_input_to_capacity: bool = False
     moe_token_drop_policy: str = "probs"
@@ -84,6 +88,11 @@ class MoEConfig:
             raise ValueError(
                 f"token_dispatcher_type must be one of ['alltoall', 'allgather'], got {self.token_dispatcher_type}"
             )
+
+        assert self.grouped_gemm_imple in [
+            "transformer_engine",
+            "megablock_grouped_gemm",
+        ], f"Invalid grouped gemm implementation: {self.grouped_gemm_imple}. Available options are: ['transformer_engine', 'megablock_grouped_gemm']"
 
 
 @dataclass

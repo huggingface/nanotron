@@ -11,6 +11,7 @@ from nanotron.config import ParallelismArgs
 from nanotron.config.models_config import Qwen2Config
 from nanotron.models.base import ignore_init_on_device_and_dtype
 from nanotron.nn.activations import ACT2FN
+from nanotron.nn.moe import GroupedMLP
 from nanotron.nn.moe_utils import scatter_to_tensor_group
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
@@ -131,8 +132,10 @@ class Qwen2MoEMLPLayer(nn.Module):
                 bias=False,
             )  # TODO: ensure shared_expert_gate is tied across TP
 
-        # self.experts = GroupedMLP(config, parallel_config, ep_pg=parallel_context.ep_pg)
-        self.experts = TEGroupedMLP(self.num_local_experts, config, parallel_config, parallel_context)
+        if self.config.moe_config.grouped_gemm_imple == "transformer_engine":
+            self.experts = TEGroupedMLP(self.num_local_experts, config, parallel_config, parallel_context)
+        elif self.config.moe_config.grouped_gemm_imple == "megablock_grouped_gemm":
+            self.experts = GroupedMLP(config, parallel_config, ep_pg=parallel_context.ep_pg)
 
         # Whether to recompute MoE layer during backward pass for memory efficiency
         self.recompute_layer = parallel_config.recompute_layer
@@ -163,7 +166,14 @@ class Qwen2MoEMLPLayer(nn.Module):
         #     hidden_states, routing_weights, routing_indices
         # )
         (dispatched_input, tokens_per_expert) = self.token_dispatcher.token_permutation(hidden_states, probs, indices)
-        expert_output, mlp_bias = self.experts(dispatched_input, tokens_per_expert)
+
+        if self.config.moe_config.grouped_gemm_imple == "transformer_engine":
+            expert_output, mlp_bias = self.experts(dispatched_input, tokens_per_expert)
+        elif self.config.moe_config.grouped_gemm_imple == "megablock_grouped_gemm":
+            expert_output = self.experts(dispatched_input, tokens_per_expert)
+            expert_output = expert_output["hidden_states"]
+            mlp_bias = None
+
         output, mlp_bias = self.token_dispatcher.token_unpermutation(expert_output, mlp_bias)
 
         if self.enable_shared_expert:
@@ -268,12 +278,18 @@ class TopKRouter(nn.Module):
             self.topk,
             capacity_factor=self.config.moe_config.moe_expert_capacity_factor,
             pad_to_capacity=self.config.moe_config.moe_pad_expert_input_to_capacity,
+            num_groups=None,
+            score_function="softmax",
+            scaling_factor=None,
             drop_policy=self.config.moe_config.moe_token_drop_policy,
         )
 
         # Apply load balancing loss
         scores = torch.softmax(logits, dim=-1, dtype=torch.float32)
-        probs = self.apply_load_balancing_loss(scores, tokens_per_expert, activation=probs)
+
+        if self.config.moe_config.moe_aux_loss_coeff > 0:
+            probs = self.apply_load_balancing_loss(scores, tokens_per_expert, activation=probs)
+
         return probs, indices
 
     def apply_load_balancing_loss(
@@ -727,8 +743,12 @@ class MoEAllGatherTokenDispatcher(nn.Module):
         # probs of global token assignment to local experts.
         self.local_probs = probs[:, self.local_expert_indices[0] : self.local_expert_indices[-1] + 1].contiguous()
 
-        # tokens_per_expert = self.local_map.sum(dim=0).long().cpu()
         tokens_per_expert = self.local_map.sum(dim=0).long()
+
+        # NOTE: megablock grouped gemm requires tokens_per_expert to be on cpu
+        if self.config.moe_config.grouped_gemm_imple == "megablock_grouped_gemm":
+            tokens_per_expert = tokens_per_expert.cpu()
+
         (permuted_local_hidden_states, self.reversed_local_input_permutation_mapping) = permute(
             hidden_states,
             self.local_map,
@@ -753,15 +773,19 @@ class MoEAllGatherTokenDispatcher(nn.Module):
             output_total: un-permuted updated hidden states output from all local experts
             with shape of [S/TP, B, H]
         """
-        # Scale the expert output prior to reduction and subsequent to local unpermutation if k > 1.
-        # Unpermute the expert output and bias
-        permuted_probs = self.local_probs.T.contiguous().masked_select(self.local_map.T.contiguous())
-        # Here may change permuted_tokens to higher precision if probs use fp32/fp64.
-        weighted_hidden_states = hidden_states * permuted_probs.unsqueeze(-1)
+
+        # # Scale the expert output prior to reduction and subsequent to local unpermutation if k > 1.
+        # # Unpermute the expert output and bias
+        # permuted_probs = self.local_probs.T.contiguous().masked_select(self.local_map.T.contiguous())
+        # # Here may change permuted_tokens to higher precision if probs use fp32/fp64.
+        # weighted_hidden_states = hidden_states * permuted_probs.unsqueeze(-1)
+        weighted_hidden_states = hidden_states
+        permuted_probs = self.local_probs
         unpermuted_local_hidden = unpermute(
             weighted_hidden_states,
             self.reversed_local_input_permutation_mapping,
             restore_shape=self.hidden_shape_before_permute,
+            probs=permuted_probs,
             routing_map=self.local_map,
             fused=self.config.moe_config.permute_fusion,
         )
@@ -797,8 +821,11 @@ class MoEAllGatherTokenDispatcher(nn.Module):
 
             # output_total = scatter_tensor_along_dim(output_total, dim=0, group=self.ep_pg)
             output_total = scatter_to_tensor_group(output_total, dim=0, group=self.ep_pg)
+            # from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import differentiable_reduce_scatter_sum
+            # output_total = differentiable_reduce_scatter_sum(output_total, group=self.ep_pg)
 
         output_total = output_total.view(self.hidden_shape)
+
         if self.add_bias:
             output_bias_total = output_bias_total.view(self.hidden_shape)
 
