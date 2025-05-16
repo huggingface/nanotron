@@ -62,12 +62,12 @@ def before_tbi_sanity_checks(
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
 ) -> None:
     if not config.general.ignore_sanity_checks:
-        # SANITY CHECK: Check that the model params are synchronized across dp
+        # SANITY CHECK: Check that the model params are synchronized across dp_cp
         for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
             assert_tensor_synced_across_pg(
                 tensor=param,
-                pg=parallel_context.dp_pg,
-                msg=lambda err: f"{name} are not synchronized across DP {err}",
+                pg=parallel_context.dp_cp_pg,
+                msg=lambda err: f"{name} are not synchronized across DP_CP {err}",
             )
 
         # SANITY CHECK: Tied weights are synchronized
@@ -208,16 +208,16 @@ def before_optim_step_sanity_checks(
             assert grad is not None, f"Grad is None for {name}"
             assert_tensor_synced_across_pg(
                 tensor=grad,
-                pg=parallel_context.dp_pg,
-                msg=lambda err: f"[Before optimizer step] weights grads for {name} are not synchronized across DP. {err}",
+                pg=parallel_context.dp_cp_pg,
+                msg=lambda err: f"[Before optimizer step] weights grads for {name} are not synchronized across DP_CP. {err}",
             )
 
         # SANITY CHECK: Check that the model params are synchronized across dp
         for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
             assert_tensor_synced_across_pg(
                 tensor=param,
-                pg=parallel_context.dp_pg,
-                msg=lambda err: f"{name} are not synchronized across DP {err}",
+                pg=parallel_context.dp_cp_pg,
+                msg=lambda err: f"{name} are not synchronized across DP_CP {err}",
             )
 
         # SANITY CHECK: Tied weights are synchronized
@@ -234,8 +234,8 @@ def before_optim_step_sanity_checks(
                 msg=lambda err: f"[Before optimizer step] Tied weights {name} are not synchronized. {err}",
             )
 
-        # SANITY CHECK: Check that optimizer states are synchronized across DP
-        check_optim_state_in_sync(optimizer.state_dict(), parallel_context.dp_pg)
+        # SANITY CHECK: Check that optimizer states are synchronized across DP_CP
+        check_optim_state_in_sync(optimizer.state_dict(), parallel_context.dp_cp_pg)
 
         # SANITY CHECK: run model specific sanity checks
         unwrapped_model.before_optim_step_sanity_checks()
