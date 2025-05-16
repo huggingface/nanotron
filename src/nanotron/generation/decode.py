@@ -103,6 +103,17 @@ def micro_batcher(
             # Each dp is responsible for its own micro batches
             continue
 
+        if tokenizer.bos_token_id is not None:
+            # TODO: do we want this always?
+            add_special_tokens = False
+            logging.warn_once(
+                f"Tokenizer {tokenizer.name_or_path} has a bos_token_id={tokenizer.bos_token_id}, we set add_special_tokens to False to avoid adding bos token to input ids",
+                main_rank_only=True,
+                logger=logger,
+            )
+        else:
+            add_special_tokens = True
+
         if dist.get_rank(parallel_context.pp_pg) == input_rank:
             encodings = tokenizer(
                 [elt.text for elt in micro_batch],
@@ -111,6 +122,7 @@ def micro_batcher(
                 padding=tokenizer_config.padding,
                 max_length=tokenizer_config.max_input_length,
                 truncation=tokenizer_config.truncation,
+                add_special_tokens=add_special_tokens,
                 # pad_to_multiple_of=8
             )
 
@@ -157,13 +169,17 @@ def micro_splitter(
 
 
 @torch.inference_mode()
-def get_position_ids(input_ids, tokenizer):
+def get_position_ids(input_ids, padding_token_id=None, input_mask=None):
+    assert padding_token_id is not None or input_mask is not None, "Either padding_token_id or input_mask must be provided"
+
     # Find where padding ends for each sequence
     batch_size, seq_length = input_ids.shape
-    padding_token_id = tokenizer.eos_token_id
 
     # Create a mask of padding tokens
-    padding_mask = input_ids == padding_token_id
+    if padding_token_id is not None:
+        padding_mask = input_ids == padding_token_id
+    else:
+        padding_mask = input_mask
 
     # Find indices where non-padding tokens start
     # For sequences with no padding, this will be 0
@@ -305,7 +321,12 @@ def decode_text(
                         else:
                             batch_generated_ids = state.new_input_ids
                             batch_generated_mask = state.new_input_mask
-                        position_ids = get_position_ids(batch_generated_ids, tokenizer)
+                        # assert first token isn't bos
+                        assert (
+                            batch_generated_ids[0, 0] != tokenizer.bos_token_id
+                        ), "First token is bos. Make sure you're using add_special_tokens=True when initializing the tokenizer."
+                        padding_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+                        position_ids = get_position_ids(batch_generated_ids, padding_token_id=padding_token_id)
                         sharded_logits = model(
                             input_ids=batch_generated_ids,
                             position_ids=position_ids,  # [batch_size, seq_len]
@@ -541,8 +562,9 @@ def decode_tokenized(
     generation_config: GenerationArgs,
     max_micro_batch_size: int,
     max_new_tokens: int,
-    tokenizer: "PreTrainedTokenizer",
     returns_logits: Optional[bool] = False,
+    logits_are_batch_first: bool = True,
+    bos_token_id: Optional[int] = None,
 ) -> Generator[GenerationOutput, None, None]:
     """We assume the following:
     - Everyone receives ALL the input text. # TODO @thomasw21: technically only specific ranks need to receive input.
@@ -606,7 +628,7 @@ def decode_tokenized(
                 for batch in batches
             )
 
-            for generation_iter in range(max_new_tokens):
+            for generation_iter in tqdm(range(max_new_tokens), desc="Generating"):
                 all_new_decoder_input_ids_and_mask_same_rank: List[
                     Tuple[Union[torch.LongTensor, TensorPointer], Union[torch.BoolTensor, TensorPointer]]
                 ] = []
@@ -614,17 +636,37 @@ def decode_tokenized(
                 for state_id, state in enumerate(decoder_states):
                     new_decoder_states.append(state)
                     # Get the new logits
-                    with attach_store(model=model, store=state.store):
-                        position_ids = get_position_ids(state.new_input_ids, tokenizer)
+                    if generation_config.use_cache:
+                        raise NotImplementedError("Use-cache is not supported for now")
+                        with attach_store(model=model, store=state.store):
+                            position_ids = get_position_ids(state.new_input_ids, tokenizer)
+                            sharded_logits = model(
+                                input_ids=state.new_input_ids,
+                                position_ids=position_ids,  # [batch_size, seq_len]
+                            )
+                    else:
+                        if isinstance(state.new_input_ids, torch.Tensor):
+                            batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+                            batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+                        else:
+                            batch_generated_ids = state.new_input_ids
+                            batch_generated_mask = state.new_input_mask
+                        # assert first token isn't bos
+                        if bos_token_id is not None:
+                            assert (
+                                batch_generated_ids[0, 0] != bos_token_id
+                            ), "First token is bos. Make sure you're using add_special_tokens=True when initializing the tokenizer."
+                        position_ids = get_position_ids(batch_generated_ids, input_mask=batch_generated_mask)
                         sharded_logits = model(
-                            input_ids=state.new_input_ids,
+                            input_ids=batch_generated_ids,
                             position_ids=position_ids,  # [batch_size, seq_len]
-                        )
-                        if isinstance(sharded_logits, torch.Tensor):
-                            sharded_logits = sharded_logits.transpose(0, 1)
+                        )  # [batch_size*seq_len, vocab_size]
+
+                    sharded_logits = sharded_logits.view(*position_ids.shape, -1)  # [batch_size, seq_len, vocab_size]
+                    if isinstance(sharded_logits, torch.Tensor) and not logits_are_batch_first:
+                        sharded_logits = sharded_logits.transpose(0, 1)
 
                     # Communicate
-                    # TODO @thomasw21: Make a diagram to show how this works
                     nb_send: int = 0
                     if is_decoder_input_rank:
                         if is_max_nb_microbatches:

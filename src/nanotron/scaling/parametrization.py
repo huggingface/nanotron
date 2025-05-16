@@ -62,7 +62,7 @@ class StandardParametrizator(Parametrizator):
             init.normal_(module.weight, mean=0.0, std=self.std)
         elif "bias" == param_name:
             module.bias.zero_()
-
+    
     def _parametrize_grouped_mlp(self, param_name: str, module: nn.Module):
         for n, p in module.named_parameters():
             if n == "merged_gate_up_proj":
