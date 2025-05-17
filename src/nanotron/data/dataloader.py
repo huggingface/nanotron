@@ -137,6 +137,26 @@ def dummy_infinite_data_generator(
             seed * (1 + dist.get_rank(parallel_context.dp_pg)) * (1 + dist.get_rank(parallel_context.pp_pg))
         )
 
+        # debugging
+        import joblib
+
+        sample_batch = joblib.load("/fsx/nouamane/projects/OLMoE/sample_batch.pkl")
+        assert (
+            sample_batch["input_ids"].shape == (micro_batch_size, sequence_length)
+        ), f"input_ids.shape: {sample_batch['input_ids'].shape}, sample_batch['input_ids'].shape: {sample_batch['input_ids'].shape}"
+        input_ids = sample_batch["input_ids"].to(device="cuda")
+        position_ids = torch.arange(sequence_length, device="cuda").repeat(micro_batch_size, 1)
+        # shift label_ids
+        label_ids = torch.cat([input_ids[:, 1:], torch.zeros_like(input_ids[:, :1])], dim=1)
+        label_mask = torch.ones_like(label_ids, dtype=torch.bool)
+        while True:
+            yield {
+                "input_ids": input_ids,
+                "position_ids": position_ids,
+                "label_ids": label_ids,
+                "label_mask": label_mask,
+            }
+
         if use_position_ids:
             document_lengths = [[4, 6, sequence_length - 10]] + [[sequence_length]] * (micro_batch_size - 1)
             position_ids = torch.full(

@@ -564,14 +564,6 @@ class Qwen2Model(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
     ):
-        # debugging
-        import joblib
-
-        sample_batch = joblib.load("/fsx/nouamane/projects/OLMoE/sample_batch.pkl")
-        assert (
-            sample_batch["input_ids"].shape == input_ids.shape
-        ), f"input_ids.shape: {input_ids.shape}, sample_batch['input_ids'].shape: {sample_batch['input_ids'].shape}"
-        input_ids = sample_batch["input_ids"].to(input_ids.device)
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
         # Compute cu_seqlens
         if position_ids.numel() > 0:
@@ -720,6 +712,13 @@ class Qwen2ForTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+        # import torch.distributed as dist
+        # if dist.get_rank() == 0:
+        #     from pprint import pformat
+        #     print(pformat([(n,p.shape) for n,p in self.named_parameters()]))
+        #     print(pformat([(n, round(p.mean().item(), 4), round(p.std().item(), 4)) for n,p in self.named_parameters()]))
+        #     assert False
+    
         sharded_logits = self.model(
             input_ids=input_ids,
             position_ids=position_ids,

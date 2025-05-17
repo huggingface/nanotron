@@ -36,22 +36,22 @@ class ExistingCheckpointInit:
 class MoEConfig:
     """Configuration for Mixture of Experts layers"""
 
-    num_experts: int = 8  # Total number of experts
-    top_k: int = 2  # Number of experts to route each token to
-    moe_hidden_size: int = 4096  # Hidden size of the MoE layer
-    moe_intermediate_size: int = 11008  # Intermediate size of the MoE layer
+    num_experts: int # Total number of experts
+    top_k: int  # Number of experts to route each token to
+    moe_hidden_size: int  # Hidden size of the MoE layer
+    moe_intermediate_size: int  # Intermediate size of the MoE layer
+    enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
     shared_expert_hidden_size: int = 4096  # Hidden size of the shared expert
     shared_expert_intermediate_size: int = 11008  # Intermediate size of the shared expert
     router_aux_loss_coef: float = 0.01  # Scaling coefficient for the aux loss. A starting value of 1e-2 is recommended.
     layers: List[int] = field(
         default_factory=lambda: [-1]
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
-    enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
-    token_dispatcher_type: str = "allgather"  # Communication pattern for MoE ("alltoall" or "allgather")
+    token_dispatcher_type: str = "alltoall"  # Communication pattern for MoE ("alltoall" or "allgather")
     use_torch_permute: bool = True  # Whether to use Haojun's permute
 
     moe_impl: str = "transformer_engine"
-    grouped_gemm_imple: Literal["transformer_engine", "megablock_grouped_gemm"] = "megablock_grouped_gemm"
+    grouped_gemm_imple: Literal["transformer_engine", "megablock_grouped_gemm"] = "transformer_engine"
 
     # Transformer-Engine specific config
     num_shared_experts: int = None
@@ -62,7 +62,7 @@ class MoEConfig:
     moe_z_loss_coeff: Optional[float] = None # Scaling coefficient for the z-loss. A starting value of 1e-3 is recommended.
     gradient_accumulation_fusion: bool = False # 
     disable_parameter_transpose_cache: bool = False # When set to true, the parameter transposes are not cached for subsequent iterations.
-    bias_activation_fusion: bool = True # equivalent is --no-bias-swiglu-fusion
+    bias_activation_fusion: bool = False # equivalent is --no-bias-swiglu-fusion
     permute_fusion: bool = False
     input_jitter_eps: float = None  # Add noise to the input tensor. https://arxiv.org/abs/2101.03961
     # The load balancing strategy for the router. "aux_loss" corresponds to the load balancing loss
