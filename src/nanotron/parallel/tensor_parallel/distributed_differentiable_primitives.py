@@ -135,10 +135,14 @@ class DifferentiableAllToAll(torch.autograd.Function):
         ctx.input_split_sizes = input_split_sizes
         if group.size() == 1:
             return input
+        
+        # input = input.contiguous() # TODO: do we need this?
 
         if output_split_sizes is None:
+            # Equal split (all2all)
             output = torch.empty_like(input)
         else:
+            # Unequal split (all2all-v)
             # NOTE: we all-to-all the first dimension,
             # so the data has shape (sum(output_split_sizes), *input.shape[1:])
             output = torch.empty(sum(output_split_sizes), *input.shape[1:], device=input.device, dtype=input.dtype)

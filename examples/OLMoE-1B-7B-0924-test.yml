@@ -83,13 +83,13 @@ model:
     moe_config:
       num_experts: 8
       top_k: 2
-      moe_hidden_size: 2048
-      moe_intermediate_size: 1024 # output_multiplier=0.5 for swiglu
-      shared_expert_hidden_size: 2048
-      shared_expert_intermediate_size: 1024
-      router_aux_loss_coef: 0.01
-      enable_shared_expert: false
-      token_dispatcher_type: allgather
+      # moe_hidden_size: 2048
+      # moe_intermediate_size: 1024 # output_multiplier=0.5 for swiglu
+      # shared_expert_hidden_size: 2048
+      # shared_expert_intermediate_size: 1024
+      # router_aux_loss_coef: 0.01
+      # enable_shared_expert: false
+      # token_dispatcher_type: allgather
 optimizer:
   accumulate_grad_in_fp32: true
   clip_grad: 1.0
