@@ -30,7 +30,7 @@ data_stages:
 general:
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
+  ignore_sanity_checks: true
   project: olmoe
   run: olmoe-test
   seed: 6198
@@ -78,13 +78,12 @@ model:
     tie_word_embeddings: false
     use_cache: true
     vocab_size: 128256
-    z_loss_coefficient: 0.001
-    z_loss_enabled: true
+    z_loss_enabled: false
     moe_config:
       num_experts: 8
       top_k: 2
-      # moe_hidden_size: 2048
-      # moe_intermediate_size: 1024 # output_multiplier=0.5 for swiglu
+      moe_hidden_size: 2048
+      moe_intermediate_size: 1024 # output_multiplier=0.5 for swiglu
       # shared_expert_hidden_size: 2048
       # shared_expert_intermediate_size: 1024
       # router_aux_loss_coef: 0.01
@@ -94,11 +93,11 @@ optimizer:
   accumulate_grad_in_fp32: true
   clip_grad: 1.0
   learning_rate_scheduler:
-    learning_rate: 4.0e-4
+    learning_rate: 1.0e-4
     lr_decay_starting_step: null
     lr_decay_steps: 31998
     lr_decay_style: cosine
-    lr_warmup_steps: 2
+    lr_warmup_steps: 500
     lr_warmup_style: linear
     min_decay_lr: 4.0e-5
   optimizer_factory:

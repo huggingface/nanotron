@@ -62,7 +62,7 @@ class MoEConfig:
     moe_z_loss_coeff: Optional[float] = None # Scaling coefficient for the z-loss. A starting value of 1e-3 is recommended.
     gradient_accumulation_fusion: bool = False # 
     disable_parameter_transpose_cache: bool = False # When set to true, the parameter transposes are not cached for subsequent iterations.
-    bias_activation_fusion: bool = False # equivalent is --no-bias-swiglu-fusion
+    bias_activation_fusion: bool = True
     permute_fusion: bool = False
     input_jitter_eps: float = None  # Add noise to the input tensor. https://arxiv.org/abs/2101.03961
     # The load balancing strategy for the router. "aux_loss" corresponds to the load balancing loss

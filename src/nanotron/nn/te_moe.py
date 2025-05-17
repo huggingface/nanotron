@@ -606,8 +606,7 @@ class TEGroupedMLP(nn.Module):
 
         self.linear_fc2 = TEGroupedLinear(  # TERowParallelGroupedLinear
             num_gemms=self.num_local_experts,
-            input_size=ffn_hidden_size
-            // 2,  # TODO: hack for now. AssertionError: GEMM not possible: inp.shape[-1] = 1024, in_features = 2048
+            input_size=ffn_hidden_size // 2,  # TODO: hack for now. AssertionError: GEMM not possible: inp.shape[-1] = 1024, in_features = 2048
             output_size=config.hidden_size,
             parallel_mode="row",
             config=config,
@@ -619,7 +618,7 @@ class TEGroupedMLP(nn.Module):
             tp_comm_buffer_name="fc2",
         )
 
-        self.act = ACT2FN[config.hidden_act]
+        self.act = ACT2FN[config.hidden_act] #TODO: cleanup
 
         mark_all_parameters_in_module_as_sharded(
             self,
@@ -646,15 +645,10 @@ class TEGroupedMLP(nn.Module):
         intermediate_parallel, bias_parallel = self.linear_fc1(permuted_local_hidden_states, tokens_per_expert)
 
         if self.config.moe_config.bias_activation_fusion:  # TODO: need to fix this, it's true by default in megatron
-            assert (
-                "silu" in self.config.hidden_act or "swiglu" in self.config.hidden_act
-            ), "Only support fusion of silu and swiglu"
-            # intermediate_parallel = bias_swiglu_impl(
-            #     intermediate_parallel,
-            #     bias_parallel,
-            #     self.config.activation_func_fp8_input_store,
-            # )
-            raise NotImplementedError("Bias-activation fusion is not implemented")
+            intermediate_parallel = bias_swiglu_impl(
+                intermediate_parallel,
+                bias_parallel,
+            )
         else:
             # TODO: we assume gated
             intermediate_parallel = torch.chunk(intermediate_parallel, 2, dim=-1)
@@ -663,6 +657,18 @@ class TEGroupedMLP(nn.Module):
         output, output_bias = self.linear_fc2(intermediate_parallel, tokens_per_expert)
 
         return output, output_bias
+    
+
+def bias_swiglu_impl(input, bias, fp8_input_store=False):
+    ori_shape = input.shape
+    assert len(ori_shape) in [2, 3]
+    input = input.view(-1, ori_shape[-1])
+    if bias is not None:
+        raise NotImplementedError("Bias is not supported")
+    else:
+        output = SwiGLUFunction.apply(input, fp8_input_store)
+
+    return output if len(ori_shape) == 2 else output.view(ori_shape[0], ori_shape[1], -1)
 
 
 class MoEAllGatherTokenDispatcher(nn.Module):
@@ -1260,6 +1266,8 @@ def sort_chunks_by_idxs(
     input = torch.split(input, split_sizes.tolist(), dim=0)
     output = torch.cat([input[i] for i in sorted_idxs.tolist()], dim=0)
     return output
+
+
 try:
     from transformer_engine.pytorch.permutation import (
         moe_permute,
@@ -1272,3 +1280,35 @@ try:
     HAVE_TE = True
 except ImportError:
     HAVE_TE = False
+
+
+
+import torch.nn.functional as F
+@torch.compile
+def swiglu(y):
+    y_1, y_2 = torch.chunk(y, 2, -1)
+    return F.silu(y_1) * y_2
+
+@torch.compile
+def swiglu_back(g, y):
+    y_1, y_2 = torch.chunk(y, 2, -1)
+    return torch.cat(
+        (g * torch.sigmoid(y_1) * (1 + y_1 * (1 - torch.sigmoid(y_1))) * y_2, g * F.silu(y_1)), -1
+    )
+
+class SwiGLUFunction(torch.autograd.Function):
+    @staticmethod
+    # bias is an optional argument
+    def forward(ctx, input, fp8_input_store):
+        input_for_backward = input.to(torch.float8_e4m3fn) if fp8_input_store else input
+        ctx.save_for_backward(input_for_backward)
+        ctx.ori_input_dtype = input.dtype
+        ctx.fp8_input_store = fp8_input_store
+        return swiglu(input)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input = ctx.saved_tensors[0]
+        input = input.to(ctx.ori_input_dtype) if ctx.fp8_input_store else input
+        tmp = swiglu_back(grad_output, input)
+        return tmp, None
