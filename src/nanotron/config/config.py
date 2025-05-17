@@ -27,7 +27,7 @@ from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger, human_format
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
-
+from pprint import pformat
 logger = get_logger(__name__)
 
 DEFAULT_SEED = 42
@@ -317,10 +317,26 @@ class ModelArgs:
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
 
-        self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
+        # Convert model_config to proper type if it's a dict
+        if isinstance(self.model_config, dict):
+            # First convert moe_config if it exists
+            if 'moe_config' in self.model_config and isinstance(self.model_config['moe_config'], dict):
+                from nanotron.config.models_config import MoEConfig
+                self.model_config['moe_config'] = MoEConfig(**self.model_config['moe_config'])
 
-        # if self.model_config.max_position_embeddings is None:
-        #     self.model_config.max_position_embeddings = 0
+            # Then convert the main config
+            if self.model_config.get('is_qwen2_config', False):
+                from nanotron.config.models_config import Qwen2Config
+                self.model_config = Qwen2Config(**self.model_config)
+            elif self.model_config.get('is_llama_config', False):
+                from nanotron.config.models_config import LlamaConfig
+                self.model_config = LlamaConfig(**self.model_config)
+            elif self.model_config.get('is_starcoder2_config', False):
+                from nanotron.config.models_config import Starcoder2Config
+                self.model_config = Starcoder2Config(**self.model_config)
+
+        # Now we can safely set _is_using_mup
+        self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
 
 @dataclass
@@ -541,6 +557,11 @@ class Config:
         assert (
             self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
         ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by num_key_value_heads ({self.model.model_config.num_key_value_heads})"
+
+        if self.model.model_config.moe_config is not None:
+            assert (
+                self.model.model_config.moe_config.num_experts % self.parallelism.expert_parallel_size == 0
+            ), f"num_experts ({self.model.model_config.moe_config.num_experts}) must be divisible by expert_parallel_size ({self.parallelism.expert_parallel_size})"
 
     @property
     def global_batch_size(self):

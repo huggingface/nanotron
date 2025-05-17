@@ -447,6 +447,7 @@ def init_optimizer_and_grad_accumulator(
         model.register_comm_hook(
             state=FP32GradBucketManager(
                 dp_pg=parallel_context.dp_pg,
+                ep_dp_pg=parallel_context.ep_dp_pg if parallel_context.enabled_moe else None,
                 accumulator=grad_accumulator,
                 param_id_to_name={
                     id(param): param.get_tied_info().get_full_name_from_module_id_to_prefix(
