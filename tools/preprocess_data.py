@@ -9,7 +9,7 @@ import argparse
 
 from datatrove.executor.local import LocalPipelineExecutor
 from datatrove.pipeline.readers import HuggingFaceDatasetReader, JsonlReader
-from datatrove.pipeline.tokens import DocumentTokenizer
+from datatrove.pipeline.tokens import DocumentTokenizer, MegatronDocumentTokenizer, DocumentTokenizerMerger
 
 
 def get_args():
@@ -91,6 +91,7 @@ def main(args):
     preprocess_executor = LocalPipelineExecutor(
         pipeline=[
             datatrove_reader,
+            # for nanotron
             DocumentTokenizer(
                 output_folder=args.output_folder,
                 tokenizer_name_or_path=args.tokenizer_name_or_path,
@@ -98,6 +99,20 @@ def main(args):
                 shuffle=False,
                 max_tokens_per_file=1e9,
             ),
+            # optional: merge files
+            # DocumentTokenizerMerger(
+            #     input_folder=args.output_folder,
+            #     output_folder=args.output_folder,
+            #     save_filename="merged",
+            #     shuffle=False,
+            # )
+            # for megatron
+            # MegatronDocumentTokenizer(
+            #     output_folder=args.output_folder,
+            #     tokenizer_name_or_path=args.tokenizer_name_or_path,
+            #     eos_token=args.eos_token,
+            # ),
+
         ],
         tasks=args.n_tasks,
         logging_dir=args.logging_dir,
