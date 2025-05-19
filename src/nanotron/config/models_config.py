@@ -98,6 +98,10 @@ class MoEConfig:
             "megablock_grouped_gemm",
         ], f"Invalid grouped gemm implementation: {self.grouped_gemm_imple}. Available options are: ['transformer_engine', 'megablock_grouped_gemm']"
 
+        if self.top_k == 1 and self.moe_router_score_function == 'softmax' and not self.moe_router_pre_softmax and self.router_load_balancing_type != 'sinkhorn':
+            # https://github.com/NVIDIA/Megatron-LM/blob/28118fcdc22e42621776a021af568ae39c198418/megatron/core/transformer/transformer_config.py#L805-L813
+            raise ValueError("Please use --moe-router-pre-softmax when topk is 1.")
+
 
 @dataclass
 class LlamaConfig:
