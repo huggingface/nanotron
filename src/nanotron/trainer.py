@@ -252,12 +252,19 @@ class DistributedTrainer:
         else:
             data_stages = [
                 DataStageMetadata(
-                    name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0, sequence_length=stage.sequence_length
+                    name=stage.name,
+                    start_training_step=stage.start_training_step,
+                    consumed_train_samples=0,
+                    sequence_length=stage.sequence_length,
                 )
                 for stage in self.config.data_stages
             ]
             self.metadata: TrainingMetadata = TrainingMetadata(
-                consumed_train_samples=0, consumed_tokens_total=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
+                consumed_train_samples=0,
+                consumed_tokens_total=0,
+                last_train_step=0,
+                last_stage_idx=0,
+                data_stages=data_stages,
             )
 
         # Setup tensorboard write and log writers on output rank
@@ -562,22 +569,31 @@ class DistributedTrainer:
                     prof.step()
 
                 self.iteration_start_time = time.time()
+                nanotron_timer("update_dataloader", "cuda", cuda_sync=True).start()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
+                nanotron_timer("update_dataloader", "cuda").end()
 
                 # Training step
+                nanotron_timer("training_step", "cuda", cuda_sync=True).start()
                 outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
+                nanotron_timer("training_step", "cuda").end()
 
                 # Update consumption tracking for current batch
-                if hasattr(self.current_base_dl, "dataset") and hasattr(self.current_base_dl.dataset, "update_consumption_metrics"):
+                nanotron_timer("update_consumption_metrics", "cuda", cuda_sync=True).start()
+                if hasattr(self.current_base_dl, "dataset") and hasattr(
+                    self.current_base_dl.dataset, "update_consumption_metrics"
+                ):
                     # TODO: only works for BlendableDataset
                     self.current_base_dl.dataset.update_consumption_metrics(
-                        start_idx=(self.iteration_step - 1) * self.global_batch_size,  # assumes we start from iteration_step=1
+                        start_idx=(self.iteration_step - 1)
+                        * self.global_batch_size,  # assumes we start from iteration_step=1
                         end_idx=self.iteration_step * self.global_batch_size,
                         sequence_length=self.sequence_length,
                     )
-
+                nanotron_timer("update_consumption_metrics", "cuda").end()
                 # Training Logs
                 # Track consumed tokens for all dataset folders in current stage
+                nanotron_timer("update_consumption_metrics_2", "cuda", cuda_sync=True).start()
                 if hasattr(self.current_base_dl, "dataset"):
                     consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
                     current_stage = self.metadata.data_stages[self.metadata.last_stage_idx]
@@ -585,13 +601,15 @@ class DistributedTrainer:
                     # Update consumed tokens for all folders in the consumption stats
                     for folder_path, stats in consumption_stats.items():
                         current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
-
+                nanotron_timer("update_consumption_metrics_2", "cuda").end()
                 # Original consumption tracking
-                self.metadata.consumed_train_samples += self.global_batch_size # TODO: Legacy: idc abt this
+                self.metadata.consumed_train_samples += self.global_batch_size  # TODO: Legacy: idc abt this
                 self.metadata.consumed_tokens_total += self.global_batch_size * self.sequence_length
                 self.metadata.last_train_step = self.iteration_step
                 self.metadata.current_stage.consumed_train_samples += self.global_batch_size
-                assert self.metadata.current_stage.sequence_length == self.sequence_length, "Sequence length mismatch between the current stage and the global sequence length"
+                assert (
+                    self.metadata.current_stage.sequence_length == self.sequence_length
+                ), "Sequence length mismatch between the current stage and the global sequence length"
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg)
@@ -720,7 +738,9 @@ class DistributedTrainer:
         nanotron_timer("optimizer_step", "cuda").end()
 
         # Update the learning rate
+        nanotron_timer("lr_scheduler_step", "cuda").start()
         self.lr_scheduler.step()
+        nanotron_timer("lr_scheduler_step", "cuda").end()
 
         after_optim_step_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
@@ -746,8 +766,12 @@ class DistributedTrainer:
         z_loss_avg: Optional[torch.Tensor],
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
+        nanotron_timer("train_step_logs_barrier", "cuda").start()
         dist.barrier()
+        nanotron_timer("train_step_logs_barrier", "cuda").end()
+        nanotron_timer("train_step_logs_sync", "cuda").start()
         torch.cuda.synchronize()
+        nanotron_timer("train_step_logs_sync", "cuda").end()
         elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)

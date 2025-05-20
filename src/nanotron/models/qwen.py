@@ -11,6 +11,7 @@ from nanotron import logging
 from nanotron.config import Config, ParallelismArgs
 from nanotron.config.models_config import Qwen2Config, RandomInit, SpectralMupInit
 from nanotron.logging import log_rank
+from nanotron.logging.timers import nanotron_timer
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
@@ -194,6 +195,7 @@ class Qwen2Attention(nn.Module):
         )
         if config._use_qkv_packed:
             from nanotron.nn.rotary import FlashRotaryEmbedding
+
             self.rotary_emb = FlashRotaryEmbedding(
                 dim=self.head_dim,
                 base=config.rope_theta,
@@ -206,7 +208,7 @@ class Qwen2Attention(nn.Module):
                 max_seq_len=config.max_position_embeddings,
                 base=config.rope_theta,
                 interleaved=config.rope_interleaved,
-                seq_len_scaling_factor=config.rope_seq_len_scaling_factor,
+                # seq_len_scaling_factor=config.rope_seq_len_scaling_factor,
                 fused=config._fused_rotary_emb,
             )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
@@ -548,7 +550,6 @@ class Qwen2DecoderLayer(nn.Module):
         norm_class = TritonRMSNorm if config._fused_rms_norm else RMSNorm
         self.input_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = Qwen2Attention(
             config=config,
             parallel_config=parallel_config,
@@ -556,7 +557,6 @@ class Qwen2DecoderLayer(nn.Module):
             cp_pg=cp_pg,
             layer_idx=layer_idx,
         )
-        self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
@@ -724,7 +724,10 @@ class Qwen2Model(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
     ):
+        nanotron_timer("Token position embeddings", timer_type="cuda", cuda_sync=True).start()
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
+        nanotron_timer("Token position embeddings", timer_type="cuda", cuda_sync=True).end()
+
         # Compute cu_seqlens
         if position_ids.numel() > 0:
             start_indices = torch.where(position_ids.view(-1) == 0)[0]
@@ -740,12 +743,18 @@ class Qwen2Model(nn.Module):
             "cu_seqlens": cu_seqlens,
         }
 
+        nanotron_timer("Decoder layer", timer_type="cuda", cuda_sync=True).start()
         for decoder_layer in self.decoder:
             decoder_states = decoder_layer(**decoder_states)
+        nanotron_timer("Decoder layer", timer_type="cuda", cuda_sync=True).end()
 
+        nanotron_timer("Final layer norm", timer_type="cuda", cuda_sync=True).start()
         hidden_states = self.final_layer_norm(input=decoder_states["hidden_states"])["hidden_states"]
+        nanotron_timer("Final layer norm", timer_type="cuda", cuda_sync=True).end()
 
+        nanotron_timer("LM head", timer_type="cuda", cuda_sync=True).start()
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
+        nanotron_timer("LM head", timer_type="cuda", cuda_sync=True).end()
 
         return sharded_logits
 

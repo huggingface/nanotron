@@ -9,6 +9,7 @@ from torch.distributed import GradBucket
 
 import nanotron.distributed as dist
 from nanotron import logging
+from nanotron.logging.timers import nanotron_timer
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
@@ -203,10 +204,14 @@ class FP32GradientAccumulator(GradientAccumulator):
         return fp32_grad_buffers, contiguous_buffer_f32_gradients
 
     def backward(self, loss: torch.Tensor):
+        nanotron_timer("loss backward", timer_type="cuda", cuda_sync=True).start()
         result = loss.backward()
+        nanotron_timer("loss backward", timer_type="cuda", cuda_sync=True).end()
 
+        nanotron_timer("accumulate_grad", timer_type="cuda", cuda_sync=True).start()
         for name, elt in self.fp32_grad_buffers.items():
             self._accumulate_grad(name=name, half_param=elt["half"])
+        nanotron_timer("accumulate_grad", timer_type="cuda", cuda_sync=True).end()
 
         return result
 
