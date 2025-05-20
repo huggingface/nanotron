@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Union
+import os
+from dataclasses import field
 
-from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger
-
+from nanotron.config.parallelism_config import ParallelismArgs
 logger = get_logger(__name__)
 
 DEFAULT_GENERATION_SEED = 42
@@ -51,7 +52,7 @@ class LightEvalLoggingArgs:
 class LightEvalTasksArgs:
     """Arguments related to tasks for LightEval"""
 
-    tasks: Optional[str] = None
+    tasks: str
     custom_tasks: Optional[str] = None
     max_samples: Optional[int] = None
     num_fewshot_seeds: Optional[int] = None
@@ -97,25 +98,21 @@ class LightEvalConfig:
     the saved config when running LightEval after training.
     """
 
-    slurm_script_dir: Optional[Path] = Path("eval_results/launch-config")
-    logs_path: Optional[Path] = Path("eval_results/logs")
+    logs_path: Path
+    nanotron_path: str
+    output_dir: str
     local_checkpoint_dir: Path = Path(
         "/scratch"
     )  # Base directory for temporary checkpoint storage, will store under {local_checkpoint_dir}/{run_name}/{step}
-    parallelism: Optional[ParallelismArgs] = None
-    batch_size: Optional[int] = None
-    generation: Optional[Union[GenerationArgs, Dict[str, GenerationArgs]]] = None
-    tasks: Optional[LightEvalTasksArgs] = None
-    logging: Optional[LightEvalLoggingArgs] = None
+    slurm: LightEvalSlurm = field(default_factory=LightEvalSlurm)
+    tasks: LightEvalTasksArgs = field(default_factory=LightEvalTasksArgs)
     wandb: Optional[LightEvalWandbLoggerConfig] = None
-    slurm: Optional[LightEvalSlurm] = None
-    s3_save_path: Optional[str] = None # should not be dependent of the run_name
+    s3_save_path: Optional[str] = None  # should not be dependent of the run_name
     upload_to_wandb: Optional[bool] = False
     wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None
-    output_dir: Optional[str] = None # we should sanity check that it's the same as the one in the eval_config_override
-    nanotron_path: Optional[str] = "./"
-    lighteval_config_path: Path = None  # Previously hardcoded in run_slurm_one_job
+    parallelism: Optional[ParallelismArgs] = field(default_factory=lambda: ParallelismArgs(dp=1, pp=1, tp=1, tp_linear_async_communication=True))
+    batch_size: Optional[int] = None
     eval_interval: Optional[
         int
     ] = None  # Must be multiple of checkpoint_interval. If None, eval will be done after each checkpoint upload to s3
@@ -124,10 +121,6 @@ class LightEvalConfig:
     ] = None  # If specified, eval_interval will be read from this file upon the next evaluation.
 
     def __post_init__(self):
-        if self.parallelism is None:
-            self.parallelism = ParallelismArgs(dp=1, pp=1, tp=1, tp_linear_async_communication=True)
-        if self.slurm is None:
-            self.slurm = LightEvalSlurm()
         self.local_checkpoint_dir = str(Path(self.local_checkpoint_dir).expanduser())
         if self.upload_to_wandb:
             assert self.s3_save_path is not None, " We should have a s3_save_path if we want to upload to wandb" # todo: add the option to read from local folder i guess

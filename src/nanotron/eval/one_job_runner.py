@@ -5,7 +5,7 @@ import math
 import os
 import subprocess
 from typing import List, Optional, Tuple
-
+import yaml
 from datasets.download.streaming_download_manager import xPath
 
 from nanotron import logging
@@ -24,7 +24,7 @@ class LightEvalRunner:
         self.lighteval_config = config.lighteval
         self.parallel_context = parallel_context
 
-    def eval_single_checkpoint(self, uploaded_files: List[dict]) -> Tuple[str, str]:
+    def eval_single_checkpoint(self, uploaded_files: List[dict]) -> Optional[Tuple[str, str]]:
         """Run light evaluation on uploaded files."""
         if (
             self.config.lighteval.eval_interval is not None
@@ -68,8 +68,10 @@ class LightEvalRunner:
                 current_step=self.config.general.step,
             )
         else:
-            logger.warning(f"Skipping evaluation at step {self.config.general.step} because it's not a multiple of {self.lighteval_config.eval_interval}")
-            return None, None
+            logger.warning(
+                f"Skipping evaluation at step {self.config.general.step} because it's not a multiple of {self.lighteval_config.eval_interval}"
+            )
+            return
 
         return slurm_job_id, slurm_log
 
@@ -110,17 +112,45 @@ def run_slurm_one_job(
     run_name = f"{timestamp}-eval_{general_run_name}".replace(" ", "_")
 
     # Use lighteval config paths if available, otherwise use defaults
-    eval_launch_script_path = lighteval_config.slurm_script_dir
-    eval_logs_path = lighteval_config.logs_path
-    eval_launch_script_path = os.path.join(eval_launch_script_path, general_run_name, f"step-{current_step}")
-    eval_logs_path = os.path.join(eval_logs_path, general_run_name, f"step-{current_step}")
+    eval_launch_script_path = os.path.join(lighteval_config.logs_path, general_run_name, "launch_scripts", f"step-{current_step}")
+    eval_logs_path = os.path.join(lighteval_config.logs_path, general_run_name, "logs", f"step-{current_step}")
+    launch_config_path = os.path.join(lighteval_config.logs_path, general_run_name, "launch_config", f"step-{current_step}")
+
+    # Use configured local path instead of hardcoded /tmp
+    local_path = os.path.join(lighteval_config.local_checkpoint_dir, run_name, str(current_step))
+
+    # HF model directory
+    hf_model_dir = f"{local_path}/hf_model"
+
 
     # Create directories
     os.makedirs(eval_launch_script_path, exist_ok=True)
     os.makedirs(eval_logs_path, exist_ok=True)
+    os.makedirs(launch_config_path, exist_ok=True)
 
-    # Use configured local path instead of hardcoded /tmp
-    local_path = os.path.join(lighteval_config.local_checkpoint_dir, run_name, str(current_step))
+
+    lighteval_config_yaml = {
+        "model": {
+            "base_params": {
+                "base_model": f"{hf_model_dir}",
+                "batch_size": lighteval_config.batch_size,
+                "trust_remote_code": True,
+                "max_gen_toks": None,
+                "generation_parameters": {
+                    "repetition_penalty": 1.2,
+                }
+        }
+        }
+    }
+
+    # Write the script to file
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    # Create a launch config file
+    lighteval_launch_config_path = os.path.join(launch_config_path, f"launch_config-{current_time}.yaml")
+    with open(lighteval_launch_config_path, "w") as f:
+        yaml.dump(lighteval_config_yaml, f)
+
     nanotron_path = lighteval_config.nanotron_path
     # Create the SLURM script content
     slurm_script = f"""#!/bin/bash
@@ -228,21 +258,39 @@ else
     fi
 fi
 
+# Convert Nanotron checkpoint to HuggingFace format
+CURRENT_DIR=$(pwd)
+
+# Change to nanotron directory 
+cd {nanotron_path}
+
+# Run conversion script
+# TODO: Change this so thtat we don't have to run it from the nanotron directory
+torchrun --standalone --nproc_per_node=1 -m examples.llama.convert_nanotron_to_hf \\
+    --checkpoint_path=$LOCAL_DOWNLOAD_CHECKPOINT_FOLDER \\
+    --save_path=$LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/hf_model \\
+    --check_conversion
+
+# Change back to original directory
+cd $CURRENT_DIR
+
 echo "Contents of checkpoint directory:"
 ls -la $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/
 
 # Add random sleep to avoid hub request conflicts
 # sleep $(( RANDOM % 300 ))
 
-CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun \\
-    --nproc_per_node {slurm_config.gpus_per_node} \\
-    --nnodes $COUNT_NODE \\
-    --node_rank $SLURM_PROCID \\
-    --master_addr $MASTER_ADDR \\
-    --master_port $MASTER_PORT \\
-    -m lighteval nanotron \\
-    --checkpoint-config-path $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/config.yaml \\
-    --lighteval-config-path {lighteval_config.lighteval_config_path}
+# TODO: Ensure to only use args that are not None
+CUDA_DEVICE_MAX_CONNECTIONS=1 accelerate launch \\
+    --multi_gpu \\
+    --num_processes {slurm_config.gpus_per_node} \\
+    -m lighteval accelerate \\
+    --custom-tasks {lighteval_config.tasks.custom_tasks} \\
+    --dataset-loading-processes {lighteval_config.tasks.dataset_loading_processes} \\
+    --max-samples {lighteval_config.tasks.max_samples} \\
+    --output-dir {lighteval_config.output_dir} \\
+    {lighteval_launch_config_path} \\
+    {lighteval_config.tasks}
     """
     if lighteval_config.output_dir is not None and lighteval_config.s3_save_path is not None:
         slurm_script += f"""
@@ -267,8 +315,6 @@ echo "Cleanup completed"
 echo "END TIME: $(date)"
 """
 
-    # Write the script to file
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     launch_script_path = os.path.join(eval_launch_script_path, f"launch_script-{current_time}.slurm")
     os.makedirs(os.path.dirname(launch_script_path), exist_ok=True)
 

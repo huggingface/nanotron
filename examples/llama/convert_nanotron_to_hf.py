@@ -4,23 +4,26 @@ Command:
     torchrun --nproc_per_node=1 convert_nanotron_to_hf.py --checkpoint_path=nanotron-path --save_path=hf-path
 """
 
+from dataclasses import dataclass
 import json
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import Literal, Optional, Type
+from dacite import from_dict
+import yaml
 
 import torch
 from nanotron.config import LlamaConfig as NanotronLlamaConfig, Qwen2Config as NanotronQwen2Config
-from nanotron.config import NanotronConfigs
+from nanotron.config import TokenizerArgs, ModelArgs, NanotronConfigs
 from nanotron.models import init_on_device_and_dtype
 from nanotron.models.llama import LlamaForTraining
 from transformers import AutoTokenizer, LlamaForCausalLM
+from nanotron.config.config import get_config_from_dict
 from transformers import LlamaConfig as HFLlamaConfig
 
 from .convert_weights import get_config_mapping, get_weight_mapping, load_nanotron_model
 
 TEST_PROMPT = "What is the meaning of the word chutzpah?\nThe word chutzpah means"
-
 
 def _handle_attention_block(
     qkv: torch.Tensor,
@@ -115,17 +118,16 @@ def get_hf_config(config: NanotronLlamaConfig) -> HFLlamaConfig:
 def convert_checkpoint_and_save(
     checkpoint_path: Path,
     save_path: Path,
-    tokenizer_name: Optional[str] = None,
-    config_cls: Type[NanotronConfigs] = NanotronLlamaConfig,
 ):
     """Loads the nanotron checkpoint in `checkpoint_path`, creates
     a new huggingface instance, copies the weights from the nanotron checkpoint
     and saves the transformed huggingface to `save_path`."""
 
-    # Init nanotron model.
-    with open(checkpoint_path / "model_config.json", "r") as f:
-        attrs = json.load(f)
-        model_config = config_cls(**attrs)
+    with open(checkpoint_path / "config.yaml", "r") as f:
+        nanotron_config = yaml.safe_load(f)
+
+    model_config = get_config_from_dict(nanotron_config["model"], ModelArgs).model_config
+    tokenizer = get_config_from_dict(nanotron_config["tokenizer"], TokenizerArgs)
     nanotron_model = load_nanotron_model(
         model_config=model_config,
         checkpoint_path=checkpoint_path,
@@ -136,9 +138,8 @@ def convert_checkpoint_and_save(
         hf_model = LlamaForCausalLM._from_config(model_config_hf)
 
     # Copy weights, initialize tokenizer and save model.
-    if tokenizer_name is not None:
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        tokenizer.save_pretrained(save_path)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer.tokenizer_name_or_path)
+    tokenizer.save_pretrained(save_path)
     convert_nt_to_hf(nanotron_model, hf_model, model_config)
     hf_model.save_pretrained(save_path)
     print(f"Model saved to {save_path}")
@@ -153,7 +154,7 @@ def check_converted_model_generation(save_path: Path):
     print("Inputs:", tokenizer.batch_decode(input_ids))
 
     model = LlamaForCausalLM.from_pretrained(save_path).cuda().bfloat16()
-    out = model.generate(input_ids, max_new_tokens=100)
+    out = model.generate(input_ids, max_new_tokens=100, do_sample=False, temperature=0.1, repetition_penalty=1.2)
     print("Generation (converted): ", tokenizer.batch_decode(out))
 
 
@@ -161,22 +162,14 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Convert Nanotron weights to HF format")
     parser.add_argument("--checkpoint_path", type=Path, default="llama-7b", help="Path to the checkpoint")
     parser.add_argument("--save_path", type=Path, default="llama-7b-hf", help="Path to save the HF model")
-    parser.add_argument("--tokenizer_name", type=str, default="meta-llama/Llama-2-7b-chat-hf")
-    parser.add_argument("--config_cls", type=str, default="LlamaConfig", help="Config class to use for conversion (Either LlamaConfig or Qwen2Config)")
+    parser.add_argument("--check_conversion", action="store_true", help="Check if the conversion was successful by generating some text")
     args = parser.parse_args()
-
-    if args.config_cls == "LlamaConfig":
-        config_cls = NanotronLlamaConfig
-    elif args.config_cls == "Qwen2Config":
-        config_cls = NanotronQwen2Config
-    else:
-        raise ValueError(f"Invalid config class: {args.config_cls}. Should be one of [NanotronLlamaConfig, NanotronQwen2Config]")
 
     # Convert Nanotron model to HF format.
     convert_checkpoint_and_save(
-        checkpoint_path=args.checkpoint_path, save_path=args.save_path, tokenizer_name=args.tokenizer_name, config_cls=config_cls
+        checkpoint_path=args.checkpoint_path, save_path=args.save_path
     )
 
     # Check if the conversion was successful by generating some text.
-    if args.tokenizer_name is not None:
+    if args.check_conversion:
         check_converted_model_generation(save_path=args.save_path)

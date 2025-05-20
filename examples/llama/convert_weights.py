@@ -4,7 +4,7 @@ from typing import Optional
 
 import nanotron
 import torch
-from nanotron.config import LlamaConfig as NanotronLlamaConfig
+from nanotron.config import LlamaConfig as NanotronLlamaConfig, Qwen2Config as NanotronQwen2Config
 from nanotron.config import (
     NanotronConfigs,
     OneForwardOneBackwardPipelineEngine,
@@ -110,11 +110,10 @@ def make_parallel_config(
 
 
 def load_nanotron_model(
-    model_config: Optional[NanotronConfigs] = None,
+    model_config: NanotronConfigs,
     device: torch.device = torch.device("cuda"),
     dtype: torch.dtype = torch.bfloat16,
     checkpoint_path: Optional[Path] = None,
-    config_cls: Optional[NanotronConfigs] = NanotronLlamaConfig,
 ) -> LlamaForTraining:
     """
     Creates and returns a nanotron model.
@@ -124,17 +123,13 @@ def load_nanotron_model(
     the model created will have random weights.
     """
 
-    if model_config is None:
-        assert checkpoint_path is not None
-        with open(checkpoint_path / "model_config.json") as f:
-            model_config = config_cls(**json.load(f))
     parallel_config = make_parallel_config()
     parallel_context = nanotron.parallel.ParallelContext(
         data_parallel_size=parallel_config.dp,
         pipeline_parallel_size=parallel_config.pp,
         tensor_parallel_size=parallel_config.tp,
     )
-    if config_cls == NanotronLlamaConfig:
+    if isinstance(model_config, NanotronLlamaConfig):
         nanotron_model = nanotron.models.build_model(
             model_builder=lambda: LlamaForTraining(
                 config=model_config,
@@ -146,7 +141,7 @@ def load_nanotron_model(
             dtype=dtype,
             device=device,
         )
-    else:
+    elif isinstance(model_config, NanotronQwen2Config):
         nanotron_model = nanotron.models.build_model(
             model_builder=lambda: Qwen2ForTraining(
                 config=model_config,
@@ -158,6 +153,8 @@ def load_nanotron_model(
             dtype=dtype,
             device=device,
         )
+    else:
+        raise ValueError(f"Invalid model config: {model_config}")
     mark_tied_parameters(model=nanotron_model, parallel_context=parallel_context)
     # Load checkpoint directly in memory and then only keep the state dictionary
     if checkpoint_path is not None:
