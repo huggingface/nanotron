@@ -15,10 +15,14 @@ from nanotron.nn.moe import GroupedMLP
 from nanotron.nn.moe_utils import scatter_to_tensor_group
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.sharded_parameters import SplitConfig, mark_all_parameters_in_module_as_sharded
-from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import differentiable_all_gather
+from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import (
+    all_to_all,
+    differentiable_all_gather,
+    differentiable_reduce_scatter_sum,
+)
 from nanotron.parallel.tensor_parallel.enum import TensorParallelLinearMode
+
 from .moe_utils import get_capacity
-from nanotron.parallel.tensor_parallel.distributed_differentiable_primitives import all_to_all, differentiable_reduce_scatter_sum
 
 logger = logging.get_logger(__name__)
 from .moe_utils import permute, topk_softmax_with_capacity, unpermute
@@ -122,7 +126,7 @@ class Qwen2MoEMLPLayer(nn.Module):
                 config=self.config,
                 parallel_context=parallel_context,
             )
-        else: # TODO: alltoall
+        else:  # TODO: alltoall
             raise ValueError(f"Unsupported token dispatcher type: {self.config.moe_config.token_dispatcher_type}")
 
         # Enable shared experts if configured
@@ -179,12 +183,18 @@ class Qwen2MoEMLPLayer(nn.Module):
         # )
         (dispatched_input, tokens_per_expert) = self.token_dispatcher.token_permutation(hidden_states, probs, indices)
 
-        if self.config.moe_config.grouped_gemm_imple == "transformer_engine":
-            expert_output, mlp_bias = self.experts(dispatched_input, tokens_per_expert)
-        elif self.config.moe_config.grouped_gemm_imple == "megablock_grouped_gemm":
-            expert_output = self.experts(dispatched_input, tokens_per_expert)
-            expert_output = expert_output["hidden_states"]
+        # NOTE: if there are no tokens routed to this expert device
+        # then we just skip the computation
+        if dispatched_input.shape[0] == 0:
+            expert_output = dispatched_input
             mlp_bias = None
+        else:
+            if self.config.moe_config.grouped_gemm_imple == "transformer_engine":
+                expert_output, mlp_bias = self.experts(dispatched_input, tokens_per_expert)
+            elif self.config.moe_config.grouped_gemm_imple == "megablock_grouped_gemm":
+                expert_output = self.experts(dispatched_input, tokens_per_expert)
+                expert_output = expert_output["hidden_states"]
+                mlp_bias = None
 
         output, mlp_bias = self.token_dispatcher.token_unpermutation(expert_output, mlp_bias)
 
@@ -296,7 +306,7 @@ class TopKRouter(nn.Module):
             group_topk=self.config.moe_config.moe_router_group_topk,
             scaling_factor=self.config.moe_config.moe_router_topk_scaling_factor,
             score_function=self.config.moe_config.moe_router_score_function,
-            expert_bias=False, # TODO: no bias
+            expert_bias=False,  # TODO: no bias
         )
 
         # Apply load balancing loss
@@ -606,7 +616,8 @@ class TEGroupedMLP(nn.Module):
 
         self.linear_fc2 = TEGroupedLinear(  # TERowParallelGroupedLinear
             num_gemms=self.num_local_experts,
-            input_size=ffn_hidden_size // 2,  # TODO: hack for now. AssertionError: GEMM not possible: inp.shape[-1] = 1024, in_features = 2048
+            input_size=ffn_hidden_size
+            // 2,  # TODO: hack for now. AssertionError: GEMM not possible: inp.shape[-1] = 1024, in_features = 2048
             output_size=config.hidden_size,
             parallel_mode="row",
             config=config,
@@ -618,7 +629,7 @@ class TEGroupedMLP(nn.Module):
             tp_comm_buffer_name="fc2",
         )
 
-        self.act = ACT2FN[config.hidden_act] #TODO: cleanup
+        self.act = ACT2FN[config.hidden_act]  # TODO: cleanup
 
         mark_all_parameters_in_module_as_sharded(
             self,
@@ -657,7 +668,7 @@ class TEGroupedMLP(nn.Module):
         output, output_bias = self.linear_fc2(intermediate_parallel, tokens_per_expert)
 
         return output, output_bias
-    
+
 
 def bias_swiglu_impl(input, bias, fp8_input_store=False):
     ori_shape = input.shape
@@ -857,7 +868,6 @@ class MoEAllGatherTokenDispatcher(nn.Module):
         return output_total, output_bias_total
 
 
-
 class MoEAlltoAllTokenDispatcher(nn.Module):
     """
     AlltoAll-based token dispatcher.
@@ -869,7 +879,11 @@ class MoEAlltoAllTokenDispatcher(nn.Module):
     """
 
     def __init__(
-        self, num_local_experts: int, local_expert_indices: List[int], config: Qwen2Config, parallel_context: ParallelContext
+        self,
+        num_local_experts: int,
+        local_expert_indices: List[int],
+        config: Qwen2Config,
+        parallel_context: ParallelContext,
     ) -> None:
         """
         Initialize the AlltoAll token dispatcher.
@@ -892,13 +906,11 @@ class MoEAlltoAllTokenDispatcher(nn.Module):
         self.num_experts = config.moe_config.num_experts
         assert self.num_local_experts > 0, "Expected at least one expert"
         self.local_expert_indices = local_expert_indices
-        assert (
-            len(self.local_expert_indices) == self.num_local_experts
-        ), "Invalid local expert indices"
+        assert len(self.local_expert_indices) == self.num_local_experts, "Invalid local expert indices"
         for i in range(len(self.local_expert_indices) - 1):
             assert (
                 self.local_expert_indices[i] == self.local_expert_indices[i + 1] - 1
-            ), "local_expert_indices must be continous"
+            ), "local_expert_indices must be continuous"
 
         # [ep_size]. Represents the number of tokens sent by the current rank to other
         # EP ranks.
@@ -910,17 +922,11 @@ class MoEAlltoAllTokenDispatcher(nn.Module):
         # other TP ranks.
         self.output_splits_tp = None
         self.permute_idx_device = torch.device("cuda") if self.config.moe_config.permute_fusion else None
-        input_chunk_idxs = torch.arange(
-            self.num_experts * self.etp_size, device=self.permute_idx_device
-        )
+        input_chunk_idxs = torch.arange(self.num_experts * self.etp_size, device=self.permute_idx_device)
         # [num_local_experts, tp_size * ep_size]. Sort the input chunks by local experts.
-        self.sort_input_by_local_experts = input_chunk_idxs.reshape(
-            -1, self.num_local_experts
-        ).T.ravel()
+        self.sort_input_by_local_experts = input_chunk_idxs.reshape(-1, self.num_local_experts).T.ravel()
         # [tp_size * ep_size, num_local_experts]. Restore the output chunks by local experts.
-        self.restore_output_by_local_experts = input_chunk_idxs.reshape(
-            self.num_local_experts, -1
-        ).T.ravel()
+        self.restore_output_by_local_experts = input_chunk_idxs.reshape(self.num_local_experts, -1).T.ravel()
 
         # Token drop and padding.
         # Drop and pad the input to capacity.
@@ -929,6 +935,9 @@ class MoEAlltoAllTokenDispatcher(nn.Module):
             assert self.config.moe_config.moe_expert_capacity_factor is not None
             self.moe_expert_capacity_factor = self.config.moe_config.moe_expert_capacity_factor
         self.capacity = None
+        # NOTE: since we don't have etp, assume expert tensor parallel size is always 1
+        # NOTE: https://github.com/NVIDIA/Megatron-LM/blob/28118fcdc22e42621776a021af568ae39c198418/megatron/core/transformer/moe/token_dispatcher.py#L60-L68
+        self.tp_rank = 0
 
         # A cuda stream synchronization is needed in self.token_permutation() in some cases,
         # because there are several non-blocking DtoH data transfers called in self.preprocess().
@@ -985,9 +994,7 @@ class MoEAlltoAllTokenDispatcher(nn.Module):
             # Drop tokens to capacity, no padding.
             # A synchronization is needed before the first
             # permutation to get the `num_out_tokens` CPU value.
-            self.num_out_tokens = num_local_tokens_per_expert.sum().to(
-                torch.device("cpu"), non_blocking=True
-            )
+            self.num_out_tokens = num_local_tokens_per_expert.sum().to(torch.device("cpu"), non_blocking=True)
             self.cuda_sync_point = "before_permutation_1"
         else:
             # Dropless
@@ -1019,9 +1026,7 @@ class MoEAlltoAllTokenDispatcher(nn.Module):
             # [tp_size, ep_size, num_experts]
             # TODO: do i need this when etp_size==1?
             num_global_tokens_per_expert = (
-                differentiable_all_gather(
-                    num_local_tokens_per_expert, group=self.ep_tp_pg
-                )
+                differentiable_all_gather(num_local_tokens_per_expert, group=self.ep_tp_pg)
                 .reshape(self.ep_size, self.etp_size, self.num_experts)
                 .transpose(0, 1)
             )
@@ -1035,29 +1040,21 @@ class MoEAlltoAllTokenDispatcher(nn.Module):
             # self.output_splits represents the number of tokens received by the current rank
             # from other EP rank.
             self.output_splits = (
-                num_global_tokens_per_rank[self.tp_rank]
-                .to(torch.device("cpu"), non_blocking=True)
-                .numpy()
+                num_global_tokens_per_rank[self.tp_rank].to(torch.device("cpu"), non_blocking=True).numpy()
             )
             # [tp_size, ep_size] -> [tp_size]
             # self.output_splits_tp represents the number of tokens received by the current
             # rank from other TP rank.
             self.output_splits_tp = (
-                num_global_tokens_per_rank.sum(axis=1)
-                .to(torch.device("cpu"), non_blocking=True)
-                .numpy()
+                num_global_tokens_per_rank.sum(axis=1).to(torch.device("cpu"), non_blocking=True).numpy()
             )
             # [tp_size, ep_size, num_local_experts] -> [num_local_experts]
             num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(dim=(0, 1)).to(
                 torch.device("cpu"), non_blocking=True
             )
         else:
-            num_global_tokens_per_local_expert = num_local_tokens_per_expert.reshape(
-                self.num_experts
-            )
-            num_tokens_per_local_expert = num_local_tokens_per_expert.to(
-                torch.device("cpu"), non_blocking=True
-            )
+            num_global_tokens_per_local_expert = num_local_tokens_per_expert.reshape(self.num_experts)
+            num_tokens_per_local_expert = num_local_tokens_per_expert.to(torch.device("cpu"), non_blocking=True)
 
         if self.num_local_experts > 1:
             # [tp_size * ep_size, num_local_experts]. Represents the number of tokens sent
@@ -1066,10 +1063,8 @@ class MoEAlltoAllTokenDispatcher(nn.Module):
                 -1, self.num_local_experts
             )
             if not self.config.moe_config.permute_fusion:
-                self.num_global_tokens_per_local_expert = (
-                    self.num_global_tokens_per_local_expert.to(
-                        torch.device("cpu"), non_blocking=True
-                    )
+                self.num_global_tokens_per_local_expert = self.num_global_tokens_per_local_expert.to(
+                    torch.device("cpu"), non_blocking=True
                 )
 
         return num_tokens_per_local_expert
@@ -1224,9 +1219,7 @@ class MoEAlltoAllTokenDispatcher(nn.Module):
 
         # Perform expert parallel AlltoAll communication
         # hidden_states: [SEQL, H] -> [SEQL, H/TP]
-        permutated_local_input_tokens = all_to_all(
-            hidden_states, self.input_splits, self.output_splits, self.ep_pg
-        )
+        permutated_local_input_tokens = all_to_all(hidden_states, self.input_splits, self.output_splits, self.ep_pg)
         if self.shared_experts is not None:
             self.shared_experts.linear_fc2_forward(permutated_local_input_tokens)
             self.shared_experts.post_forward_comm()
@@ -1258,9 +1251,7 @@ def sort_chunks_by_idxs(
     """Split and sort the input tensor based on the split_sizes and sorted indices."""
     if fused:
         if not HAVE_TE or fused_sort_chunks_by_index is None:
-            raise ValueError(
-                "fused_sort_chunks_by_index is not available. Please install TE >= 2.1.0."
-            )
+            raise ValueError("fused_sort_chunks_by_index is not available. Please install TE >= 2.1.0.")
         return fused_sort_chunks_by_index(input, split_sizes, sorted_idxs)
 
     input = torch.split(input, split_sizes.tolist(), dim=0)
@@ -1274,6 +1265,7 @@ try:
         moe_sort_chunks_by_index,
         moe_unpermute,
     )
+
     fused_permute = moe_permute
     fused_unpermute = moe_unpermute
     fused_sort_chunks_by_index = moe_sort_chunks_by_index
@@ -1282,19 +1274,20 @@ except ImportError:
     HAVE_TE = False
 
 
-
 import torch.nn.functional as F
+
+
 @torch.compile
 def swiglu(y):
     y_1, y_2 = torch.chunk(y, 2, -1)
     return F.silu(y_1) * y_2
 
+
 @torch.compile
 def swiglu_back(g, y):
     y_1, y_2 = torch.chunk(y, 2, -1)
-    return torch.cat(
-        (g * torch.sigmoid(y_1) * (1 + y_1 * (1 - torch.sigmoid(y_1))) * y_2, g * F.silu(y_1)), -1
-    )
+    return torch.cat((g * torch.sigmoid(y_1) * (1 + y_1 * (1 - torch.sigmoid(y_1))) * y_2, g * F.silu(y_1)), -1)
+
 
 class SwiGLUFunction(torch.autograd.Function):
     @staticmethod

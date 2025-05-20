@@ -141,9 +141,13 @@ def dummy_infinite_data_generator(
         import joblib
 
         sample_batch = joblib.load("/fsx/nouamane/projects/OLMoE/sample_batch.pkl")
-        assert (
-            sample_batch["input_ids"].shape == (micro_batch_size, sequence_length)
-        ), f"input_ids.shape: {sample_batch['input_ids'].shape}, sample_batch['input_ids'].shape: {sample_batch['input_ids'].shape}"
+        if sample_batch["input_ids"].shape[0] != micro_batch_size:
+            sample_batch["input_ids"] = sample_batch["input_ids"][:micro_batch_size]
+
+        assert sample_batch["input_ids"].shape == (
+            micro_batch_size,
+            sequence_length,
+        ), f"input_ids.shape: {sample_batch['input_ids'].shape}, micro_batch_size: {micro_batch_size}, sequence_length: {sequence_length}"
         input_ids = sample_batch["input_ids"].to(device="cuda")
         position_ids = torch.arange(sequence_length, device="cuda").repeat(micro_batch_size, 1)
         # shift label_ids
