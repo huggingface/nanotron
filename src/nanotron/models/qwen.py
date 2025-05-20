@@ -370,7 +370,6 @@ class Qwen2DecoderLayer(nn.Module):
         norm_class = TritonRMSNorm if config._fused_rms_norm else RMSNorm
         self.input_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = Qwen2Attention(
             config=config,
             parallel_config=parallel_config,
@@ -378,7 +377,6 @@ class Qwen2DecoderLayer(nn.Module):
             cp_pg=cp_pg,
             layer_idx=layer_idx,
         )
-        self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
