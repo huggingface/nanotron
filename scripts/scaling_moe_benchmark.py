@@ -32,32 +32,32 @@ def generate_scaling_configs(
         for nl in num_layers:
             for lr in learning_rates:
                 # Calculate data parallel size based on number of nodes
-                dp_size = gpus_per_node * nodes
+                world_size = gpus_per_node * nodes
+                dp_replicas = world_size
 
                 # Calculate accumulation steps needed to approach target GBS
                 # GBS = seq_len * mbs * dp_size * accum
-                ideal_accum = target_gbs / (seq_len * mbs * dp_size)
+                ideal_accum = target_gbs / (seq_len * mbs * dp_replicas)
 
                 # Round to nearest integer, minimum of 1
                 # For smaller batch sizes, round up to ensure we meet minimum target
                 accum = max(1, int(np.ceil(ideal_accum)))
 
                 # Calculate actual GBS with this configuration
-                actual_gbs = seq_len * mbs * dp_size * accum
+                actual_gbs = seq_len * mbs * dp_replicas * accum
 
                 # Calculate batch size per replica
                 bs_per_replica = seq_len * mbs
 
                 # Calculate ep and edp values
                 ep = 8
-                world_size = dp_size
                 edp = world_size // ep
 
                 # Store configuration
                 configs.append(
                     {
                         "Nodes": nodes,
-                        "GPUs": dp_size,
+                        "GPUs": world_size,
                         "MicroBatchSize": mbs,
                         "SequenceLength": seq_len,
                         "AccumSteps": accum,
