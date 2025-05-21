@@ -171,8 +171,11 @@ class DistributedTrainer:
             tensor_parallel_size=self.config.parallelism.tp,
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
-            expert_parallel_size=self.config.parallelism.expert_parallel_size,
             context_parallel_size=self.config.parallelism.context_parallel_size,
+            expert_parallel_size=self.config.parallelism.expert_parallel_size,
+            expert_tensor_parallel_size=self.config.parallelism.expert_tensor_parallel_size,
+            expert_data_parallel_size=self.config.parallelism.expert_data_parallel_size,
+            enabled_moe=self.config.parallelism.enabled_moe,
         )
 
         self.pre_init()
@@ -261,7 +264,7 @@ class DistributedTrainer:
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
+            pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -534,6 +537,70 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
+
+        # vocab_embeddings = self.config.model.model_config.vocab_size * self.config.model.model_config.hidden_size * (1 if self.config.model.model_config.tie_word_embeddings else 2)
+
+        # # num_expert * hidden_size *
+        attn_params = (
+            self.config.model.model_config.hidden_size
+            * self.config.model.model_config.hidden_size
+            * (
+                1
+                + 2
+                * self.config.model.model_config.num_key_value_heads
+                / self.config.model.model_config.num_attention_heads
+            )
+        )
+
+        def compute_grouped_mlp_params(config, topk: Optional[int] = None) -> int:
+            if topk is None:
+                topk = config.moe_config.num_experts
+
+            moe_config = config.moe_config
+            # num_experts = moe_config.num_experts
+
+            # Parameters in merged_gate_up_proj
+            gate_up_params = topk * moe_config.moe_hidden_size * (2 * moe_config.moe_intermediate_size)
+
+            # Parameters in merged_down_proj
+            down_params = topk * moe_config.moe_intermediate_size * moe_config.moe_hidden_size
+
+            # Total parameters
+            total_params = gate_up_params + down_params
+
+            return total_params
+
+        mlp_params = compute_grouped_mlp_params(self.config.model.model_config)
+        moe_mlp_params = compute_grouped_mlp_params(
+            self.config.model.model_config, topk=self.config.model.model_config.moe_config.top_k
+        )
+
+        # mlp_params = (self.config.model.model_config.hidden_size * self.config.model.model_config.hidden_size)     # out_proj
+        # + (self.config.model.model_config.hidden_size * 2 * self.config.model.model_config.intermediate_size) # gate_up_proj
+        # + (self.config.model.model_config.intermediate_size * self.config.model.model_config.hidden_size)
+        # moe_mlp_params = (self.config.model.model_config.hidden_size * 2 * self.config.model.model_config.intermediate_size) # gate_up_proj
+        # layer_params = (
+        #     (self.config.model.model_config.hidden_size * self.config.model.model_config.hidden_size * (1 + 2*self.config.model.model_config.num_key_value_heads/self.config.model.model_config.num_attention_heads))  # qkv_proj
+        #     + (self.config.model.model_config.hidden_size * self.config.model.model_config.hidden_size)     # out_proj
+        #     + (self.config.model.model_config.hidden_size * 2 * self.config.model.model_config.intermediate_size) # gate_up_proj
+        #     + (self.config.model.model_config.intermediate_size * self.config.model.model_config.hidden_size)      # down_proj
+        # )
+        layer_params = attn_params + mlp_params
+        moe_layer_params = attn_params + moe_mlp_params
+        total_params = (
+            self.config.model.model_config.vocab_size + self.config.model.model_config.num_hidden_layers * layer_params
+        )
+        total_active_params = (
+            self.config.model.model_config.vocab_size
+            + self.config.model.model_config.num_hidden_layers * moe_layer_params
+        )
+        # params_billions = total_params / 1_000_000_000
+        # log_rank(f"Total params: {params_billions}B", logger=logger, level=logging.INFO, rank=0)
+        log_rank(f"Total params: {total_params/1_000_000_000}B", logger=logger, level=logging.INFO, rank=0)
+        log_rank(
+            f"Total active params: {total_active_params/1_000_000_000}B", logger=logger, level=logging.INFO, rank=0
+        )
+
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
@@ -573,7 +640,9 @@ class DistributedTrainer:
                 outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
 
                 # Update consumption tracking for current batch
-                if hasattr(self.current_base_dl, "dataset"):
+                if hasattr(self.current_base_dl, "dataset") and hasattr(
+                    self.current_base_dl.dataset, "update_consumption_metrics"
+                ):
                     self.current_base_dl.dataset.update_consumption_metrics(
                         start_idx=(self.iteration_step - 1)
                         * self.global_batch_size,  # assumes we start from iteration_step=1
@@ -583,7 +652,9 @@ class DistributedTrainer:
 
                 # Training Logs
                 # Track consumed tokens for all dataset folders in current stage
-                if hasattr(self.current_base_dl, "dataset"):
+                if hasattr(self.current_base_dl, "dataset") and hasattr(
+                    self.current_base_dl.dataset, "get_consumption_stats"
+                ):
                     consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
                     current_stage = self.metadata.data_stages[self.metadata.last_stage_idx]
 
@@ -599,7 +670,11 @@ class DistributedTrainer:
                 ].consumed_train_samples += self.global_batch_size
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
-                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg)
+                    self.train_step_logs(
+                        outputs=outputs,
+                        loss_avg=loss_avg,
+                        z_loss_avg=z_loss_avg,
+                    )
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -615,6 +690,8 @@ class DistributedTrainer:
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
+        # dist.barrier()
+        # log_rank(f"training_step {self.iteration_step}", logger=logger, level=logging.INFO)
         before_tbi_sanity_checks(
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.lr_scheduler
         )
@@ -633,8 +710,8 @@ class DistributedTrainer:
             )
         nanotron_timer("train_batch_iter", "cuda").end()
 
-        if self.iteration_step < self.initial_iter_step + 5:
-            log_memory(logger=logger, msg="After train_batch_iter")
+        # if self.iteration_step < self.initial_iter_step + 5:
+        #     log_memory(logger=logger, msg="After train_batch_iter")
 
         after_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
@@ -649,6 +726,8 @@ class DistributedTrainer:
             else:
                 self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
+        # dist.barrier()
+        # log_rank(f"sync_gradients {self.iteration_step}", logger=logger, level=logging.INFO)
         nanotron_timer("sync_gradients", "cuda").start()
         # Sync tied weights
         if not isinstance(self.model, DistributedDataParallel):
@@ -699,6 +778,7 @@ class DistributedTrainer:
                 ).sum()  # already divided by n_micro_batches_per_batch
             else:
                 z_loss_avg = None
+
             # sync loss across DP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
             handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
         else:
@@ -721,19 +801,29 @@ class DistributedTrainer:
         # Apply gradient
         nanotron_timer("optimizer_step", "cuda").start()
         self.optimizer.step()
+        # dist.barrier()
+        # log_rank(f"optimizer_step {self.iteration_step}", logger=logger, level=logging.INFO)
         self.optimizer.zero_grad()
         nanotron_timer("optimizer_step", "cuda").end()
 
+        # dist.barrier()
+        # log_rank(f"zero_grad {self.iteration_step}", logger=logger, level=logging.INFO)
         # Update the learning rate
         self.lr_scheduler.step()
 
         after_optim_step_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
+        # dist.barrier()
+        # log_rank(f"handle.wait {self.iteration_step}", logger=logger, level=logging.INFO)
         if handle is not None:
             handle.wait()
 
+        # dist.barrier()
+        # print(f"post_train_step {self.iteration_step}")
         self.post_train_step()
 
+        # TODO: return a dataclass instead of a list of tensors,
+        # it's more readable
         return outputs, loss_avg, z_loss_avg
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
@@ -879,7 +969,9 @@ class DistributedTrainer:
             assert self.current_base_dl is not None, "current_base_dl should be defined"
 
             # Log consumption statistics
-            if hasattr(self.current_base_dl, "dataset"):
+            if hasattr(self.current_base_dl, "dataset") and hasattr(
+                self.current_base_dl.dataset, "get_consumption_stats"
+            ):
                 for dataset_name, stats in self.current_base_dl.dataset.get_consumption_stats().items():
                     basic_log_entries.extend(
                         [
@@ -1117,14 +1209,40 @@ class DistributedTrainer:
         total_params = total_params.item()
         self.num_params = {"total": total_params, "local": num_params}
 
-        # TODO @nouamanetazi: better memory logs
+        # Compute active parameters for MoE
+        if config.model.model_config.is_moe_model:
+            from nanotron.nn.moe import is_expert_param
+
+            expert_params = sum(p.numel() for n, p in model.named_parameters() if is_expert_param(n))
+            non_expert_params = num_params - expert_params
+            active_params = (
+                non_expert_params
+                + expert_params
+                * config.model.model_config.moe_config.top_k
+                / config.model.model_config.moe_config.num_experts
+            )
+            active_params_t = torch.tensor(active_params, device="cuda")
+            dist.all_reduce(active_params_t, group=parallel_context.ep_pg)
+            dist.all_reduce(active_params_t, group=parallel_context.ep_pp_pg)
+            self.num_params["active"] = active_params_t.item()
+
         log_rank(
-            f"Total number of parameters: {human_format(total_params)} ({total_size.item() / 1024**2:.2f}MiB)",
+            f"Total number of parameters: {human_format(total_params)} ({total_size.item() / 1024**2:.2f}MiB)\n",
             logger=logger,
             level=logging.INFO,
             group=parallel_context.world_pg,
             rank=0,
         )
+
+        if config.model.model_config.is_moe_model:
+            log_rank(
+                f"Active parameters: {human_format(self.num_params['active'])}",
+                logger=logger,
+                level=logging.INFO,
+                group=parallel_context.world_pg,
+                rank=0,
+            )
+
         log_rank(
             f"Local number of parameters: {human_format(num_params)} ({size_params / 1024**2:.2f}MiB)",
             logger=logger,
@@ -1132,6 +1250,8 @@ class DistributedTrainer:
             group=parallel_context.dp_pg,
             rank=0,
         )
+        # TODO @nouamanetazi: better memory logs
+
         log_rank(
             f"[After model building] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
             f" Peak allocated: {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB"
@@ -1258,8 +1378,11 @@ class DistributedTrainer:
             model=self.unwrapped_model,
             optimizer=self.optimizer,
             lr_scheduler=self.lr_scheduler,
+            # NOTE: we save a model weights if
+            # 1. the first replicas of dense
+            # 2. the first replicas of moe's experts
             should_save_model=bool(
-                dist.get_rank(self.parallel_context.dp_pg) == 0
+                dist.get_rank(self.parallel_context.dp_pg) == 0 or dist.get_rank(self.parallel_context.ep_dp_pg) == 0
             ),  # We only save the weights on DP==0
             should_save_optimizer=True,
             should_save_lr_scheduler=True,
@@ -1308,7 +1431,7 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.get_global_rank(
-                        ep_rank=dist.get_rank(parallel_context.ep_pg),
+                        # ep_rank=dist.get_rank(parallel_context.ep_pg),
                         pp_rank=get_pp_rank_of(target, module=model),
                         dp_rank=dist.get_rank(parallel_context.dp_pg),
                         cp_rank=dist.get_rank(parallel_context.cp_pg),
@@ -1318,6 +1441,7 @@ def mark_tied_parameters(
             )
             for target in embeddings_lm_head_tied_names
         ]
+
         tie_parameters(
             root_module=model, ties=shared_embeddings, parallel_context=parallel_context, reduce_op=dist.ReduceOp.SUM
         )
@@ -1328,7 +1452,7 @@ def mark_tied_parameters(
     # Sync all parameters that have the same name and that are not sharded across TP and EXP
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
     mark_unsharded_params_as_tied_across_tp(model, parallel_context, parallel_config)
-    mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
+    # mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
 
     create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
 
@@ -1388,6 +1512,8 @@ def mark_unsharded_params_as_tied_across_expert(
 
                 if param.is_sharded:
                     sharded_info = param.get_sharded_info()
+
+                    # TODO: double check and remove if necessary
                     if sharded_info.is_expert_sharded(parallel_context):
                         continue
 

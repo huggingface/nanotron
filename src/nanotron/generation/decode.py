@@ -241,6 +241,7 @@ def decode_text(
     pipeline_state = PipelineEvalBatchState()
     with attach_pipeline_state_to_model(model=model, pipeline_state=pipeline_state):
         # We query the first `pipeline_size` batches
+
         for batches in chunks(
             iterable=micro_batcher(
                 input_iter=input_iter,
@@ -306,6 +307,7 @@ def decode_text(
                             batch_generated_ids = state.new_input_ids
                             batch_generated_mask = state.new_input_mask
                         position_ids = get_position_ids(batch_generated_ids, tokenizer)
+
                         sharded_logits = model(
                             input_ids=batch_generated_ids,
                             position_ids=position_ids,  # [batch_size, seq_len]

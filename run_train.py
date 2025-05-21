@@ -8,20 +8,20 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 ```
 """
 import argparse
-import time
 from pprint import pformat
 from typing import Dict, Optional, cast
 
 import nanotron.distributed as dist
+import torch.multiprocessing as mp
 from nanotron import logging
 from nanotron.config import (
     DataArgs,
     DatasetStageArgs,
     NanosetDatasetsArgs,
     PretrainDatasetsArgs,
-    Qwen2Config,
     SFTDatasetsArgs,
 )
+from nanotron.config.models_config import Qwen2Config
 from nanotron.data.dataloader import (
     dummy_infinite_data_generator,
     get_train_dataloader,
@@ -55,6 +55,76 @@ logger = logging.get_logger(__name__)
 # import lovely_tensors as lt
 
 # lt.monkey_patch()
+
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
+
+class SimpleTokenDataset(Dataset):
+    """A simple dataset that reads tokens from a file and returns sequences of a specified length.
+    Example usage:
+    dataset = SimpleTokenDataset("path/to/tokens.bin", seq_len=512)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True)
+
+    for batch in dataloader:
+        input_ids = batch["input_ids"]      # Shape: [batch_size, seq_len]
+        position_ids = batch["position_ids"] # Shape: [seq_len]
+        # ... use both tensors
+    Args:
+        file_path (str): Path to the file containing tokens
+        seq_len (int): Length of sequences to return
+        token_size (int): Size of each token in bytes (2 for uint16, 4 for uint32)
+    """
+
+    def __init__(self, file_path: str, seq_len: int, token_size: int = 2):
+        self.file_path = file_path
+        self.seq_len = seq_len
+        self.token_size = token_size
+
+        # Open file and get total size
+        with open(file_path, "rb") as f:
+            f.seek(0, 2)  # Seek to end
+            file_size = f.tell()
+
+        # Calculate number of tokens and sequences
+        self.num_tokens = file_size // token_size
+        self.num_sequences = self.num_tokens // seq_len
+
+        self._f = None
+
+    def _get_input_ids(self, item):
+        if self._f is None:
+            self._f = open(self.file_path, "rb")
+
+        chunk_size = self.token_size * self.seq_len
+        self._f.seek(item * chunk_size)
+
+        # Read and convert to tensor
+        tokens = np.frombuffer(self._f.read(chunk_size), np.uint16 if self.token_size == 2 else np.uint32).astype(
+            np.int64
+        )
+
+        return torch.as_tensor(tokens, dtype=torch.long)
+
+    def __getitem__(self, item):
+        input_ids = self._get_input_ids(item)
+        position_ids = torch.arange(self.seq_len, dtype=torch.long)
+
+        # Create label_ids by shifting input_ids right by 1
+        label_ids = torch.roll(input_ids, shifts=-1, dims=0)
+
+        # Create label_mask (all ones)
+        label_mask = torch.ones(self.seq_len, dtype=torch.long)
+
+        return {"input_ids": input_ids, "position_ids": position_ids, "label_ids": label_ids, "label_mask": label_mask}
+
+    def __len__(self):
+        return self.num_sequences
+
+    def __del__(self):
+        if self._f:
+            self._f.close()
 
 
 def get_dataloader_from_data_stage(
@@ -185,7 +255,6 @@ def get_dataloader_from_data_stage(
     # Case 3: Nanosets
     elif isinstance(data.dataset, NanosetDatasetsArgs):
         log_rank("Using TokenizedBytes Dataloader", logger=logger, level=logging.INFO, rank=0)
-        from nanotron.data.tokenized_bytes import get_tb_dataloader, get_tb_datasets
 
         tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -201,41 +270,49 @@ def get_dataloader_from_data_stage(
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
 
-        start_time = time.time()
-        train_dataset, data_log = get_tb_datasets(
-            config=data.dataset,
-            global_batch_size=trainer.global_batch_size,
-            sequence_length=trainer.sequence_length,
-            train_steps=trainer.config.tokens.train_steps,
-            parallel_context=trainer.parallel_context,
-            shuffle=data.dataset.shuffle_files,
-            eos_token_id=tokenizer.eos_token_id,
-            seed=data.seed,
-            consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
+        # start_time = time.time()
+        # train_dataset, data_log = get_tb_datasets(
+        #     config=data.dataset,
+        #     global_batch_size=trainer.global_batch_size,
+        #     sequence_length=trainer.sequence_length,
+        #     train_steps=trainer.config.tokens.train_steps,
+        #     parallel_context=trainer.parallel_context,
+        #     shuffle=data.dataset.shuffle_files,
+        #     eos_token_id=tokenizer.eos_token_id,
+        #     seed=data.seed,
+        #     consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
+        # )
+        # dataloader = get_tb_dataloader(
+        #     dataset=train_dataset,
+        #     sequence_length=trainer.sequence_length,
+        #     micro_batch_size=trainer.micro_batch_size,
+        #     global_batch_size=trainer.global_batch_size,
+        #     num_workers=data.num_loading_workers,
+        #     cfg=data.dataset,
+        #     consumed_samples=consumed_train_samples,
+        #     num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+        #     parallel_context=trainer.parallel_context,
+        #     input_pp_rank=input_pp_rank,
+        #     output_pp_rank=output_pp_rank,
+        #     dataloader_drop_last=True,
+        #     dataloader_pin_memory=True,
+        #     use_position_ids=isinstance(trainer.model_config, Qwen2Config),
+        #     use_doc_masking=getattr(trainer.model_config, "_use_doc_masking", None),
+        # )
+
+        dataset = SimpleTokenDataset(
+            file_path="/fsx/nouamane/projects/nanotron/datasets/nanotron-TinyStories/00000_unshuffled.ds",
+            seq_len=trainer.sequence_length,
+            token_size=4,
         )
-        dataloader = get_tb_dataloader(
-            dataset=train_dataset,
-            sequence_length=trainer.sequence_length,
-            micro_batch_size=trainer.micro_batch_size,
-            global_batch_size=trainer.global_batch_size,
-            num_workers=data.num_loading_workers,
-            cfg=data.dataset,
-            consumed_samples=consumed_train_samples,
-            num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
-            parallel_context=trainer.parallel_context,
-            input_pp_rank=input_pp_rank,
-            output_pp_rank=output_pp_rank,
-            dataloader_drop_last=True,
-            dataloader_pin_memory=True,
-            use_position_ids=isinstance(trainer.model_config, Qwen2Config),
-            use_doc_masking=getattr(trainer.model_config, "_use_doc_masking", None),
-        )
-        log_rank(
-            f"[TokenizedBytes] Time taken to create TokenizedBytes: {time.strftime('%M:%S', time.gmtime(time.time() - start_time))} (MM:SS)",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
+        dataloader = DataLoader(dataset, batch_size=trainer.micro_batch_size, shuffle=False)
+
+        # log_rank(
+        #     f"[TokenizedBytes] Time taken to create TokenizedBytes: {time.strftime('%M:%S', time.gmtime(time.time() - start_time))} (MM:SS)",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
         dist.barrier()
 
         # Create Nanoset
@@ -371,6 +448,7 @@ def get_args():
 
 
 if __name__ == "__main__":
+    mp.set_start_method("spawn")  # debuggy fails
     args = get_args()
     config_file = args.config_file
 

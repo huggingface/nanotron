@@ -243,7 +243,34 @@ def rerun_on_exception(exception_type: Exception = Exception, pattern: str = Non
     return _wrapper
 
 
-def global_wrapper(rank, func, tp, pp, dp, port, kwargs):
+def _get_world_size(
+    tp: int,
+    pp: int,
+    dp: int,
+    expert_parallel_size: Optional[int] = None,
+    expert_tensor_parallel_size: Optional[int] = None,
+    expert_data_parallel_size: Optional[int] = None,
+    enabled_moe: bool = False,
+):
+    if enabled_moe is False:
+        return tp * pp * dp
+    else:
+        return expert_parallel_size * expert_tensor_parallel_size * expert_data_parallel_size * pp
+
+
+def global_wrapper(
+    rank,
+    func,
+    tp,
+    pp,
+    dp,
+    expert_parallel_size,
+    expert_tensor_parallel_size,
+    expert_data_parallel_size,
+    enabled_moe,
+    port,
+    kwargs,
+):
     def setup_dist_env(rank, world_size, port):
         os.environ["WORLD_SIZE"] = str(world_size)
         os.environ["RANK"] = str(rank)
@@ -253,22 +280,54 @@ def global_wrapper(rank, func, tp, pp, dp, port, kwargs):
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = str(port)
 
-    world_size = tp * pp * dp
+    world_size = _get_world_size(
+        tp, pp, dp, expert_parallel_size, expert_tensor_parallel_size, expert_data_parallel_size, enabled_moe
+    )
     setup_dist_env(rank, world_size, port)
-    parallel_context = ParallelContext(data_parallel_size=dp, pipeline_parallel_size=pp, tensor_parallel_size=tp)
+    parallel_context = ParallelContext(
+        data_parallel_size=dp,
+        pipeline_parallel_size=pp,
+        tensor_parallel_size=tp,
+        expert_parallel_size=expert_parallel_size,
+        expert_tensor_parallel_size=expert_tensor_parallel_size,
+        expert_data_parallel_size=expert_data_parallel_size,
+        enabled_moe=enabled_moe,
+    )
     func(parallel_context, **kwargs)
 
 
-def init_distributed(tp: int, dp: int, pp: int):
+def init_distributed(
+    tp: int,
+    dp: int,
+    pp: int,
+    expert_parallel_size: Optional[int] = None,
+    expert_tensor_parallel_size: Optional[int] = None,
+    expert_data_parallel_size: Optional[int] = None,
+    enabled_moe: bool = False,
+):
     def _init_distributed(func):
         def wrapper(**kwargs):
             from nanotron.utils import find_free_port
 
-            world_size = tp * pp * dp
+            world_size = _get_world_size(
+                tp, pp, dp, expert_parallel_size, expert_tensor_parallel_size, expert_data_parallel_size, enabled_moe
+            )
+
             port = find_free_port()
 
             # Note that kwargs needs to be passed as part of args in a way that can be unpacked
-            args = (func, tp, pp, dp, port, kwargs)
+            args = (
+                func,
+                tp,
+                pp,
+                dp,
+                expert_parallel_size,
+                expert_tensor_parallel_size,
+                expert_data_parallel_size,
+                enabled_moe,
+                port,
+                kwargs,
+            )
             mp.spawn(global_wrapper, args=args, nprocs=world_size)
 
         return wrapper

@@ -50,7 +50,7 @@ class MambaTrainer(DistributedTrainer):
                     target,
                     (
                         parallel_context.world_rank_matrix[
-                            dist.get_rank(parallel_context.ep_pg),
+                            # dist.get_rank(parallel_context.ep_pg),
                             get_pp_rank_of(target, module=model),
                             dist.get_rank(parallel_context.dp_pg),
                             dist.get_rank(parallel_context.tp_pg),

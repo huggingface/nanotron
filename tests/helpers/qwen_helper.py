@@ -24,20 +24,23 @@ from nanotron.parallel.context import ParallelContext
 from nanotron.trainer import mark_tied_parameters
 
 QWEN_MOE_CONFIG = MoEConfig(
-    num_experts=8,
+    num_experts=4,
     top_k=1,
+    moe_intermediate_size=32 * 4,
+    shared_expert_intermediate_size=32 * 4,
     enable_shared_expert=True,
     token_dispatcher_type="alltoall",
+    use_torch_permute=True,
 )
 
 QWEN_MODEL_CONFIG = {
     "bos_token_id": 1,
     "eos_token_id": 2,
     "hidden_act": "silu",
-    "hidden_size": 128,
+    "hidden_size": 32,
     "initializer_range": 0.02,
-    "intermediate_size": 128 * 4,
-    "max_position_embeddings": 128,
+    "intermediate_size": 32 * 4,
+    "max_position_embeddings": 32,
     "num_attention_heads": 4,
     "num_hidden_layers": 4,
     "num_key_value_heads": 2,

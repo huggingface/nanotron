@@ -2,13 +2,14 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import torch
 from torch.distributed import GradBucket
 
 import nanotron.distributed as dist
 from nanotron import logging
+from nanotron.logging import log_rank
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.utils import get_untyped_storage, tensor_from_untyped_storage
 
@@ -16,7 +17,7 @@ logger = logging.get_logger(__name__)
 
 
 class GradientAccumulator(ABC):
-    fp32_grads_allreduce_handle: Optional[torch.futures.Future]
+    fp32_grads_allreduce_handle: Optional[Union[List[torch.futures.Future], torch.futures.Future]]
 
     @abstractmethod
     def __init__(self, named_parameters: Iterator[Tuple[str, NanotronParameter]]):
@@ -117,7 +118,7 @@ class FP32GradientAccumulator(GradientAccumulator):
 
         self._is_accumulation_sync_step = False
         # We need the last allreduce handle to make sure it finishes before the optimizer step
-        self.fp32_grads_allreduce_handle: Optional[torch.futures.Future] = None
+        self.fp32_grads_allreduce_handle: Optional[Union[List[torch.futures.Future], torch.futures.Future]] = []
 
     def assign_param_offsets(self, param_name_to_offsets: Dict[str, Dict[int, Tuple[int, int]]], dp_rank: int):
         """To use only when you use with ZeRODistributedOptimizer"""
@@ -214,6 +215,18 @@ class FP32GradientAccumulator(GradientAccumulator):
     @torch.profiler.record_function("FP32GradientAccumulator._accumulate_grad")
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
+        from nanotron.nn.moe import is_expert_param
+
+        if half_param.grad is None:
+            assert 1 == 1
+
+        if half_param.grad is None and is_expert_param(name):
+            if name == "model.decoder.9.pp_block.mlp.experts.merged_down_proj":
+                assert 1 == 1
+
+            # log_rank(f"[MoE] param {name} has no gradients", logger=logger, level=logging.WARNING)
+            return
+
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
         fp32_grad = self.get_grad_buffer(name=name)
 
@@ -304,7 +317,8 @@ class FP32GradBucketManager:
     """Manages the fp32 gradient buckets.
 
     Attributes:
-        dp_pg: The process group to allreduce gradients across.
+        dp_pg: The process group to allreduce non-expert gradients across.
+        ep_dp_pg: The process group to allreduce expert gradients across.
         accumulator: The gradient accumulator which keeps the gradient buffers.
         bucket_id_to_fp32_grad_buckets_and_dependencies: A dictionary mapping bucket ids to:
             - fp32 grad bucket (torch.Tensor)
@@ -312,6 +326,7 @@ class FP32GradBucketManager:
         param_id_to_bucket_id: A dictionary mapping param ids to bucket ids."""
 
     dp_pg: dist.ProcessGroup
+    ep_dp_pg: Optional[dist.ProcessGroup]
     accumulator: FP32GradientAccumulator
     param_id_to_name: Dict[int, str]
 
@@ -331,27 +346,52 @@ def get_fp32_accum_hook(
     # s = torch.cuda.Stream()
 
     def fp32_accum_hook(state: FP32GradBucketManager, bucket: GradBucket) -> torch.futures.Future[torch.Tensor]:
+        from nanotron.nn.moe import is_expert_param
+
         # nonlocal s
         # DDP groups grads in GradBuckets. This hook is called throughout the bwd pass, once each bucket is ready to overlap communication with computation.
         # See https://pytorch.org/docs/stable/ddp_comm_hooks.html#what-does-a-communication-hook-operate-on for more details.
-        dp_pg = state.dp_pg
         accumulator = state.accumulator
         param_id_to_name = state.param_id_to_name
 
         # Add new incoming gradient
         # with torch.cuda.stream(s):
+        param_in_buckets = []
         for param, grad in zip(bucket.parameters(), bucket.gradients()):
             name = param_id_to_name[id(param)]
             fp32_grad_buffer = accumulator.get_grad_buffer(name)
             fp32_grad_buffer.add_(grad.view_as(fp32_grad_buffer))
+            param_in_buckets.append(name)
+
+        log_rank(
+            "[DDP triggered register_comm_hook] parameters in bucket: {}".format(param_in_buckets),
+            logger=logger,
+            level=logging.DEBUG,
+            rank=0,
+        )
+
+        expert_params = [param for param in bucket.parameters() if is_expert_param(param_id_to_name[id(param)])]
+        non_expert_params = [
+            param for param in bucket.parameters() if not is_expert_param(param_id_to_name[id(param)])
+        ]
+        ep_dp_pg = state.ep_dp_pg
+        dp_pg = state.dp_pg
+
+        if len(expert_params) > 0:
+            all_reduce_group = ep_dp_pg
+        else:
+            all_reduce_group = dp_pg
 
         # sync across dp
-        if dp_pg.size() == 1:
+        if all_reduce_group.size() == 1:
             fut = torch.futures.Future()
             fut.set_result(bucket.buffer())
             return fut
 
         if reduce_scatter:
+            if len(expert_params) > 0:
+                raise NotImplementedError("Reduce scatter is not implemented for MoE")
+
             assert hasattr(accumulator, "param_name_to_offsets")
             grad_buffer_tensor_list = [
                 accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
@@ -365,23 +405,41 @@ def get_fp32_accum_hook(
                 for grad_buffer, param in zip(grad_buffer_tensor_list, bucket.parameters())
             ]
             input_tensor_lists = [
-                torch.split(grad_buffer, split_size_or_sections=len(grad_buffer) // dp_pg.size())
+                torch.split(grad_buffer, split_size_or_sections=len(grad_buffer) // all_reduce_group.size())
                 for grad_buffer in grad_buffer_tensor_list
             ]
             dist.reduce_scatter_coalesced(
                 output_tensor_list=output_tensor_list,
                 input_tensor_lists=input_tensor_lists,
                 op=reduce_op,
-                group=dp_pg,
+                group=all_reduce_group,
                 async_op=True,
             )
         else:
-            grad_buffer_tensor_list = [
-                accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in bucket.parameters()
-            ]
-            accumulator.fp32_grads_allreduce_handle = dist.all_reduce_coalesced(
-                grad_buffer_tensor_list, group=dp_pg, async_op=True, op=reduce_op
+
+            def execute_all_reduce(params: List[NanotronParameter], pg: dist.ProcessGroup):
+                grad_buffer_tensor_list = [
+                    accumulator.get_grad_buffer(param_id_to_name[id(param)]).view(-1) for param in params
+                ]
+                accumulator.fp32_grads_allreduce_handle.append(
+                    dist.all_reduce_coalesced(grad_buffer_tensor_list, group=pg, async_op=True, op=reduce_op)
+                )
+
+            log_rank(
+                "[DDP triggered register_comm_hook] Detect a bucket have both expert and non-expert params: {}".format(
+                    param_in_buckets
+                ),
+                logger=logger,
+                level=logging.DEBUG,
+                rank=0,
             )
+
+            if dist.get_world_size(ep_dp_pg) > 1 and len(expert_params) > 0:
+                execute_all_reduce(expert_params, pg=ep_dp_pg)
+
+            if dist.get_world_size(dp_pg) > 1 and len(non_expert_params) > 0:
+                execute_all_reduce(non_expert_params, pg=dp_pg)
+
             # we shouldn't wait for this future for the rest of the backward
 
         # with torch.cuda.stream(s):
