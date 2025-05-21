@@ -221,7 +221,10 @@ class FP32GradientAccumulator(GradientAccumulator):
             assert 1 == 1
 
         if half_param.grad is None and is_expert_param(name):
-            log_rank(f"[MoE] param {name} has no gradients", logger=logger, level=logging.WARNING)
+            if name == "model.decoder.9.pp_block.mlp.experts.merged_down_proj":
+                assert 1 == 1
+
+            # log_rank(f"[MoE] param {name} has no gradients", logger=logger, level=logging.WARNING)
             return
 
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
