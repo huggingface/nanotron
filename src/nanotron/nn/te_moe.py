@@ -186,7 +186,8 @@ class Qwen2MoEMLPLayer(nn.Module):
         # NOTE: if there are no tokens routed to this expert device
         # then we just skip the computation
         if dispatched_input.shape[0] == 0:
-            expert_output = dispatched_input
+            expert_output = hidden_states
+            output = expert_output
             mlp_bias = None
         else:
             if self.config.moe_config.grouped_gemm_imple == "transformer_engine":
@@ -196,7 +197,7 @@ class Qwen2MoEMLPLayer(nn.Module):
                 expert_output = expert_output["hidden_states"]
                 mlp_bias = None
 
-        output, mlp_bias = self.token_dispatcher.token_unpermutation(expert_output, mlp_bias)
+            output, mlp_bias = self.token_dispatcher.token_unpermutation(expert_output, mlp_bias)
 
         if self.enable_shared_expert:
             shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]

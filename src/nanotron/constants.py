@@ -15,8 +15,9 @@ MODEL_CONFIG_FILE_NAME = "model_config.json"
 EXPERT_PARAM_NAMES = [
     # NOTE: nanotron's moe modeling
     "mlp.experts.merged_down_proj",
-    "mlp.experts.merged_gate_up_proj"
+    "mlp.experts.merged_gate_up_proj",
     # NOTE: TE's moe modeling
     "experts.linear_fc1",
     "experts.linear_fc2",
+    "mlp.router.weight",
 ]

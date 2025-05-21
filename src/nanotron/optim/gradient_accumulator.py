@@ -217,6 +217,9 @@ class FP32GradientAccumulator(GradientAccumulator):
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
         from nanotron.nn.moe import is_expert_param
 
+        if half_param.grad is None:
+            assert 1 == 1
+
         if half_param.grad is None and is_expert_param(name):
             log_rank(f"[MoE] param {name} has no gradients", logger=logger, level=logging.WARNING)
             return

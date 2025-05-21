@@ -33,7 +33,8 @@ except ImportError:
 def is_expert_param(name: str) -> bool:
     from nanotron.constants import EXPERT_PARAM_NAMES
 
-    return any(param in name for param in EXPERT_PARAM_NAMES)
+    # return any(param in name for param in EXPERT_PARAM_NAMES)
+    return any(x in name for x in EXPERT_PARAM_NAMES)
 
 
 def permute(x: torch.Tensor, routing_indices: torch.Tensor):
