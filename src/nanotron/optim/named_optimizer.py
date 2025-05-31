@@ -15,6 +15,7 @@ class NamedOptimizer(InheritFromOtherOptimizer):
         self,
         named_params_or_groups: Iterable[Union[Tuple[str, torch.Tensor], Dict[str, Any]]],
         optimizer_builder: Callable[[Iterable[Dict[str, Any]]], torch.optim.Optimizer],
+        muon: bool = False,
     ):
         named_param_groups = list(named_params_or_groups)
         if len(named_param_groups) == 0 or not isinstance(named_param_groups[0], dict):
@@ -45,6 +46,8 @@ class NamedOptimizer(InheritFromOtherOptimizer):
             for param in _params:
                 # https://github.com/pytorch/pytorch/issues/100701
                 assert param.numel() > 0
+        if muon:
+            params = {"params": params, "id_to_name": id_to_name}
         super().__init__(optimizer=optimizer_builder(params), id_to_name=id_to_name)
 
     def state_dict(self) -> dict:

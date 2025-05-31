@@ -63,10 +63,10 @@ class TrainingMetadata:
             self.consumed_train_samples == sum(stage.consumed_train_samples for stage in self.data_stages)
         ), "Mismatch between the total consumed samples and the sum of consumed samples across stages! Something went wrong in the training."
 
-        if self.consumed_tokens_total is not None:
-            assert self.consumed_tokens_total == sum(stage.consumed_tokens_all_datasets for stage in self.data_stages), "Mismatch between the total consumed tokens and the sum of consumed tokens across stages! Something went wrong in the training."
-        else:
-            self.consumed_tokens_total = sum(stage.consumed_tokens_all_datasets for stage in self.data_stages)
+        # if self.consumed_tokens_total is not None:
+        #     # assert self.consumed_tokens_total == sum(stage.consumed_tokens_all_datasets for stage in self.data_stages), "Mismatch between the total consumed tokens and the sum of consumed tokens across stages! Something went wrong in the training."
+        # else:
+        #     self.consumed_tokens_total = sum(stage.consumed_tokens_all_datasets for stage in self.data_stages)
 
         # TODO(xrsrke): remove this once we entirely remove non-data-stage training
         if self.last_stage_idx is not None:

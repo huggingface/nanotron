@@ -374,14 +374,40 @@ def init_optimizer_and_grad_accumulator(
                     lr=optimizer_args.learning_rate_scheduler.learning_rate,
                     weight_decay=optimizer_args.weight_decay,
                 )
-
+        elif optimizer_args.optimizer_factory.name == "muon"
+    
+            def optimizer(param_groups):
+                # TODO @eliebak: find a way to pass the named of the params here, but keep it clean
+                return Muon(
+                    param_groups,
+                    lr=optimizer_args.learning_rate_scheduler.learning_rate,
+                    wd=optimizer_args.weight_decay,
+                    momentum=optimizer_args.optimizer_factory.momentum,
+                    nesterov=optimizer_args.optimizer_factory.nesterov,
+                    ns_steps=optimizer_args.optimizer_factory.ns_steps,
+                    adamw_betas=(
+                        optimizer_args.optimizer_factory.adamw_beta1,
+                        optimizer_args.optimizer_factory.adamw_beta2,
+                    ),
+                    adamw_eps=optimizer_args.optimizer_factory.adamw_eps,
+                    spectral_mup_scaling=optimizer_args.optimizer_factory.spectral_mup_scaling,
+                    moonlight_scaling=optimizer_args.optimizer_factory.moonlight_scaling,
+                    sign_muon=optimizer_args.optimizer_factory.sign_muon,
+                )
         else:
             raise ValueError(f"Optimizer {optimizer_args.optimizer_factory.name} is not supported")
 
-        return NamedOptimizer(
-            named_params_or_groups=named_param_groups,
-            optimizer_builder=optimizer,
-        )
+        if optimizer_args.optimizer_factory.name == "muon":
+            return NamedOptimizer(
+                named_params_or_groups=named_param_groups,
+                optimizer_builder=optimizer,
+                muon=True,
+            )
+        else:
+            return NamedOptimizer(
+                named_params_or_groups=named_param_groups,
+                optimizer_builder=optimizer,
+            )
 
     optimizer_builder = basic_optimizer_builder
 
