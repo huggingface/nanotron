@@ -14,7 +14,12 @@ from transformers import AutoTokenizer
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
+from nanotron.config.models_config import (
+    ExistingCheckpointInit,
+    NanotronConfigs,
+    RandomInit,
+    SpectralMupInit,
+)
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     InitScalingMethod,
@@ -27,7 +32,7 @@ from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger, human_format
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
-from pprint import pformat
+
 logger = get_logger(__name__)
 
 DEFAULT_SEED = 42
@@ -226,6 +231,7 @@ class DatasetStageArgs:
     name: str
     start_training_step: int
     data: DataArgs
+    sequence_length: Optional[int] = None  # if None, we use the sequence length from the config
 
     def __post_init__(self):
         if self.start_training_step < 0:
@@ -320,19 +326,23 @@ class ModelArgs:
         # Convert model_config to proper type if it's a dict
         if isinstance(self.model_config, dict):
             # First convert moe_config if it exists
-            if 'moe_config' in self.model_config and isinstance(self.model_config['moe_config'], dict):
+            if "moe_config" in self.model_config and isinstance(self.model_config["moe_config"], dict):
                 from nanotron.config.models_config import MoEConfig
-                self.model_config['moe_config'] = MoEConfig(**self.model_config['moe_config'])
+
+                self.model_config["moe_config"] = MoEConfig(**self.model_config["moe_config"])
 
             # Then convert the main config
-            if self.model_config.get('is_qwen2_config', False):
+            if self.model_config.get("is_qwen2_config", False):
                 from nanotron.config.models_config import Qwen2Config
+
                 self.model_config = Qwen2Config(**self.model_config)
-            elif self.model_config.get('is_llama_config', False):
+            elif self.model_config.get("is_llama_config", False):
                 from nanotron.config.models_config import LlamaConfig
+
                 self.model_config = LlamaConfig(**self.model_config)
-            elif self.model_config.get('is_starcoder2_config', False):
+            elif self.model_config.get("is_starcoder2_config", False):
                 from nanotron.config.models_config import Starcoder2Config
+
                 self.model_config = Starcoder2Config(**self.model_config)
 
         # Now we can safely set _is_using_mup
@@ -562,6 +572,12 @@ class Config:
             assert (
                 self.model.model_config.moe_config.num_experts % self.parallelism.expert_parallel_size == 0
             ), f"num_experts ({self.model.model_config.moe_config.num_experts}) must be divisible by expert_parallel_size ({self.parallelism.expert_parallel_size})"
+
+        # data_stages
+        if self.data_stages is not None:
+            for stage in self.data_stages:
+                if stage.sequence_length is None:
+                    stage.sequence_length = self.tokens.sequence_length
 
     @property
     def global_batch_size(self):

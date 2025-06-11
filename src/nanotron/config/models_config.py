@@ -36,14 +36,16 @@ class ExistingCheckpointInit:
 class MoEConfig:
     """Configuration for Mixture of Experts layers"""
 
-    num_experts: int # Total number of experts
+    num_experts: int  # Total number of experts
     top_k: int  # Number of experts to route each token to
     moe_hidden_size: int  # Hidden size of the MoE layer
     moe_intermediate_size: int  # Intermediate size of the MoE layer
     enable_shared_expert: bool = False  # Whether to use a shared expert alongside specialized experts
     shared_expert_hidden_size: int = 4096  # Hidden size of the shared expert
     shared_expert_intermediate_size: int = 11008  # Intermediate size of the shared expert
-    router_aux_loss_coef: float = 0.01  # Scaling coefficient for the aux loss. A starting value of 1e-2 is recommended.
+    router_aux_loss_coef: float = (
+        0.01  # Scaling coefficient for the aux loss. A starting value of 1e-2 is recommended.
+    )
     layers: List[int] = field(
         default_factory=lambda: [-1]
     )  # Indices of layers that use MoE. -1 means all layers. Default is all layers
@@ -59,9 +61,13 @@ class MoEConfig:
     rotary_scaling_factor: int = None
     max_position_embeddings: int = None
 
-    moe_z_loss_coeff: Optional[float] = None # Scaling coefficient for the z-loss. A starting value of 1e-3 is recommended.
-    gradient_accumulation_fusion: bool = False # 
-    disable_parameter_transpose_cache: bool = False # When set to true, the parameter transposes are not cached for subsequent iterations.
+    moe_z_loss_coeff: Optional[
+        float
+    ] = None  # Scaling coefficient for the z-loss. A starting value of 1e-3 is recommended.
+    gradient_accumulation_fusion: bool = False  #
+    disable_parameter_transpose_cache: bool = (
+        False  # When set to true, the parameter transposes are not cached for subsequent iterations.
+    )
     bias_activation_fusion: bool = True
     permute_fusion: bool = False
     input_jitter_eps: float = None  # Add noise to the input tensor. https://arxiv.org/abs/2101.03961
@@ -69,7 +75,7 @@ class MoEConfig:
     # used in GShard and SwitchTransformer; "seq_aux_loss" corresponds to the loss used in DeepSeekV2,
     # which computes the loss for each individual sample; "sinkhorn" corresponds to the balancing
     # algorithm used in S-BASE, and "none" implies no load balancing. The default is "aux_loss".
-    router_load_balancing_type: str = "aux_loss" 
+    router_load_balancing_type: str = "aux_loss"
     moe_expert_capacity_factor: Optional[float] = None
     moe_pad_expert_input_to_capacity: bool = False
     moe_token_drop_policy: str = "probs"
@@ -78,7 +84,7 @@ class MoEConfig:
     moe_router_group_topk: Optional[int] = None
     # Scaling factor for routing score in top-k selection, only works when moe_router_pre_softmax enabled. Defaults to None, which means no scaling
     moe_router_topk_scaling_factor: Optional[float] = None
-    moe_router_score_function: str = "softmax" # Score function for MoE routing. Can be "softmax" or "sigmoid"
+    moe_router_score_function: str = "softmax"  # Score function for MoE routing. Can be "softmax" or "sigmoid"
     moe_router_expert_bias: Optional[bool] = None
     moe_router_dtype: Optional[str] = None
     # TODO: add docs https://github.com/NVIDIA/Megatron-LM/blob/dab7723821fc326564634b398a809d43740a6c8d/megatron/core/transformer/transformer_config.py
@@ -98,7 +104,12 @@ class MoEConfig:
             "megablock_grouped_gemm",
         ], f"Invalid grouped gemm implementation: {self.grouped_gemm_imple}. Available options are: ['transformer_engine', 'megablock_grouped_gemm']"
 
-        if self.top_k == 1 and self.moe_router_score_function == 'softmax' and not self.moe_router_pre_softmax and self.router_load_balancing_type != 'sinkhorn':
+        if (
+            self.top_k == 1
+            and self.moe_router_score_function == "softmax"
+            and not self.moe_router_pre_softmax
+            and self.router_load_balancing_type != "sinkhorn"
+        ):
             # https://github.com/NVIDIA/Megatron-LM/blob/28118fcdc22e42621776a021af568ae39c198418/megatron/core/transformer/transformer_config.py#L805-L813
             raise ValueError("Please use --moe-router-pre-softmax when topk is 1.")
 
@@ -182,6 +193,9 @@ class Qwen2Config:
     rope_scaling: Optional[dict] = None
     rope_theta: float = 10000.0
     rope_interleaved: bool = False
+    rope_seq_len_interpolation_factor: Optional[
+        float
+    ] = None  # if not None, discrete positions will be interpolated by this factor via the trick in https://arxiv.org/abs/2306.15595
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
@@ -194,9 +208,9 @@ class Qwen2Config:
     no_rope_layer: Optional[
         int
     ] = None  # Skip rope every no_rope_layer layers (see https://arxiv.org/abs/2501.18795 https://arxiv.org/abs/2305.19466 and Llama4)
-    _fused_rotary_emb: bool = True
-    _fused_rms_norm: bool = True
-    _use_qkv_packed: bool = True
+    _fused_rotary_emb: bool = False
+    _fused_rms_norm: bool = False
+    _use_qkv_packed: bool = False
     _use_doc_masking: bool = False
 
     # MoE configuration
@@ -240,6 +254,12 @@ class Qwen2Config:
             assert (
                 self.num_hidden_layers % self.no_rope_layer == 0
             ), "no_rope_layer must be a multiple of num_hidden_layers"
+
+        # rope_seq_len_interpolation_factor = seqlen / 4096
+        if self.max_position_embeddings > 4096:
+            assert (
+                self.rope_seq_len_interpolation_factor == self.max_position_embeddings / 4096
+            ), f"rope_seq_len_interpolation_factor must be equal to max_position_embeddings / 4096 = {self.max_position_embeddings / 4096}"
 
     @property
     def is_using_mup(self) -> bool:

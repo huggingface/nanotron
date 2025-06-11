@@ -9,14 +9,13 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.distributed import ProcessGroup
 from nanotron.logging import log_rank
+from nanotron.logging.timers import nanotron_timer
 from nanotron.optim.gradient_accumulator import GradientAccumulator
 from nanotron.parallel.data_parallel.utils import ddp_trigger_sync_in_bwd
 from nanotron.parallel.pipeline_parallel.context_manager import attach_pipeline_state_to_model
 from nanotron.parallel.pipeline_parallel.state import PipelineTrainBatchState
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 from nanotron.utils import ContextManagers
-
-# from nanotron.logging.timers import nanotron_timer
 
 logger = logging.get_logger(__name__)
 
@@ -84,9 +83,11 @@ class PipelineEngine(ABC):
 
         with context:
             if grad_accumulator is None:
-                sum(activations).backward()
+                # sum(activations).backward()
+                activations[0].backward()
             else:
-                grad_accumulator.backward(sum(activations))
+                # grad_accumulator.backward(sum(activations))
+                grad_accumulator.backward(activations[0])
 
         # TODO @nouamane: this fixes interleaved afab but makes 1f1b hang
         # with context:
@@ -289,10 +290,13 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                     output = {k: v.detach() for k, v in output.items()}
                 outputs.append(output)
 
+            nanotron_timer("Forward+backward", timer_type="cuda", cuda_sync=True).start()
             for micro_batch in batch:
                 context = self._get_fwd_context(model=model)
                 # with nanotron_timer("forward", timer_type="cuda"):
+                nanotron_timer("Forward", timer_type="cuda", cuda_sync=True).start()
                 output = self.forward(context=context, state=state, micro_batch=micro_batch, model=model)
+                nanotron_timer("Forward", timer_type="cuda", cuda_sync=True).end()
 
                 # We make `output` a dict
                 if not isinstance(output, dict):
@@ -310,7 +314,10 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
                     grad_accumulator=grad_accumulator,
                 )
                 # with nanotron_timer("backward", timer_type="cuda"):
+                nanotron_timer("Backward", timer_type="cuda", cuda_sync=True).start()
                 self.backward(context=context, state=state, grad_accumulator=grad_accumulator)
+                nanotron_timer("Backward", timer_type="cuda", cuda_sync=True).end()
+            nanotron_timer("Forward+backward", timer_type="cuda", cuda_sync=True).end()
 
             # Check figure in paper: The remain blocks are all backward and there is only `pg.size() - current_pp_rank - 1` blocks left
             assert len(state.microbatches_activations_requiring_backward) == pg.size() - current_pp_rank - 1
