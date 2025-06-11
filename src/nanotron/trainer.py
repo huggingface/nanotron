@@ -172,8 +172,11 @@ class DistributedTrainer:
             tensor_parallel_size=self.config.parallelism.tp,
             pipeline_parallel_size=self.config.parallelism.pp,
             data_parallel_size=self.config.parallelism.dp,
-            expert_parallel_size=self.config.parallelism.expert_parallel_size,
             context_parallel_size=self.config.parallelism.context_parallel_size,
+            expert_parallel_size=self.config.parallelism.expert_parallel_size,
+            expert_tensor_parallel_size=self.config.parallelism.expert_tensor_parallel_size,
+            expert_data_parallel_size=self.config.parallelism.expert_data_parallel_size,
+            enabled_moe=self.config.parallelism.enabled_moe,
         )
 
         self.pre_init()
@@ -245,24 +248,31 @@ class DistributedTrainer:
             assert isinstance(checkpoint_metadata.metas, TrainingMetadata)
             log_rank(str(checkpoint_metadata), logger=logger, level=logging.INFO, rank=0)
             self.metadata: TrainingMetadata = checkpoint_metadata.metas
-            # NOTE: we should not change data stages
+            # In case of a new datastage, metadata will be updated in `get_dataloader`
             assert (
                 self.config.tokens.train_steps > self.metadata.last_train_step
             ), f"Loaded checkpoint has already trained {self.metadata.last_train_step} batches, you need to specify a higher `config.tokens.train_steps`"
         else:
             data_stages = [
                 DataStageMetadata(
-                    name=stage.name, start_training_step=stage.start_training_step, consumed_train_samples=0
+                    name=stage.name,
+                    start_training_step=stage.start_training_step,
+                    consumed_train_samples=0,
+                    sequence_length=stage.sequence_length,
                 )
                 for stage in self.config.data_stages
             ]
             self.metadata: TrainingMetadata = TrainingMetadata(
-                consumed_train_samples=0, last_train_step=0, last_stage_idx=0, data_stages=data_stages
+                consumed_train_samples=0,
+                consumed_tokens_total=0,
+                last_train_step=0,
+                last_stage_idx=0,
+                data_stages=data_stages,
             )
 
         # Setup tensorboard write and log writers on output rank
         self.logger_ranks = self.parallel_context.get_global_rank(
-            ep_rank=0, pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
+            pp_rank=self.unwrapped_model.output_pp_rank, dp_rank=0, tp_rank=0, cp_rank=0
         ).flatten()
         self.loggerwriter = self.setup_log_writers()
 
@@ -278,6 +288,7 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
         self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
         self.current_base_dl: Optional[DataLoader] = None  # used for the current training stage
+        self.iteration_timer = None  # Will be initialized during training
 
         log_libraries_versions(logger=logger)
         log_rank("Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
@@ -339,7 +350,7 @@ class DistributedTrainer:
 
         log_rank("Start training", logger=logger, level=logging.INFO, rank=0, is_separator=True)
         log_rank(
-            f"mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_train_samples: {metadata.consumed_train_samples}",  # noqa
+            f"mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_tokens_total: {metadata.consumed_tokens_total}",  # noqa
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -450,9 +461,6 @@ class DistributedTrainer:
             return
 
         assert len(dataloaders) > 0, "No dataloaders provided"
-        assert len(dataloaders) == len(
-            self.config.data_stages
-        ), "Number of dataloaders should match the number of dataset stages"
 
         def clear_dataloader_from_memory(dataloader: DataLoader, stage_name: str):
             import gc
@@ -565,22 +573,31 @@ class DistributedTrainer:
                     prof.step()
 
                 self.iteration_start_time = time.time()
+                nanotron_timer("update_dataloader", "cuda", cuda_sync=True).start()
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
+                nanotron_timer("update_dataloader", "cuda", cuda_sync=True).end()
 
                 # Training step
+                nanotron_timer("training_step", "cuda", cuda_sync=True).start()
                 outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
+                nanotron_timer("training_step", "cuda", cuda_sync=True).end()
 
                 # Update consumption tracking for current batch
-                if hasattr(self.current_base_dl, "dataset"):
+                nanotron_timer("update_consumption_metrics", "cuda", cuda_sync=True).start()
+                if hasattr(self.current_base_dl, "dataset") and hasattr(
+                    self.current_base_dl.dataset, "update_consumption_metrics"
+                ):
+                    # TODO: only works for BlendableDataset
                     self.current_base_dl.dataset.update_consumption_metrics(
                         start_idx=(self.iteration_step - 1)
                         * self.global_batch_size,  # assumes we start from iteration_step=1
                         end_idx=self.iteration_step * self.global_batch_size,
                         sequence_length=self.sequence_length,
                     )
-
+                nanotron_timer("update_consumption_metrics", "cuda", cuda_sync=True).end()
                 # Training Logs
                 # Track consumed tokens for all dataset folders in current stage
+                nanotron_timer("update_consumption_metrics_2", "cuda", cuda_sync=True).start()
                 if hasattr(self.current_base_dl, "dataset"):
                     consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
                     current_stage = self.metadata.data_stages[self.metadata.last_stage_idx]
@@ -588,16 +605,22 @@ class DistributedTrainer:
                     # Update consumed tokens for all folders in the consumption stats
                     for folder_path, stats in consumption_stats.items():
                         current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
-
+                nanotron_timer("update_consumption_metrics_2", "cuda", cuda_sync=True).end()
                 # Original consumption tracking
-                self.metadata.consumed_train_samples += self.global_batch_size
+                self.metadata.consumed_train_samples += self.global_batch_size  # TODO: Legacy: idc abt this
+                self.metadata.consumed_tokens_total += self.global_batch_size * self.sequence_length
                 self.metadata.last_train_step = self.iteration_step
-                self.metadata.data_stages[
-                    self.metadata.last_stage_idx
-                ].consumed_train_samples += self.global_batch_size
+                self.metadata.current_stage.consumed_train_samples += self.global_batch_size
+                assert (
+                    self.metadata.current_stage.sequence_length == self.sequence_length
+                ), "Sequence length mismatch between the current stage and the global sequence length"
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
-                    self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg)
+                    self.train_step_logs(
+                        outputs=outputs,
+                        loss_avg=loss_avg,
+                        z_loss_avg=z_loss_avg,
+                    )
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -613,6 +636,8 @@ class DistributedTrainer:
     def training_step(
         self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]
     ) -> Tuple[Iterable[Dict], Optional[torch.Tensor]]:
+        # dist.barrier()
+        # log_rank(f"training_step {self.iteration_step}", logger=logger, level=logging.INFO)
         before_tbi_sanity_checks(
             self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator, self.lr_scheduler
         )
@@ -620,7 +645,7 @@ class DistributedTrainer:
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger, msg="Before train_batch_iter")
 
-        nanotron_timer("train_batch_iter", "cuda").start()
+        nanotron_timer("train_batch_iter", "cuda", cuda_sync=True).start()
         with torch.profiler.record_function("train_batch_iter"):
             outputs = self.pipeline_engine.train_batch_iter(
                 model=self.model,
@@ -629,10 +654,10 @@ class DistributedTrainer:
                 nb_microbatches=self.n_micro_batches_per_batch,
                 grad_accumulator=self.grad_accumulator,
             )
-        nanotron_timer("train_batch_iter", "cuda").end()
+        nanotron_timer("train_batch_iter", "cuda", cuda_sync=True).end()
 
-        if self.iteration_step < self.initial_iter_step + 5:
-            log_memory(logger=logger, msg="After train_batch_iter")
+        # if self.iteration_step < self.initial_iter_step + 5:
+        #     log_memory(logger=logger, msg="After train_batch_iter")
 
         after_tbi_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
@@ -647,6 +672,8 @@ class DistributedTrainer:
             else:
                 self.grad_accumulator.fp32_grads_allreduce_handle.wait()
 
+        # dist.barrier()
+        # log_rank(f"sync_gradients {self.iteration_step}", logger=logger, level=logging.INFO)
         nanotron_timer("sync_gradients", "cuda").start()
         # Sync tied weights
         if not isinstance(self.model, DistributedDataParallel):
@@ -697,6 +724,7 @@ class DistributedTrainer:
                 ).sum()  # already divided by n_micro_batches_per_batch
             else:
                 z_loss_avg = None
+
             # sync loss across DP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
             handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
         else:
@@ -719,19 +747,31 @@ class DistributedTrainer:
         # Apply gradient
         nanotron_timer("optimizer_step", "cuda").start()
         self.optimizer.step()
+        # dist.barrier()
+        # log_rank(f"optimizer_step {self.iteration_step}", logger=logger, level=logging.INFO)
         self.optimizer.zero_grad()
         nanotron_timer("optimizer_step", "cuda").end()
 
+        # dist.barrier()
+        # log_rank(f"zero_grad {self.iteration_step}", logger=logger, level=logging.INFO)
         # Update the learning rate
+        nanotron_timer("lr_scheduler_step", "cuda").start()
         self.lr_scheduler.step()
+        nanotron_timer("lr_scheduler_step", "cuda").end()
 
         after_optim_step_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
+        # dist.barrier()
+        # log_rank(f"handle.wait {self.iteration_step}", logger=logger, level=logging.INFO)
         if handle is not None:
             handle.wait()
 
+        # dist.barrier()
+        # print(f"post_train_step {self.iteration_step}")
         self.post_train_step()
 
+        # TODO: return a dataclass instead of a list of tensors,
+        # it's more readable
         return outputs, loss_avg, z_loss_avg
 
     def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
@@ -749,8 +789,12 @@ class DistributedTrainer:
         z_loss_avg: Optional[torch.Tensor],
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
+        nanotron_timer("train_step_logs_barrier", "cuda").start()
         dist.barrier()
+        nanotron_timer("train_step_logs_barrier", "cuda").end()
+        nanotron_timer("train_step_logs_sync", "cuda").start()
         torch.cuda.synchronize()
+        nanotron_timer("train_step_logs_sync", "cuda").end()
         elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
@@ -1114,14 +1158,40 @@ class DistributedTrainer:
         total_params = total_params.item()
         self.num_params = {"total": total_params, "local": num_params}
 
-        # TODO @nouamanetazi: better memory logs
+        # Compute active parameters for MoE
+        if config.model.model_config.is_moe_model:
+            from nanotron.nn.moe import is_expert_param
+
+            expert_params = sum(p.numel() for n, p in model.named_parameters() if is_expert_param(n))
+            non_expert_params = num_params - expert_params
+            active_params = (
+                non_expert_params
+                + expert_params
+                * config.model.model_config.moe_config.top_k
+                / config.model.model_config.moe_config.num_experts
+            )
+            active_params_t = torch.tensor(active_params, device="cuda")
+            dist.all_reduce(active_params_t, group=parallel_context.ep_pg)
+            dist.all_reduce(active_params_t, group=parallel_context.ep_pp_pg)
+            self.num_params["active"] = active_params_t.item()
+
         log_rank(
-            f"Total number of parameters: {human_format(total_params)} ({total_size.item() / 1024**2:.2f}MiB)",
+            f"Total number of parameters: {human_format(total_params)} ({total_size.item() / 1024**2:.2f}MiB)\n",
             logger=logger,
             level=logging.INFO,
             group=parallel_context.world_pg,
             rank=0,
         )
+
+        if config.model.model_config.is_moe_model:
+            log_rank(
+                f"Active parameters: {human_format(self.num_params['active'])}",
+                logger=logger,
+                level=logging.INFO,
+                group=parallel_context.world_pg,
+                rank=0,
+            )
+
         log_rank(
             f"Local number of parameters: {human_format(num_params)} ({size_params / 1024**2:.2f}MiB)",
             logger=logger,
@@ -1129,6 +1199,8 @@ class DistributedTrainer:
             group=parallel_context.dp_pg,
             rank=0,
         )
+        # TODO @nouamanetazi: better memory logs
+
         log_rank(
             f"[After model building] Memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f}MiB."
             f" Peak allocated: {torch.cuda.max_memory_allocated() / 1024**2:.2f}MiB"
@@ -1175,7 +1247,7 @@ class DistributedTrainer:
 
     def pre_save_checkpoint(self) -> Path:
         # Check if eval_interval should be updated from file
-        eval_interval_file = self.config.lighteval.eval_interval_file
+        eval_interval_file = self.config.lighteval.eval_interval_file if self.config.lighteval is not None else None
         if eval_interval_file is not None and Path(eval_interval_file).exists():
             try:
                 with open(eval_interval_file, "r") as f:
@@ -1255,8 +1327,11 @@ class DistributedTrainer:
             model=self.unwrapped_model,
             optimizer=self.optimizer,
             lr_scheduler=self.lr_scheduler,
+            # NOTE: we save a model weights if
+            # 1. the first replicas of dense
+            # 2. the first replicas of moe's experts
             should_save_model=bool(
-                dist.get_rank(self.parallel_context.dp_pg) == 0
+                dist.get_rank(self.parallel_context.dp_pg) == 0 or dist.get_rank(self.parallel_context.ep_dp_pg) == 0
             ),  # We only save the weights on DP==0
             should_save_optimizer=True,
             should_save_lr_scheduler=True,
@@ -1305,7 +1380,6 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.get_global_rank(
-                        ep_rank=dist.get_rank(parallel_context.ep_pg),
                         pp_rank=get_pp_rank_of(target, module=model),
                         dp_rank=dist.get_rank(parallel_context.dp_pg),
                         cp_rank=dist.get_rank(parallel_context.cp_pg),
@@ -1315,6 +1389,7 @@ def mark_tied_parameters(
             )
             for target in embeddings_lm_head_tied_names
         ]
+
         tie_parameters(
             root_module=model, ties=shared_embeddings, parallel_context=parallel_context, reduce_op=dist.ReduceOp.SUM
         )
@@ -1325,7 +1400,7 @@ def mark_tied_parameters(
     # Sync all parameters that have the same name and that are not sharded across TP and EXP
     assert not isinstance(model, DistributedDataParallel), "model shouldn't be DDP at this point"
     mark_unsharded_params_as_tied_across_tp(model, parallel_context, parallel_config)
-    mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
+    # mark_unsharded_params_as_tied_across_expert(model, parallel_context, parallel_config)
 
     create_pg_for_tied_weights(root_module=model, parallel_context=parallel_context)
 
@@ -1385,6 +1460,8 @@ def mark_unsharded_params_as_tied_across_expert(
 
                 if param.is_sharded:
                     sharded_info = param.get_sharded_info()
+
+                    # TODO: double check and remove if necessary
                     if sharded_info.is_expert_sharded(parallel_context):
                         continue
 

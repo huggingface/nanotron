@@ -47,7 +47,10 @@ def save_optimizer(
     - If Zero-0 is used, optimizer states are replicated across all DPs. Only DP-0 saves the states
     - If Zero-1 is used, optimizer states are sharded across all DPs. Each DP saves its own states
     """
-    if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(parallel_context.dp_pg) > 0:
+    is_first_replicas_in_zero0 = (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(
+        parallel_context.dp_pg
+    ) > 0
+    if is_first_replicas_in_zero0 and dist.get_rank(parallel_context.ep_dp_pg) > 1:
         # this is Zero-0, so only DP-0 saves the optimizer states
         return
 
@@ -61,7 +64,6 @@ def save_optimizer(
             tp_size = parallel_context.tp_pg.size()
             pp_size = parallel_context.pp_pg.size()
             dp_size = parallel_context.dp_pg.size()
-            expert_parallel_size = parallel_context.expert_parallel_size
 
             config = {
                 "type": str(optimizer.__class__.__name__),
@@ -69,10 +71,16 @@ def save_optimizer(
                     "tp_size": str(tp_size),
                     "dp_size": str(dp_size),
                     "pp_size": str(pp_size),
-                    "expert_parallel_size": str(expert_parallel_size),
                 },
                 "configs": {},
             }
+
+            if parallel_context.enabled_moe is True:
+                config["parallelism"]["expert_parallel_size"] = str(parallel_context.expert_parallel_size)
+                config["parallelism"]["expert_tensor_parallel_size"] = str(
+                    parallel_context.expert_tensor_parallel_size
+                )
+                config["parallelism"]["expert_data_parallel_size"] = str(parallel_context.expert_data_parallel_size)
 
             if isinstance(optimizer, ZeroDistributedOptimizer):
                 # NOTE: in order to serialize, we must save all keys and values as strings
@@ -113,7 +121,7 @@ def save_lr_scheduler(
     root_folder: Path,
 ):
     """Saves lr scheduler states"""
-    if not is_zero and dist.get_rank(parallel_context.dp_pg) > 0:
+    if not is_zero and dist.get_rank(parallel_context.dp_pg) > 0 and dist.get_rank(parallel_context.ep_dp_pg) > 0:
         # this is Zero-0, so only DP-0 saves the optimizer states
         return
 

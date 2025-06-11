@@ -229,6 +229,7 @@ def log_rank(
     rank: Optional[int] = None,
     category: Optional[str] = None,
     is_separator: bool = False,
+    main_rank_only: bool = False,
     **kwargs,
 ):
     """Log only if the current process is the rank specified."""
@@ -246,6 +247,8 @@ def log_rank(
         kwargs["extra"] = kwargs.get("extra", {})
         kwargs["extra"]["separator"] = True
 
+    if main_rank_only:
+        rank = 0
     # rank is None means everyone logs
     if rank is None or dist.get_rank(group) == rank:
         if is_separator:
@@ -429,9 +432,9 @@ def log_libraries_versions(logger: logging.Logger):
         log_rank(f"datasets version: {datasets.__version__}", logger=logger, level=logging.INFO, rank=0)
         log_rank(f"flash-attn version: {flash_attn.__version__}", logger=logger, level=logging.INFO, rank=0)
         log_rank(f"numpy version: {numpy.__version__}", logger=logger, level=logging.INFO, rank=0)
-        log_rank(
-            f"\ntorch.utils.collect_env: {torch.utils.collect_env.main()}", logger=logger, level=logging.INFO, rank=0
-        )
+        # log_rank(
+        #     f"\ntorch.utils.collect_env: {torch.utils.collect_env.main()}", logger=logger, level=logging.INFO, rank=0
+        # )
 
 
 _configure_library_root_logger()

@@ -10,18 +10,18 @@ torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llam
 import argparse
 import time
 from pprint import pformat
-from typing import Dict, Optional, cast
+from typing import Dict, Optional
 
 import nanotron.distributed as dist
+import torch.multiprocessing as mp
 from nanotron import logging
 from nanotron.config import (
     DataArgs,
-    DatasetStageArgs,
     NanosetDatasetsArgs,
     PretrainDatasetsArgs,
-    Qwen2Config,
     SFTDatasetsArgs,
 )
+from nanotron.config.models_config import Qwen2Config
 from nanotron.data.dataloader import (
     dummy_infinite_data_generator,
     get_train_dataloader,
@@ -33,12 +33,11 @@ from nanotron.data.processing import (
 from nanotron.data.sft_processing import prepare_sft_dataset
 from nanotron.helpers import (
     compute_remain_train_steps_of_a_data_stage_from_ckp,
-    get_consumed_train_samples_of_a_data_stage_from_ckp,
 )
 from nanotron.logging import log_rank
 from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
 from nanotron.sanity_checks import sanity_check_dataloader
-from nanotron.trainer import DistributedTrainer
+from nanotron.trainer import DataStageMetadata, DistributedTrainer
 from nanotron.utils import main_rank_first
 from torch.utils.data import DataLoader
 
@@ -56,12 +55,83 @@ logger = logging.get_logger(__name__)
 
 # lt.monkey_patch()
 
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
+
+class SimpleTokenDataset(Dataset):
+    """A simple dataset that reads tokens from a file and returns sequences of a specified length.
+    Example usage:
+    dataset = SimpleTokenDataset("path/to/tokens.bin", seq_len=512)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True)
+
+    for batch in dataloader:
+        input_ids = batch["input_ids"]      # Shape: [batch_size, seq_len]
+        position_ids = batch["position_ids"] # Shape: [seq_len]
+        # ... use both tensors
+    Args:
+        file_path (str): Path to the file containing tokens
+        seq_len (int): Length of sequences to return
+        token_size (int): Size of each token in bytes (2 for uint16, 4 for uint32)
+    """
+
+    def __init__(self, file_path: str, seq_len: int, token_size: int = 2):
+        self.file_path = file_path
+        self.seq_len = seq_len
+        self.token_size = token_size
+
+        # Open file and get total size
+        with open(file_path, "rb") as f:
+            f.seek(0, 2)  # Seek to end
+            file_size = f.tell()
+
+        # Calculate number of tokens and sequences
+        self.num_tokens = file_size // token_size
+        self.num_sequences = self.num_tokens // seq_len
+
+        self._f = None
+
+    def _get_input_ids(self, item):
+        if self._f is None:
+            self._f = open(self.file_path, "rb")
+
+        chunk_size = self.token_size * self.seq_len
+        self._f.seek(item * chunk_size)
+
+        # Read and convert to tensor
+        tokens = np.frombuffer(self._f.read(chunk_size), np.uint16 if self.token_size == 2 else np.uint32).astype(
+            np.int64
+        )
+
+        return torch.as_tensor(tokens, dtype=torch.long)
+
+    def __getitem__(self, item):
+        input_ids = self._get_input_ids(item)
+        position_ids = torch.arange(self.seq_len, dtype=torch.long)
+
+        # Create label_ids by shifting input_ids right by 1
+        label_ids = torch.roll(input_ids, shifts=-1, dims=0)
+
+        # Create label_mask (all ones)
+        label_mask = torch.ones(self.seq_len, dtype=torch.long)
+
+        return {"input_ids": input_ids, "position_ids": position_ids, "label_ids": label_ids, "label_mask": label_mask}
+
+    def __len__(self):
+        return self.num_sequences
+
+    def __del__(self):
+        if self._f:
+            self._f.close()
+
 
 def get_dataloader_from_data_stage(
     trainer: DistributedTrainer,
     data: DataArgs,
-    consumed_train_samples: int,
+    consumed_train_samples_stage: int,
     consumed_tokens_per_dataset_folder: Dict[str, int],
+    last_stages_consumed_tokens_per_dataset_folder: Dict[str, int],
     num_remaining_train_steps: int,
     sanity_check_dataloader_interval: Optional[int] = None,
 ):
@@ -69,10 +139,11 @@ def get_dataloader_from_data_stage(
     Returns a dataloader for a given data stage.
 
     data: The data configuration for the current stage.
-    consumed_train_samples: The number of samples consumed by the model in the this stage (each stage starts from zero).
+    consumed_train_samples_stage: The number of samples consumed by the model in the this stage (each stage starts from zero).
+    consumed_tokens_per_dataset_folder: The number of tokens consumed by the model in previous stages to avoid reseeing them, because the sampler has restarted for this stage.
     num_remaining_train_steps: The number of remaining training steps for this stage.
     """
-    assert consumed_train_samples >= 0, "consumed_train_samples should be greater than 0"
+    assert consumed_train_samples_stage >= 0, "consumed_train_samples_stage should be greater than 0"
     assert num_remaining_train_steps >= 0, "num_remaining_train_steps should be greater than 0"
 
     # First, we need to know which ranks to feed the dataloader to
@@ -164,7 +235,7 @@ def get_dataloader_from_data_stage(
                 input_pp_rank=input_pp_rank,
                 output_pp_rank=output_pp_rank,
                 micro_batch_size=trainer.micro_batch_size,
-                consumed_train_samples=consumed_train_samples,
+                consumed_train_samples_stage=consumed_train_samples_stage,
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
@@ -185,7 +256,6 @@ def get_dataloader_from_data_stage(
     # Case 3: Nanosets
     elif isinstance(data.dataset, NanosetDatasetsArgs):
         log_rank("Using TokenizedBytes Dataloader", logger=logger, level=logging.INFO, rank=0)
-        from nanotron.data.tokenized_bytes import get_tb_dataloader, get_tb_datasets
 
         tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -198,8 +268,11 @@ def get_dataloader_from_data_stage(
             level=logging.INFO,
             rank=0,
         )
-        tokenizer.pad_token = tokenizer.eos_token
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "left"
+
+        from nanotron.data.tokenized_bytes import get_tb_dataloader, get_tb_datasets
 
         start_time = time.time()
         train_dataset, data_log = get_tb_datasets(
@@ -207,11 +280,14 @@ def get_dataloader_from_data_stage(
             global_batch_size=trainer.global_batch_size,
             sequence_length=trainer.sequence_length,
             train_steps=trainer.config.tokens.train_steps,
+            current_iteration=trainer.iteration_step,
             parallel_context=trainer.parallel_context,
             shuffle=data.dataset.shuffle_files,
             eos_token_id=tokenizer.eos_token_id,
             seed=data.seed,
+            consumed_samples=consumed_train_samples_stage,
             consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
+            last_stages_consumed_tokens_per_dataset_folder=last_stages_consumed_tokens_per_dataset_folder,
         )
         dataloader = get_tb_dataloader(
             dataset=train_dataset,
@@ -220,8 +296,9 @@ def get_dataloader_from_data_stage(
             global_batch_size=trainer.global_batch_size,
             num_workers=data.num_loading_workers,
             cfg=data.dataset,
-            consumed_samples=consumed_train_samples,
-            num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+            consumed_samples=consumed_train_samples_stage,
+            num_samples=trainer.config.tokens.train_steps
+            * trainer.global_batch_size,  # TODO: this overshoots what's needed by the current stage, but it doesnt matter?
             parallel_context=trainer.parallel_context,
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
@@ -236,6 +313,13 @@ def get_dataloader_from_data_stage(
             level=logging.INFO,
             rank=0,
         )
+
+        # log_rank(
+        #     f"[TokenizedBytes] Time taken to create TokenizedBytes: {time.strftime('%M:%S', time.gmtime(time.time() - start_time))} (MM:SS)",
+        #     logger=logger,
+        #     level=logging.INFO,
+        #     rank=0,
+        # )
         dist.barrier()
 
         # Create Nanoset
@@ -315,46 +399,76 @@ def get_dataloader(
     full_log_message = f"There are {len(trainer.config.data_stages)} training stages \n{stages_info}"
     log_rank(full_log_message, logger=logger, level=logging.INFO, rank=0)
 
-    for stage_idx, stage in enumerate(trainer.config.data_stages):
-        # NOTE: we only create the dataloader for the first stage,
-        # then we lazy initialize the dataloader for the other stages
-        stage = cast(DatasetStageArgs, stage)
-        (
-            consumed_train_samples,
-            consumed_tokens_per_dataset_folder,
-        ) = get_consumed_train_samples_of_a_data_stage_from_ckp(stage, trainer.metadata)
-
-        num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
-            stage, trainer.config, trainer.metadata
-        )
-        log_rank(
-            f"Stage {stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {consumed_train_samples} samples"
-            f"Consumed tokens per dataset folder: {pformat(consumed_tokens_per_dataset_folder)}",
-            logger=logger,
-            level=logging.INFO,
-            rank=0,
-        )
-
-        dataloader = (
-            get_dataloader_from_data_stage(
-                trainer,
-                stage.data,
-                consumed_train_samples=consumed_train_samples,
-                consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
-                num_remaining_train_steps=num_remaining_train_steps,
-                sanity_check_dataloader_interval=sanity_check_dataloader_interval,
+    current_stage = None
+    # WARNING: we assume we train on last stage
+    stage_idx = len(trainer.config.data_stages) - 1
+    stage_args = trainer.config.data_stages[stage_idx]
+    if trainer.iteration_step + 1 == stage_args.start_training_step:
+        log_rank(f"Starting new stage {stage_args.name}", logger=logger, level=logging.INFO, rank=0)
+        # we start a new stage
+        if stage_idx >= len(trainer.metadata.data_stages):
+            trainer.metadata.data_stages.append(
+                DataStageMetadata(
+                    name=stage_args.name,
+                    start_training_step=stage_args.start_training_step,
+                    consumed_train_samples=0,
+                    consumed_tokens_per_dataset_folder={},
+                    sequence_length=trainer.sequence_length,
+                )
             )
-            if stage_idx == 0
-            else lambda stage=stage: get_dataloader_from_data_stage(
-                trainer,
-                stage.data,
-                consumed_train_samples=consumed_train_samples,
-                consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
-                num_remaining_train_steps=num_remaining_train_steps,
-                sanity_check_dataloader_interval=sanity_check_dataloader_interval,
-            )
+    elif len(trainer.metadata.data_stages) < len(trainer.config.data_stages):
+        raise ValueError(
+            f"If you're trying to start a new stage, you need to set `start_training_step` to the step after the last stage's: {trainer.iteration_step+1}"
         )
-        dataloaders[stage.name] = dataloader
+    current_stage = trainer.metadata.data_stages[stage_idx]
+    cur_stage_consumed_train_samples = current_stage.consumed_train_samples
+    consumed_tokens_per_dataset_folder = current_stage.consumed_tokens_per_dataset_folder
+    stage_args_data = trainer.config.data_stages[stage_idx].data
+
+    num_remaining_train_steps = compute_remain_train_steps_of_a_data_stage_from_ckp(
+        current_stage, trainer.config, trainer.metadata
+    )  # TODO: check this
+    log_rank(
+        f"Current stage: {current_stage.name} has {num_remaining_train_steps} remaining training steps and has consumed {cur_stage_consumed_train_samples} samples"
+        f"Consumed tokens per dataset folder: {pformat(consumed_tokens_per_dataset_folder)}",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+
+    # warn that if seqlen of stage - 1 has changed, consumed_train_samples=0 so we'll assume we're reading from new folder (so that we can resume training)
+    if current_stage.sequence_length != trainer.metadata.data_stages[-1].sequence_length:
+        raise NotImplementedError("We don't support changing sequence length between stages yet")
+        if current_stage.consumed_train_samples == 0:
+            log_rank(
+                f"Warning: The sequence length of the last stage has changed from {trainer.metadata.data_stages[-1].sequence_length} to {current_stage.sequence_length}. We'll assume we're reading from the beginning of the dataset folders.",
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
+        else:
+            # we're resuming training, so that's fine
+            pass
+        cur_stage_consumed_train_samples = current_stage.consumed_train_samples
+
+    else:
+        # Prepare last_stages_consumed_tokens_per_dataset_folder which will be used to offset BlendableDataset to avoid reseeing consumed tokens even when sampler has restarted for this stage
+        last_stages_consumed_tokens_per_dataset_folder = {}
+        for stage in trainer.metadata.data_stages[:-1]:
+            for folder_path, consumed_tokens in stage.consumed_tokens_per_dataset_folder.items():
+                last_stages_consumed_tokens_per_dataset_folder[folder_path] = (
+                    last_stages_consumed_tokens_per_dataset_folder.get(folder_path, 0) + consumed_tokens
+                )
+
+    dataloaders[current_stage.name] = get_dataloader_from_data_stage(
+        trainer,
+        stage_args_data,
+        consumed_train_samples_stage=cur_stage_consumed_train_samples,
+        consumed_tokens_per_dataset_folder=consumed_tokens_per_dataset_folder,
+        last_stages_consumed_tokens_per_dataset_folder=last_stages_consumed_tokens_per_dataset_folder,
+        num_remaining_train_steps=num_remaining_train_steps,
+        sanity_check_dataloader_interval=sanity_check_dataloader_interval,
+    )
     return dataloaders
 
 
@@ -371,6 +485,7 @@ def get_args():
 
 
 if __name__ == "__main__":
+    mp.set_start_method("spawn")  # debuggy fails
     args = get_args()
     config_file = args.config_file
 

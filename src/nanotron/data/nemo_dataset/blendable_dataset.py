@@ -25,6 +25,7 @@ from nanotron import logging
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 from nanotron.utils import main_rank_first
+from pprint import pformat
 
 if TYPE_CHECKING:
     from . import GPTDataset, SubsetSplitLog
@@ -48,6 +49,7 @@ class BlendableDataset(torch.utils.data.Dataset):
         parallel_context: ParallelContext,
         seed: int,
         consumed_tokens_per_dataset_folder: Optional[Dict[str, int]] = None,
+        offsets_in_samples: Optional[Dict[str, int]] = None,
     ):
         self.datasets = datasets
         num_datasets = len(datasets)
@@ -114,15 +116,25 @@ class BlendableDataset(torch.utils.data.Dataset):
         # self.last_item_idx = np.full(self.history_size, -1, dtype=np.int64)
 
         # Initialize consumption tracking
-        self.consumed_tokens = {idx: 0 for idx in range(len(datasets))}
+        self.consumed_tokens = {idx: 0 for idx in range(len(datasets))} # current stage's consumed_tokens_per_dataset_folder
         if consumed_tokens_per_dataset_folder is not None:
             # find idx of dataset that matches the folder path
             for idx, dataset in enumerate(datasets):
                 for folder_path, consumed_tokens in consumed_tokens_per_dataset_folder.items():
                     if dataset.folder_path == folder_path:
                         self.consumed_tokens[idx] = consumed_tokens
-                        break
+                        log_rank(f"[BlendableDataset] Setting consumed_tokens for dataset {idx} ({dataset.folder_path}) to {consumed_tokens}", logger=logger, level=logging.INFO, rank=0)
+        
         self.sequence_length = None  # Will be set when first batch is processed
+
+        # Setup offsets for already consumed tokens from previous stages
+        self.offsets_in_samples = {idx: 0 for idx in range(len(datasets))} # last stage's consumed_tokens_per_dataset_folder
+        if offsets_in_samples is not None:
+            for idx, dataset in enumerate(datasets):
+                for folder_path, offset in offsets_in_samples.items():
+                    if dataset.folder_path == folder_path:
+                        self.offsets_in_samples[idx] = offset
+                        log_rank(f"[BlendableDataset] Applying offset {offset} samples to dataset {idx} ({dataset.folder_path})", logger=logger, level=logging.INFO, rank=0)
 
     def __len__(self):
         return self.size
@@ -131,16 +143,7 @@ class BlendableDataset(torch.utils.data.Dataset):
         dataset_idx = self.dataset_index[idx]
         sample_idx = self.dataset_sample_index[idx]
 
-        # Shift history arrays and add new values at the end
-        # self.last_item_idx = np.roll(self.last_item_idx, -1)
-        # self.last_dataset_idx = np.roll(self.last_dataset_idx, -1)
-        # self.last_dataset_sample_idx = np.roll(self.last_dataset_sample_idx, -1)
-
-        # self.last_item_idx[-1] = idx
-        # self.last_dataset_idx[-1] = dataset_idx
-        # self.last_dataset_sample_idx[-1] = sample_idx
-
-        return self.datasets[dataset_idx][sample_idx]
+        return self.datasets[dataset_idx][sample_idx + self.offsets_in_samples[dataset_idx]] # TODO: is it okay to not respect dataset_sample_index? Since it's sequential it's okay for now
 
     # @property
     # def last_file_idx(self):
@@ -181,6 +184,9 @@ class BlendableDataset(torch.utils.data.Dataset):
         """
         stats = {}
         for dataset_idx, dataset in enumerate(self.datasets):
+            assert (
+                "s3" in dataset.folder_path
+            ), "Only S3 paths are supported for consumption stats"  # TODO: remove this
             stats[dataset.folder_path] = {"tokens": self.consumed_tokens[dataset_idx]}
         return stats
 

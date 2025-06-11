@@ -100,7 +100,7 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun --nproc_per_node=8 run_train.py --config-
 The model will be saved in the `checkpoints` directory as specified in the config file.
 
 > [!NOTE]
-> You can use `examples/config_tiny_llama.py` to generate your own training config 
+> You can use `examples/config_tiny_llama.py` to generate your own training config
 
 For detailed instructions on training your first model, check out our [Your First Training guide](docs/your-first-training.md). For multi-node training with Slurm, see our [Multi-Node Training guide](docs/multi-node-training.md).
 
@@ -175,6 +175,7 @@ We currently support the following features:
 - [x] Custom module checkpointing for large models
 - [x] Spectral µTransfer parametrization for scaling up neural networks
 - [x] Mamba example
+- [x] CUDA event-based timing for accurate GPU performance measurement
 
 And we have on our roadmap:
 - [ ] FP8 training

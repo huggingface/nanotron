@@ -158,6 +158,11 @@ def sync_tied_weights_gradients(
             rank=0,
         )
         key = (group_ranks, tied_info.reduce_op)
+
+        # NOTE: quick hack
+        if grad_accumulator is None and tied_grad is not torch.bfloat16:
+            tied_grad = tied_grad.to(torch.bfloat16)
+
         if key in group_ranks_and_reduce_op_to_tensors_to_reduce:
             group_ranks_and_reduce_op_to_tensors_to_reduce[(group_ranks, tied_info.reduce_op)].append(tied_grad)
         else:

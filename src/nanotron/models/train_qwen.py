@@ -10,7 +10,6 @@ from nanotron import logging
 from nanotron.config import Config, ParallelismArgs
 from nanotron.config.models_config import Qwen2Config, RandomInit, SpectralMupInit
 from nanotron.logging import log_rank
-from nanotron.logging.timers import nanotron_timer
 from nanotron.models import NanotronModel
 from nanotron.nn.activations import ACT2FN
 from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, get_attention_mask
@@ -193,13 +192,12 @@ class Qwen2Attention(nn.Module):
             async_communication=tp_linear_async_communication,
         )
         if config._use_qkv_packed:
-            from nanotron.nn.rotary import FlashRotaryEmbedding
+            from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
 
             self.rotary_emb = FlashRotaryEmbedding(
                 dim=self.head_dim,
                 base=config.rope_theta,
                 interleaved=config.rope_interleaved,
-                seq_len_interpolation_factor=config.rope_seq_len_interpolation_factor,
             )
         else:
             self.rotary_emb = RotaryEmbedding(
@@ -207,14 +205,14 @@ class Qwen2Attention(nn.Module):
                 max_seq_len=config.max_position_embeddings,
                 base=config.rope_theta,
                 interleaved=config.rope_interleaved,
-                # seq_len_scaling_factor=config.rope_seq_len_scaling_factor,
+                seq_len_scaling_factor=None,
                 fused=config._fused_rotary_emb,
             )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
         self.simple_causal_mask = True
         self._use_qkv_packed = config._use_qkv_packed
-        self.sliding_window_size = config.sliding_window_size
-        # TODO: support SFT
+
+        # TODO: support doc masking / SWA / SFT / inference
 
     def forward(
         self,
@@ -280,7 +278,6 @@ class Qwen2Attention(nn.Module):
         assert cu_seqlens.dtype == torch.int32
         assert max_seqlen is not None
         assert isinstance(max_seqlen, int)
-
         attn_output = flash_attn_varlen_kvpacked_func(
             q,
             kv,
@@ -290,9 +287,9 @@ class Qwen2Attention(nn.Module):
             max_seqlen,
             0.0,
             softmax_scale=None,
-            causal=True,
+            causal=True,  # TODO: double check
             alibi_slopes=None,
-            window_size=(self.sliding_window_size - 1, 0) if self.sliding_window_size is not None else (-1, -1),
+            window_size=(-1, -1),  # TODO: fix
             deterministic=False,
         )  # Not contiguous, similar to flash_attn
         # flash_attn use rearrange instead of reshape https://github.com/Dao-AILab/flash-attention/blob/1a58058a6da83bd7baaf4c512e8a1abe0240bb77/flash_attn/modules/mha.py#L730
@@ -305,7 +302,6 @@ class Qwen2MLP(nn.Module):
         config: Qwen2Config,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
-        hidden_size: int,
         intermediate_size: int,
     ) -> None:
         super().__init__()
@@ -322,7 +318,7 @@ class Qwen2MLP(nn.Module):
         )
 
         self.gate_up_proj = TensorParallelColumnLinear(
-            hidden_size,
+            config.hidden_size,
             2 * intermediate_size,
             pg=tp_pg,
             mode=tp_mode,
@@ -335,7 +331,7 @@ class Qwen2MLP(nn.Module):
         # Define down projection
         self.down_proj = TensorParallelRowLinear(
             intermediate_size,
-            hidden_size,
+            config.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,  # Qwen2 doesn't use bias for down_proj
@@ -366,7 +362,6 @@ class Qwen2DecoderLayer(nn.Module):
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
         cp_pg: dist.ProcessGroup,
-        parallel_context: ParallelContext,
         layer_idx: int,
     ) -> None:
         super().__init__()
@@ -375,6 +370,7 @@ class Qwen2DecoderLayer(nn.Module):
         norm_class = TritonRMSNorm if config._fused_rms_norm else RMSNorm
         self.input_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.attn = Qwen2Attention(
             config=config,
             parallel_config=parallel_config,
@@ -382,34 +378,23 @@ class Qwen2DecoderLayer(nn.Module):
             cp_pg=cp_pg,
             layer_idx=layer_idx,
         )
+        self.post_attention_layernorm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
+            from nanotron.nn.moe import Qwen2MoELayer
 
-            if config.moe_config.moe_impl == "nanotron":
-                from nanotron.nn.moe import Qwen2MoEMLPLayer
-
-                self.mlp = Qwen2MoEMLPLayer(
-                    config=config,
-                    parallel_config=parallel_config,
-                    parallel_context=parallel_context,
-                    layer_idx=layer_idx,
-                )
-            elif config.moe_config.moe_impl == "transformer_engine":
-                from nanotron.nn.te_moe import Qwen2MoEMLPLayer
-
-                self.mlp = Qwen2MoEMLPLayer(
-                    config=config,
-                    parallel_config=parallel_config,
-                    parallel_context=parallel_context,
-                    layer_idx=layer_idx,
-                )
+            self.mlp = Qwen2MoELayer(
+                config=config,
+                parallel_config=parallel_config,
+                tp_pg=tp_pg,
+                layer_idx=layer_idx,
+            )
         else:
             self.mlp = Qwen2MLP(
                 config=config,
                 parallel_config=parallel_config,
                 tp_pg=tp_pg,
-                hidden_size=config.hidden_size,
                 intermediate_size=config.intermediate_size,
             )
 
@@ -525,8 +510,6 @@ class Qwen2Model(nn.Module):
                         "parallel_config": parallel_config,
                         "tp_pg": parallel_context.tp_pg,
                         "cp_pg": parallel_context.cp_pg,
-                        # TODO: directly pass the ep_pg process group instead of the parallel_context
-                        "parallel_context": parallel_context,
                         "layer_idx": layer_idx,
                     },
                     module_input_keys={"hidden_states", "position_ids", "cu_seqlens"},
@@ -566,10 +549,7 @@ class Qwen2Model(nn.Module):
         input_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         position_ids: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length] where -1 is padding
     ):
-        nanotron_timer("Token position embeddings", timer_type="cuda", cuda_sync=True).start()
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
-        nanotron_timer("Token position embeddings", timer_type="cuda", cuda_sync=True).end()
-
         # Compute cu_seqlens
         if position_ids.numel() > 0:
             start_indices = torch.where(position_ids.view(-1) == 0)[0]
@@ -585,18 +565,12 @@ class Qwen2Model(nn.Module):
             "cu_seqlens": cu_seqlens,
         }
 
-        nanotron_timer("Decoder layer", timer_type="cuda", cuda_sync=True).start()
         for decoder_layer in self.decoder:
             decoder_states = decoder_layer(**decoder_states)
-        nanotron_timer("Decoder layer", timer_type="cuda", cuda_sync=True).end()
 
-        nanotron_timer("Final layer norm", timer_type="cuda", cuda_sync=True).start()
         hidden_states = self.final_layer_norm(input=decoder_states["hidden_states"])["hidden_states"]
-        nanotron_timer("Final layer norm", timer_type="cuda", cuda_sync=True).end()
 
-        nanotron_timer("LM head", timer_type="cuda", cuda_sync=True).start()
         sharded_logits = self.lm_head(x=hidden_states)["logits"]
-        nanotron_timer("LM head", timer_type="cuda", cuda_sync=True).end()
 
         return sharded_logits
 
@@ -723,13 +697,6 @@ class Qwen2ForTraining(NanotronModel):
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
-        # import torch.distributed as dist
-        # if dist.get_rank() == 0:
-        #     from pprint import pformat
-        #     print(pformat([(n,p.shape) for n,p in self.named_parameters()]))
-        #     print(pformat([(n, round(p.mean().item(), 4), round(p.std().item(), 4)) for n,p in self.named_parameters()]))
-        #     assert False
-
         sharded_logits = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -739,12 +706,10 @@ class Qwen2ForTraining(NanotronModel):
             label_ids=label_ids,
             label_mask=label_mask,
         )
-        outputs = {"loss": loss["loss"]}
-
         if self.config.z_loss_enabled:
-            outputs["z_loss"] = loss["z_loss"]
-
-        return outputs
+            return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
+        else:
+            return {"loss": loss["loss"]}
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):

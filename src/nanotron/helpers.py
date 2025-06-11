@@ -447,6 +447,7 @@ def init_optimizer_and_grad_accumulator(
         model.register_comm_hook(
             state=FP32GradBucketManager(
                 dp_pg=parallel_context.dp_pg,
+                ep_dp_pg=parallel_context.ep_dp_pg if parallel_context.enabled_moe else None,
                 accumulator=grad_accumulator,
                 param_id_to_name={
                     id(param): param.get_tied_info().get_full_name_from_module_id_to_prefix(
@@ -818,7 +819,7 @@ def compute_remain_train_steps_of_a_data_stage_from_ckp(
         return 0
     else:
         last_train_steps = metadata.last_train_step if is_resume_from_training() else stage.start_training_step
-        return total_train_steps - last_train_steps
+        return total_train_steps - last_train_steps + 1
 
 
 def get_consumed_train_samples_of_a_data_stage_from_ckp(
@@ -826,6 +827,7 @@ def get_consumed_train_samples_of_a_data_stage_from_ckp(
 ) -> Optional[int]:
     start_training_step = stage.start_training_step
 
+    # find the stage in the metadata using the start_training_step
     actual_stage = next(
         (s for s in metadata.data_stages if s.start_training_step == start_training_step),
         None,
