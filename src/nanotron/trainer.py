@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from dataclasses import asdict
 from pathlib import Path
 from pprint import pformat
@@ -541,73 +542,6 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
-<<<<<<< HEAD
-
-        # vocab_embeddings = self.config.model.model_config.vocab_size * self.config.model.model_config.hidden_size * (1 if self.config.model.model_config.tie_word_embeddings else 2)
-
-        # # num_expert * hidden_size *
-        attn_params = (
-            self.config.model.model_config.hidden_size
-            * self.config.model.model_config.hidden_size
-            * (
-                1
-                + 2
-                * self.config.model.model_config.num_key_value_heads
-                / self.config.model.model_config.num_attention_heads
-            )
-        )
-
-        def compute_grouped_mlp_params(config, topk: Optional[int] = None) -> int:
-            if topk is None:
-                topk = config.moe_config.num_experts
-
-            moe_config = config.moe_config
-            # num_experts = moe_config.num_experts
-
-            # Parameters in merged_gate_up_proj
-            gate_up_params = topk * moe_config.moe_hidden_size * (2 * moe_config.moe_intermediate_size)
-
-            # Parameters in merged_down_proj
-            down_params = topk * moe_config.moe_intermediate_size * moe_config.moe_hidden_size
-
-            # Total parameters
-            total_params = gate_up_params + down_params
-
-            return total_params
-
-        mlp_params = compute_grouped_mlp_params(self.config.model.model_config)
-        moe_mlp_params = compute_grouped_mlp_params(
-            self.config.model.model_config, topk=self.config.model.model_config.moe_config.top_k
-        )
-
-        # mlp_params = (self.config.model.model_config.hidden_size * self.config.model.model_config.hidden_size)     # out_proj
-        # + (self.config.model.model_config.hidden_size * 2 * self.config.model.model_config.intermediate_size) # gate_up_proj
-        # + (self.config.model.model_config.intermediate_size * self.config.model.model_config.hidden_size)
-        # moe_mlp_params = (self.config.model.model_config.hidden_size * 2 * self.config.model.model_config.intermediate_size) # gate_up_proj
-        # layer_params = (
-        #     (self.config.model.model_config.hidden_size * self.config.model.model_config.hidden_size * (1 + 2*self.config.model.model_config.num_key_value_heads/self.config.model.model_config.num_attention_heads))  # qkv_proj
-        #     + (self.config.model.model_config.hidden_size * self.config.model.model_config.hidden_size)     # out_proj
-        #     + (self.config.model.model_config.hidden_size * 2 * self.config.model.model_config.intermediate_size) # gate_up_proj
-        #     + (self.config.model.model_config.intermediate_size * self.config.model.model_config.hidden_size)      # down_proj
-        # )
-        layer_params = attn_params + mlp_params
-        moe_layer_params = attn_params + moe_mlp_params
-        total_params = (
-            self.config.model.model_config.vocab_size + self.config.model.model_config.num_hidden_layers * layer_params
-        )
-        total_active_params = (
-            self.config.model.model_config.vocab_size
-            + self.config.model.model_config.num_hidden_layers * moe_layer_params
-        )
-        # params_billions = total_params / 1_000_000_000
-        # log_rank(f"Total params: {params_billions}B", logger=logger, level=logging.INFO, rank=0)
-        log_rank(f"Total params: {total_params/1_000_000_000}B", logger=logger, level=logging.INFO, rank=0)
-        log_rank(
-            f"Total active params: {total_active_params/1_000_000_000}B", logger=logger, level=logging.INFO, rank=0
-        )
-
-=======
->>>>>>> branch-sl
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
@@ -638,67 +572,40 @@ class DistributedTrainer:
                     logger.info(f"Profiler on for step {self.iteration_step}")
                     prof.step()
 
-<<<<<<< HEAD
-                # Use CUDA event-based timing for more accurate GPU-side elapsed time measurement
-                self.iteration_timer = nanotron_timer("iteration_time", "cuda", cuda_sync=False, enabled=True)
-                self.iteration_timer.start()
-=======
                 self.iteration_start_time = time.time()
                 nanotron_timer("update_dataloader", "cuda", cuda_sync=True).start()
->>>>>>> branch-sl
                 self._update_dataloader_based_on_training_stages(dataloader_or_dls)
-                nanotron_timer("update_dataloader", "cuda").end()
+                nanotron_timer("update_dataloader", "cuda", cuda_sync=True).end()
 
                 # Training step
                 nanotron_timer("training_step", "cuda", cuda_sync=True).start()
                 outputs, loss_avg, z_loss_avg = self.training_step(dataloader=self.current_dataloader)
-                nanotron_timer("training_step", "cuda").end()
+                nanotron_timer("training_step", "cuda", cuda_sync=True).end()
 
                 # Update consumption tracking for current batch
-<<<<<<< HEAD
-                if hasattr(self.current_base_dl, "dataset") and hasattr(
-                    self.current_base_dl.dataset, "update_consumption_metrics"
-                ):
-=======
                 nanotron_timer("update_consumption_metrics", "cuda", cuda_sync=True).start()
                 if hasattr(self.current_base_dl, "dataset") and hasattr(
                     self.current_base_dl.dataset, "update_consumption_metrics"
                 ):
                     # TODO: only works for BlendableDataset
->>>>>>> branch-sl
                     self.current_base_dl.dataset.update_consumption_metrics(
                         start_idx=(self.iteration_step - 1)
                         * self.global_batch_size,  # assumes we start from iteration_step=1
                         end_idx=self.iteration_step * self.global_batch_size,
                         sequence_length=self.sequence_length,
                     )
-<<<<<<< HEAD
-
-                # Training Logs
-                # Track consumed tokens for all dataset folders in current stage
-                if hasattr(self.current_base_dl, "dataset") and hasattr(
-                    self.current_base_dl.dataset, "get_consumption_stats"
-                ):
-                    consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
-                    current_stage = self.metadata.data_stages[self.metadata.last_stage_idx]
-
-                    # Update consumed tokens for all folders in the consumption stats
-                    for folder_path, stats in consumption_stats.items():
-                        current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
-=======
-                nanotron_timer("update_consumption_metrics", "cuda").end()
+                nanotron_timer("update_consumption_metrics", "cuda", cuda_sync=True).end()
                 # Training Logs
                 # Track consumed tokens for all dataset folders in current stage
                 nanotron_timer("update_consumption_metrics_2", "cuda", cuda_sync=True).start()
                 if hasattr(self.current_base_dl, "dataset"):
                     consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
                     current_stage = self.metadata.data_stages[self.metadata.last_stage_idx]
->>>>>>> branch-sl
 
                     # Update consumed tokens for all folders in the consumption stats
                     for folder_path, stats in consumption_stats.items():
                         current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
-                nanotron_timer("update_consumption_metrics_2", "cuda").end()
+                nanotron_timer("update_consumption_metrics_2", "cuda", cuda_sync=True).end()
                 # Original consumption tracking
                 self.metadata.consumed_train_samples += self.global_batch_size  # TODO: Legacy: idc abt this
                 self.metadata.consumed_tokens_total += self.global_batch_size * self.sequence_length
@@ -738,7 +645,7 @@ class DistributedTrainer:
         if self.iteration_step < self.initial_iter_step + 5:
             log_memory(logger=logger, msg="Before train_batch_iter")
 
-        nanotron_timer("train_batch_iter", "cuda").start()
+        nanotron_timer("train_batch_iter", "cuda", cuda_sync=True).start()
         with torch.profiler.record_function("train_batch_iter"):
             outputs = self.pipeline_engine.train_batch_iter(
                 model=self.model,
@@ -747,7 +654,7 @@ class DistributedTrainer:
                 nb_microbatches=self.n_micro_batches_per_batch,
                 grad_accumulator=self.grad_accumulator,
             )
-        nanotron_timer("train_batch_iter", "cuda").end()
+        nanotron_timer("train_batch_iter", "cuda", cuda_sync=True).end()
 
         # if self.iteration_step < self.initial_iter_step + 5:
         #     log_memory(logger=logger, msg="After train_batch_iter")
@@ -884,17 +791,11 @@ class DistributedTrainer:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         nanotron_timer("train_step_logs_barrier", "cuda").start()
         dist.barrier()
-<<<<<<< HEAD
-        # End the iteration timer and get elapsed time in milliseconds
-        self.iteration_timer.end()
-        elapsed_time_per_iteration_ms = self.iteration_timer.elapsed * 1000
-=======
         nanotron_timer("train_step_logs_barrier", "cuda").end()
         nanotron_timer("train_step_logs_sync", "cuda").start()
         torch.cuda.synchronize()
         nanotron_timer("train_step_logs_sync", "cuda").end()
         elapsed_time_per_iteration_ms = (time.time() - self.iteration_start_time) * 1000
->>>>>>> branch-sl
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
         )  # tokens_per_sec is calculated using sequence_length
@@ -1019,13 +920,7 @@ class DistributedTrainer:
             assert self.current_base_dl is not None, "current_base_dl should be defined"
 
             # Log consumption statistics
-<<<<<<< HEAD
-            if hasattr(self.current_base_dl, "dataset") and hasattr(
-                self.current_base_dl.dataset, "get_consumption_stats"
-            ):
-=======
             if hasattr(self.current_base_dl, "dataset"):
->>>>>>> branch-sl
                 for dataset_name, stats in self.current_base_dl.dataset.get_consumption_stats().items():
                     basic_log_entries.extend(
                         [
@@ -1485,7 +1380,6 @@ def mark_tied_parameters(
                 target,
                 (
                     parallel_context.get_global_rank(
-                        # ep_rank=dist.get_rank(parallel_context.ep_pg),
                         pp_rank=get_pp_rank_of(target, module=model),
                         dp_rank=dist.get_rank(parallel_context.dp_pg),
                         cp_rank=dist.get_rank(parallel_context.cp_pg),

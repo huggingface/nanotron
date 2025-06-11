@@ -63,10 +63,10 @@ def get_args():
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
-    parser.add_argument("--expert_parallel_size", type=int, default=0)
-    parser.add_argument("--expert_tensor_parallel_size", type=int, default=0)
-    parser.add_argument("--expert_data_parallel_size", type=int, default=0)
-    parser.add_argument("--enabled_moe", type=bool, default=False)
+    parser.add_argument("--expert_parallel_size", type=int, default=None)
+    parser.add_argument("--expert_tensor_parallel_size", type=int, default=None)
+    parser.add_argument("--expert_data_parallel_size", type=int, default=None)
+    parser.add_argument("--enabled_moe", action="store_true", help="Enable MoE model")
     parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
     parser.add_argument("--use-cache", action="store_true", help="Use KV cache to speed up generation")
     return parser.parse_args()
@@ -85,15 +85,16 @@ def main():
         dp=config.parallelism.dp,
         pp=args.pp or config.parallelism.pp,
         tp=args.tp or config.parallelism.tp,
-        # TODO: add args
-        # expert_parallel_size=args.expert_parallel_size or config.parallelism.expert_parallel_size,
-        # expert_tensor_parallel_size=args.expert_tensor_parallel_size or config.parallelism.expert_tensor_parallel_size,
-        # expert_data_parallel_size=args.expert_data_parallel_size or config.parallelism.expert_data_parallel_size,
-        # enabled_moe=args.enabled_moe or config.parallelism.enabled_moe,
-        expert_parallel_size=config.parallelism.expert_parallel_size,
-        expert_tensor_parallel_size=config.parallelism.expert_tensor_parallel_size,
-        expert_data_parallel_size=config.parallelism.expert_data_parallel_size,
-        enabled_moe=config.parallelism.enabled_moe,
+        expert_parallel_size=args.expert_parallel_size
+        if args.expert_parallel_size is not None
+        else config.parallelism.expert_parallel_size,
+        expert_tensor_parallel_size=args.expert_tensor_parallel_size
+        if args.expert_tensor_parallel_size is not None
+        else config.parallelism.expert_tensor_parallel_size,
+        expert_data_parallel_size=args.expert_data_parallel_size
+        if args.expert_data_parallel_size is not None
+        else config.parallelism.expert_data_parallel_size,
+        enabled_moe=args.enabled_moe if args.enabled_moe else config.parallelism.enabled_moe,
         pp_engine=OneForwardOneBackwardPipelineEngine(),
         tp_mode=TensorParallelLinearMode.ALL_REDUCE,
         tp_linear_async_communication=False,

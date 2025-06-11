@@ -220,17 +220,6 @@ class FP32GradientAccumulator(GradientAccumulator):
     @torch.profiler.record_function("FP32GradientAccumulator._accumulate_grad")
     def _accumulate_grad(self, name: str, half_param: NanotronParameter) -> None:
         """Accumulate grad in fp32 and set the fp32 grad to the fp32 grad buffer, so that optimizer can update fp32 weights afterwards"""
-        from nanotron.nn.moe import is_expert_param
-
-        if half_param.grad is None:
-            assert 1 == 1
-
-        if half_param.grad is None and is_expert_param(name):
-            if name == "model.decoder.9.pp_block.mlp.experts.merged_down_proj":
-                assert 1 == 1
-
-            # log_rank(f"[MoE] param {name} has no gradients", logger=logger, level=logging.WARNING)
-            return
 
         assert half_param.grad is not None, f"Expected param {name} to have gradient."
         fp32_grad = self.get_grad_buffer(name=name)
