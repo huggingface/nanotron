@@ -43,6 +43,7 @@ from nanotron.utils import main_rank_first
 from torch.utils.data import DataLoader
 from nanotron.trainer import DataStageMetadata
 from collections import defaultdict
+from nanotron.config.models_config import LlamaConfig
 try:
     from huggingface_hub import __version__ as hf_hub_version
     from transformers import AutoTokenizer
@@ -167,7 +168,8 @@ def get_dataloader_from_data_stage(
                 input_pp_rank=input_pp_rank,
                 output_pp_rank=output_pp_rank,
                 micro_batch_size=trainer.micro_batch_size,
-                consumed_train_samples_stage=consumed_train_samples_stage,
+                # consumed_train_samples_stage=consumed_train_samples_stage,
+                consumed_train_samples=consumed_train_samples_stage,
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
