@@ -27,6 +27,7 @@ from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger, human_format
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
+from nanotron.config.models_config import Qwen2Config
 
 logger = get_logger(__name__)
 
@@ -226,6 +227,7 @@ class DatasetStageArgs:
     name: str
     start_training_step: int
     data: DataArgs
+    sequence_length: Optional[int] = None # if None, we use the sequence length from the config
 
     def __post_init__(self):
         if self.start_training_step < 0:
@@ -272,7 +274,7 @@ class GeneralArgs:
     run: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
-    consumed_train_samples: Optional[int] = None
+    consumed_train_samples: Optional[int] = None # TODO: remove this
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = True
 
@@ -300,7 +302,6 @@ class ProfilerArgs:
     with_stack: bool = True
     export_chrome_trace: bool = False
 
-
 @dataclass
 class ModelArgs:
     """Arguments related to model architecture"""
@@ -316,6 +317,9 @@ class ModelArgs:
             self.dtype = torch.bfloat16
         if isinstance(self.dtype, str):
             self.dtype = cast_str_to_torch_dtype(self.dtype)
+
+        if isinstance(self.model_config, dict):
+            self.model_config = Qwen2Config(**self.model_config)
 
         self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
@@ -541,6 +545,12 @@ class Config:
         assert (
             self.model.model_config.num_attention_heads % self.model.model_config.num_key_value_heads == 0
         ), f"num_attention_heads ({self.model.model_config.num_attention_heads}) must be divisible by num_key_value_heads ({self.model.model_config.num_key_value_heads})"
+
+        # data_stages
+        if self.data_stages is not None:
+            for stage in self.data_stages:
+                if stage.sequence_length is None:
+                    stage.sequence_length = self.tokens.sequence_length
 
     @property
     def global_batch_size(self):

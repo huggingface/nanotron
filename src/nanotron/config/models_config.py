@@ -137,6 +137,7 @@ class Qwen2Config:
     rope_scaling: Optional[dict] = None
     rope_theta: float = 10000.0
     rope_interleaved: bool = False
+    rope_seq_len_interpolation_factor: Optional[float] = None  # if not None, discrete positions will be interpolated by this factor via the trick in https://arxiv.org/abs/2306.15595
     tie_word_embeddings: bool = False
     use_cache: bool = True
     vocab_size: int = 32000
@@ -153,6 +154,9 @@ class Qwen2Config:
     _fused_rms_norm: bool = True
     _use_qkv_packed: bool = True
     _use_doc_masking: bool = False
+
+    log_attn_probs: bool = True # Whether to log the attention probabilities
+    ring_attn_heads_k_stride: Optional[int] = None # Stride of the heads in the key tensor for llama3 ring attention
 
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
@@ -181,6 +185,7 @@ class Qwen2Config:
             assert self._attn_implementation in [
                 "flex_attention",
                 "flash_attention_2",
+                "llama3_ring_attention",
             ], "Sliding window is only supported for Flex Attention and Flash Attention 2"
         if self.flex_attention_mask is not None:
             assert (
@@ -195,6 +200,11 @@ class Qwen2Config:
             assert (
                 self.num_hidden_layers % self.no_rope_layer == 0
             ), "no_rope_layer must be a multiple of num_hidden_layers"
+
+        if self._attn_implementation == "llama3_ring_attention":
+            assert self.ring_attn_heads_k_stride is not None, "ring_attn_heads_k_stride must be specified for llama3 ring attention"
+        else:
+            assert self.ring_attn_heads_k_stride is None, f"ring_attn_heads_k_stride must be None for non-llama3 ring attention, got attn_implementation={self._attn_implementation}"
 
     @property
     def is_using_mup(self) -> bool:

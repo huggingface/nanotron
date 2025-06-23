@@ -29,7 +29,8 @@ from nanotron.parallel.tensor_parallel.nn import (
 )
 from nanotron.random import RandomStates
 from nanotron.scaling.parametrization import SpectralMupParametrizator, StandardParametrizator
-
+from nanotron.logging import LogMixin
+from nanotron.nn.llama3_ring_attention import llama3_flash_attn_varlen_kvpacked_func, llama3_flash_attn_prepare_cu_seqlens
 logger = logging.get_logger(__name__)
 
 
@@ -131,8 +132,7 @@ class CoreAttention(nn.Module):
             -1, self.local_num_heads * self.head_dim
         )  # [b*s, num_heads, head_dim] -> [b*s, num_heads*head_dim]
 
-
-class Qwen2Attention(nn.Module):
+class Qwen2Attention(LogMixin, nn.Module):
     def __init__(
         self,
         config: Qwen2Config,
@@ -146,6 +146,8 @@ class Qwen2Attention(nn.Module):
         self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
         self.tp_pg_size = tp_pg.size()
+        self.cp_pg_size = cp_pg.size()
+        self.cp_pg = cp_pg
 
         # Head configuration
         self.num_heads = config.num_attention_heads
@@ -192,12 +194,12 @@ class Qwen2Attention(nn.Module):
             async_communication=tp_linear_async_communication,
         )
         if config._use_qkv_packed:
-            from flash_attn.layers.rotary import RotaryEmbedding as FlashRotaryEmbedding
-
+            from nanotron.nn.rotary import FlashRotaryEmbedding
             self.rotary_emb = FlashRotaryEmbedding(
                 dim=self.head_dim,
                 base=config.rope_theta,
                 interleaved=config.rope_interleaved,
+                seq_len_interpolation_factor=config.rope_seq_len_interpolation_factor,
             )
         else:
             self.rotary_emb = RotaryEmbedding(
@@ -205,27 +207,29 @@ class Qwen2Attention(nn.Module):
                 max_seq_len=config.max_position_embeddings,
                 base=config.rope_theta,
                 interleaved=config.rope_interleaved,
-                seq_len_scaling_factor=None,
+                seq_len_scaling_factor=config.rope_seq_len_scaling_factor,
                 fused=config._fused_rotary_emb,
             )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
         self.simple_causal_mask = True
         self._use_qkv_packed = config._use_qkv_packed
-
-        # TODO: support doc masking / SWA / SFT / inference
+        self.sliding_window_size = config.sliding_window_size
+        self.log_attn_probs = config.log_attn_probs
+        self.heads_k_stride = config.ring_attn_heads_k_stride
+        # TODO: support SFT
 
     def forward(
         self,
         hidden_states: torch.Tensor,  # [batch_size*seq_length, hidden_size]
         position_ids: torch.Tensor,  # [batch_size, seq_length] where -1 is padding
-        cu_seqlens: Optional[torch.Tensor] = None,  # Added cu_seqlens argument
+        cu_seqlens: Optional[Union[torch.Tensor, Dict[str, torch.Tensor]]] = None,  # Added cu_seqlens argument
     ):
         # [0, 1, 2, 3, 4, 0, 1, 2, -1, -1, -1] # 2 documents with 5 and 3 tokens then padding
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] # 1 document with 11 tokens
         # [0, 1, 2, 3, 4, 5, 6, 7, 8, -1, -1] # 1 document with 10 tokens then padding
         # Replace -1 with 0 in position_ids to mark every padding token as a separate sequence. Ideally we want to get rid of padding tokens from qkv
         # position_ids = position_ids.masked_fill(position_ids == -1, 0)
-        seq_length = position_ids.shape[1]
+        seq_length = position_ids.shape[1] // self.cp_pg_size # in CP, position_ids are global
         # Keep original position_ids shape for return, flatten for internal use
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
 
@@ -233,28 +237,28 @@ class Qwen2Attention(nn.Module):
 
         if self._use_qkv_packed:
             attn_output = self._forward_packed(qkv, seq_length, position_ids, cu_seqlens)
-        else:
-            q, k, v = qkv.split(
-                [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
-            )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
-            q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
-            k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-            v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-            if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
-                rotary_pos_emb = self.rotary_emb(
-                    position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
-                )  # [b*s, dim] or [seq_length, dim]
-                q = self.rotary_emb.apply_rotary_pos_emb(
-                    q, rotary_pos_emb, seq_length=seq_length
-                )  # [b*s, num_heads, head_dim]
-                k = self.rotary_emb.apply_rotary_pos_emb(
-                    k, rotary_pos_emb, seq_length=seq_length
-                )  # [b*s, num_kv_heads, head_dim]
-            else:
-                log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
-            attn_output = self.attention(
-                q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
-            )
+        # else:
+        #     q, k, v = qkv.split(
+        #         [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
+        #     )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
+        #     q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
+        #     k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+        #     v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+        #     if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+        #         rotary_pos_emb = self.rotary_emb(
+        #             position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+        #         )  # [b*s, dim] or [seq_length, dim]
+        #         q = self.rotary_emb.apply_rotary_pos_emb(
+        #             q, rotary_pos_emb, seq_length=seq_length
+        #         )  # [b*s, num_heads, head_dim]
+        #         k = self.rotary_emb.apply_rotary_pos_emb(
+        #             k, rotary_pos_emb, seq_length=seq_length
+        #         )  # [b*s, num_kv_heads, head_dim]
+        #     else:
+        #         log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
+        #     attn_output = self.attention(
+        #         q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
+        #     )
         output = self.o_proj(attn_output)
         # Return original position_ids shape
         return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
@@ -266,32 +270,62 @@ class Qwen2Attention(nn.Module):
         q = q.view(-1, seq_length, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, seq_length, 2, self.local_num_kv_heads, self.head_dim)
         if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+            seqlen_offset = dist.get_rank(self.cp_pg) * seq_length
             q, kv = self.rotary_emb(
-                q, kv, seqlen_offset=0, max_seqlen=None
-            )  # TODO: should we use position_ids here? flash_attn doesn't
+                q, kv, seqlen_offset=seqlen_offset, max_seqlen=seq_length*self.cp_pg_size
+            )
         else:
             log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
+            self.sliding_window_size = None # WARNING: we skip sliding window for no-rope
+
         q = q.view(-1, self.local_num_heads, self.head_dim)
         kv = kv.view(-1, 2, self.local_num_kv_heads, self.head_dim)
         max_seqlen = seq_length  # TODO: should this be max position_ids?
 
-        assert cu_seqlens.dtype == torch.int32
-        assert max_seqlen is not None
-        assert isinstance(max_seqlen, int)
-        attn_output = flash_attn_varlen_kvpacked_func(
-            q,
-            kv,
-            cu_seqlens,
-            cu_seqlens,
-            max_seqlen,
-            max_seqlen,
-            0.0,
-            softmax_scale=None,
-            causal=True,  # TODO: double check
-            alibi_slopes=None,
-            window_size=(-1, -1),  # TODO: fix
-            deterministic=False,
-        )  # Not contiguous, similar to flash_attn
+
+        if self.config._attn_implementation == "llama3_ring_attention":
+            attn_output = llama3_flash_attn_varlen_kvpacked_func(
+                q,
+                kv,
+                cu_seqlens_q=cu_seqlens["cu_seqlens_q"],
+                cu_seqlens_k=cu_seqlens["cu_seqlens_k"],
+                max_seqlen_q=cu_seqlens["max_seqlen_q"],
+                max_seqlen_k=cu_seqlens["max_seqlen_k"],
+                heads_k_stride=self.heads_k_stride,
+                local_k_slice=cu_seqlens["local_k_slice"],
+                dropout_p=0.0,
+                softmax_scale=None,
+                causal=True,
+                alibi_slopes=None,
+                window_size=(self.sliding_window_size - 1, 0) if self.sliding_window_size is not None else (-1, -1),
+                deterministic=False,
+                return_attn_probs=self.log_attn_probs,
+                group=self.cp_pg,
+            )  # Not contiguous, similar to flash_attn
+        else:
+            assert cu_seqlens.dtype == torch.int32
+            assert max_seqlen is not None
+            assert isinstance(max_seqlen, int)
+            attn_output = flash_attn_varlen_kvpacked_func(
+                q,
+                kv,
+                cu_seqlens,
+                cu_seqlens,
+                max_seqlen,
+                max_seqlen,
+                0.0,
+                softmax_scale=None,
+                causal=True,
+                alibi_slopes=None,
+                window_size=(self.sliding_window_size - 1, 0) if self.sliding_window_size is not None else (-1, -1),
+                deterministic=False,
+                return_attn_probs=self.log_attn_probs,
+            )  # Not contiguous, similar to flash_attn
+
+        if self.log_attn_probs:
+            attn_output, attn_probs, _ = attn_output
+            # log attn_probs
+            self.tbi_logger({"attn_probs": attn_probs})
         # flash_attn use rearrange instead of reshape https://github.com/Dao-AILab/flash-attention/blob/1a58058a6da83bd7baaf4c512e8a1abe0240bb77/flash_attn/modules/mha.py#L730
         return attn_output.reshape(-1, self.local_num_heads * self.head_dim)  # [b*s, num_heads*head_dim]
 
@@ -351,6 +385,183 @@ class Qwen2MLP(nn.Module):
 
         # Apply down projection
         hidden_states = self.down_proj(hidden_states)
+
+        return {"hidden_states": hidden_states}
+
+
+class Qwen2MoELayer(nn.Module):
+    """Mixture of experts Layer for Qwen2 models."""
+
+    def __init__(
+        self,
+        config: Qwen2Config,
+        parallel_config: Optional[ParallelismArgs],
+        tp_pg: dist.ProcessGroup,
+        layer_idx: int = 0,
+    ) -> None:
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = config.intermediate_size
+
+        # MoE specific configurations
+        self.num_experts = config.moe_config.num_experts  # Total number of experts
+        self.num_experts_per_token = config.moe_config.top_k  # Number of experts used per token (top-k)
+        self.expert_parallel_size = getattr(parallel_config, "expert_parallel_size", 1)
+        self.num_local_experts = self.num_experts // self.expert_parallel_size  # Experts per device
+
+        # Get TP mode configuration
+        tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
+        tp_linear_async_communication = (
+            parallel_config.tp_linear_async_communication if parallel_config is not None else False
+        )
+
+        # Router for selecting experts
+        self.router = TensorParallelColumnLinear(
+            self.hidden_size,
+            self.num_experts,
+            pg=tp_pg,
+            mode=tp_mode,
+            bias=False,
+            async_communication=tp_linear_async_communication,
+        )
+
+        # Enable shared experts if configured
+        self.enable_shared_expert = getattr(config.moe_config, "enable_shared_expert", False)
+        if self.enable_shared_expert:
+            self.shared_expert = Qwen2MLP(
+                config=config,
+                parallel_config=parallel_config,
+                tp_pg=tp_pg,
+            )
+            self.shared_expert_gate = TensorParallelColumnLinear(
+                self.hidden_size,
+                1,
+                pg=tp_pg,
+                mode=tp_mode,
+                bias=False,
+                async_communication=tp_linear_async_communication,
+            )
+
+        # Create the expert MLPs
+        self.experts = nn.ModuleList(
+            [
+                Qwen2MLP(
+                    config=config,
+                    parallel_config=parallel_config,
+                    tp_pg=tp_pg,
+                )
+                for _ in range(self.num_local_experts)
+            ]
+        )
+
+        # Whether to recompute MoE layer during backward pass for memory efficiency
+        self.recompute_layer = parallel_config.recompute_layer
+
+        # Token dispatcher type - determines communication pattern
+        self.token_dispatcher_type = getattr(config.moe_config, "token_dispatcher_type", "alltoall")
+        # For more sophisticated implementations, we would add token dispatcher logic here
+
+    def _compute_router_probabilities(self, hidden_states):
+        """Compute routing probabilities for each token to each expert."""
+        router_logits = self.router(hidden_states)  # [batch_size*seq_length, num_experts]
+
+        # Get the top-k experts per token
+        routing_weights, routing_indices = torch.topk(router_logits, k=self.num_experts_per_token, dim=-1)
+
+        # Apply softmax on the top-k values
+        routing_weights = F.softmax(routing_weights, dim=-1)
+
+        return routing_weights, routing_indices
+
+    def _dispatch_tokens(self, hidden_states, routing_weights, routing_indices):
+        """
+        Dispatches tokens to their selected experts.
+        In a full implementation, this would handle the actual token routing logic
+        including communication between devices.
+        """
+        # Simplified implementation - in a complete version this would handle
+        # all-to-all or all-gather communications for distributed experts
+
+        hidden_states.shape[0]
+        dispatched_inputs = []
+        expert_counts = []
+
+        # For each expert, gather the tokens assigned to it
+        for expert_idx in range(self.num_local_experts):
+            # Find tokens that have this expert in their top-k
+            expert_mask = (routing_indices == expert_idx).any(dim=-1)
+            tokens_for_expert = hidden_states[expert_mask]
+
+            # Get the routing weights for this expert
+            expert_positions = (routing_indices == expert_idx).nonzero(as_tuple=True)
+            token_positions, k_positions = expert_positions
+            expert_weights = routing_weights[token_positions, k_positions].unsqueeze(-1)
+
+            # Scale inputs by routing weights
+            scaled_inputs = tokens_for_expert * expert_weights
+
+            dispatched_inputs.append(scaled_inputs)
+            expert_counts.append(len(tokens_for_expert))
+
+        return dispatched_inputs, expert_counts
+
+    def _combine_expert_outputs(self, expert_outputs, routing_indices, original_shape):
+        """
+        Combines outputs from different experts back to the original tensor layout.
+        """
+        # Initialize output tensor with zeros
+        combined_output = torch.zeros(original_shape, device=expert_outputs[0].device)
+
+        for expert_idx, expert_output in enumerate(expert_outputs):
+            if expert_output.shape[0] == 0:  # Skip if no tokens were routed to this expert
+                continue
+
+            # Find positions where this expert was in the top-k
+            expert_mask = (routing_indices == expert_idx).any(dim=-1)
+            combined_output[expert_mask] += expert_output
+
+        return combined_output
+
+    def _core_forward(self, hidden_states):
+        """Core forward logic for MoE layer."""
+        # Get router probabilities
+        routing_weights, routing_indices = self._compute_router_probabilities(hidden_states)
+
+        # Dispatch tokens to experts
+        dispatched_inputs, expert_counts = self._dispatch_tokens(hidden_states, routing_weights, routing_indices)
+
+        # Process tokens with their assigned experts
+        expert_outputs = []
+        for expert_idx, (inputs, count) in enumerate(zip(dispatched_inputs, expert_counts)):
+            if count == 0:  # Skip computation if no tokens assigned
+                expert_outputs.append(torch.tensor([], device=hidden_states.device))
+                continue
+
+            # Forward through the expert
+            output = self.experts[expert_idx](hidden_states=inputs)["hidden_states"]
+            expert_outputs.append(output)
+
+        # Combine expert outputs
+        output = self._combine_expert_outputs(expert_outputs, routing_indices, hidden_states.shape)
+
+        # Add shared expert contribution if enabled
+        if self.enable_shared_expert:
+            shared_expert_output = self.shared_expert(hidden_states=hidden_states)["hidden_states"]
+            shared_gate = torch.sigmoid(self.shared_expert_gate(hidden_states))
+            output = output + shared_gate * shared_expert_output
+
+        return output
+
+    def _checkpointed_forward(self, hidden_states):
+        """Apply gradient checkpointing to save memory during training."""
+        return CheckpointFunction.apply(self._core_forward, True, hidden_states)
+
+    def forward(self, hidden_states):
+        """Forward pass for the MoE layer."""
+        if self.recompute_layer and self.training:
+            hidden_states = self._checkpointed_forward(hidden_states)
+        else:
+            hidden_states = self._core_forward(hidden_states)
 
         return {"hidden_states": hidden_states}
 
@@ -551,13 +762,38 @@ class Qwen2Model(nn.Module):
     ):
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
         # Compute cu_seqlens
+        cu_seqlens: Optional[Union[torch.Tensor, Dict[str, torch.Tensor]]] = None
         if position_ids.numel() > 0:
             start_indices = torch.where(position_ids.view(-1) == 0)[0]
             cu_seqlens = torch.cat(
                 [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
             ).to(torch.int32)
-        else:
-            cu_seqlens = None
+
+            # llama3 ring attention
+            if self.config._attn_implementation == "llama3_ring_attention":
+                local_sequence_length = input_ids.shape[1]
+                sequence_length = position_ids.shape[1]
+                assert sequence_length == local_sequence_length * self.parallel_context.cp_pg.size(), f"sequence_length={sequence_length} must be equal to local_sequence_length={local_sequence_length} * cp_pg.size()={self.parallel_context.cp_pg.size()}"
+                assert sequence_length % (2 * self.parallel_context.cp_pg.size()) == 0, f"Sequence length {sequence_length} must be divisible by {2 * self.parallel_context.cp_pg.size()} when using llama3 ring attention"
+                (
+                cu_seqlens_q,
+                cu_seqlens_k,
+                max_seqlen_q,
+                max_seqlen_k,
+                local_k_slice,
+                ) = llama3_flash_attn_prepare_cu_seqlens(
+                    cu_seqlens, # global cu_seqlens
+                    causal=True,
+                    rank=self.parallel_context.cp_pg.rank(),
+                    world_size=self.parallel_context.cp_pg.size(),
+                )
+                cu_seqlens = {
+                    "cu_seqlens_q": cu_seqlens_q,
+                    "cu_seqlens_k": cu_seqlens_k,
+                    "max_seqlen_q": max_seqlen_q,
+                    "max_seqlen_k": max_seqlen_k,
+                    "local_k_slice": local_k_slice,
+                }
 
         decoder_states = {
             "hidden_states": output["input_embeds"],
@@ -656,8 +892,8 @@ class LossWithZLoss(Loss):
         z_loss = masked_mean(z_loss.detach(), label_mask, dtype=torch.float)
         return {"loss": loss, "z_loss": z_loss}
 
-
-class Qwen2ForTraining(NanotronModel):
+from nanotron.logging import LoggingCollectorMixin
+class Qwen2ForTraining(NanotronModel, LoggingCollectorMixin):
     def __init__(
         self,
         config: Qwen2Config,

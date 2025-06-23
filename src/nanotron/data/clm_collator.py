@@ -149,6 +149,7 @@ class DataCollatorForCLMWithPositionIds:
     output_pp_rank: int
     parallel_context: ParallelContext
     use_doc_masking: bool = True
+    cp_return_global_position_ids: bool = True
 
     def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         # Process the case when current rank doesn't require data
@@ -217,7 +218,8 @@ class DataCollatorForCLMWithPositionIds:
                 cp_rank * self.sequence_length // cp_size, (cp_rank + 1) * self.sequence_length // cp_size
             )
             result["input_ids"] = result["input_ids"][:, local_slice]  # (b, s/cp_size)
-            result["positions"] = result["positions"][:, local_slice]  # (b, s/cp_size)
+            if not self.cp_return_global_position_ids:
+                result["positions"] = result["positions"][:, local_slice]  # (b, s/cp_size)
             result["position_ids"] = result.pop("positions")
 
         # Process labels

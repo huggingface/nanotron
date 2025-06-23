@@ -13,23 +13,31 @@ from nanotron import distributed as dist
 from nanotron.constants import CHECKPOINT_FILE_NAME, CHECKPOINT_VERSION
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import SlicesPair
-
+from collections import defaultdict
 
 @dataclasses.dataclass
 class DataStageMetadata:
     """
-    consumed_train_samples: The number of samples consumed by the model in the this stage (each stage starts from zero).
-    last_train_step: The last training step across all stages.
-
-    # NOTE: we should allow people to change the name of the data stages in the config file.
-    # but not the start_training_step, because it could
+    consumed_train_samples: The number of samples consumed by the model in the this stage (resets at each stage).
+    consumed_tokens_per_dataset_folder: The number of tokens consumed by the model in the this stage for each dataset folder. (resets at each stage)
     """
 
     name: str
     start_training_step: int
-    consumed_train_samples: int
-    consumed_tokens_per_dataset_folder: Dict[str, int] = dataclasses.field(default_factory=dict)
+    consumed_train_samples: int # We use this for sampler, and it's reset at each stage
+    sequence_length: Optional[int] = None # TODO: put back as non-optional
+    consumed_tokens_per_dataset_folder: Dict[str, int] = dataclasses.field(default_factory=dict) # this gets reset at each stage
 
+    def __post_init__(self):
+        if self.sequence_length is None:
+            self.sequence_length = 4096 # TODO: temp
+
+    def sanity_consumed_train_samples(self):
+        assert self.consumed_train_samples*self.sequence_length == sum(self.consumed_tokens_per_dataset_folder.values()), f"Mismatch between the total consumed samples and the sum of consumed samples across dataset folders! consumed_train_samples={self.consumed_train_samples}, sequence_length={self.sequence_length}, consumed_tokens_per_dataset_folder={self.consumed_tokens_per_dataset_folder}"
+
+    @property
+    def consumed_tokens_all_datasets(self):
+        return sum(self.consumed_tokens_per_dataset_folder.values())
 
 @dataclasses.dataclass
 class TrainingMetadata:
@@ -40,8 +48,9 @@ class TrainingMetadata:
     data_stages: The metadata for each stage.
     """
 
-    consumed_train_samples: int
+    consumed_train_samples: int # TODO: Legacy. This assumed same sequence length across all stages. Not used anymore
     last_train_step: int
+    consumed_tokens_total: Optional[int] = None # TODO: put back as non-optional
 
     # TODO(xrsrke): make this not optional, once we entirely remove
     # the old checkpoint version
@@ -50,14 +59,30 @@ class TrainingMetadata:
 
     def __post_init__(self):
         # NOTE: this is a sanity check after loading a trained checkpoint
-        total_consumed_samples_across_stages = sum(stage.consumed_train_samples for stage in self.data_stages)
         assert (
-            self.consumed_train_samples == total_consumed_samples_across_stages
+            self.consumed_train_samples == sum(stage.consumed_train_samples for stage in self.data_stages)
         ), "Mismatch between the total consumed samples and the sum of consumed samples across stages! Something went wrong in the training."
+
+        if self.consumed_tokens_total is not None:
+            assert self.consumed_tokens_total == sum(stage.consumed_tokens_all_datasets for stage in self.data_stages), "Mismatch between the total consumed tokens and the sum of consumed tokens across stages! Something went wrong in the training."
+        else:
+            self.consumed_tokens_total = sum(stage.consumed_tokens_all_datasets for stage in self.data_stages)
 
         # TODO(xrsrke): remove this once we entirely remove non-data-stage training
         if self.last_stage_idx is not None:
             assert self.data_stages is not None, "data_stages should not be None if last_stage_idx is not None"
+
+    @property
+    def consumed_tokens_per_dataset_folder_total(self):
+        consumed = defaultdict(int)
+        for stage in self.data_stages:
+            for dataset_folder, tokens in stage.consumed_tokens_per_dataset_folder.items():
+                consumed[dataset_folder] += tokens
+        return consumed
+    
+    @property
+    def current_stage(self) -> DataStageMetadata:
+        return self.data_stages[self.last_stage_idx]
 
 
 @dataclasses.dataclass
@@ -66,6 +91,7 @@ class CheckpointMetadata:
     tp: int
     dp: int
     metas: TrainingMetadata
+    cp: int = 1
     custom_metas: Optional[Dict[str, Any]] = None
 
 
@@ -142,6 +168,7 @@ def save_meta(parallel_context: ParallelContext, root_folder: Path, training_met
         version=CHECKPOINT_VERSION,
         tp=parallel_context.tp_pg.size(),
         dp=parallel_context.dp_pg.size(),
+        cp=parallel_context.cp_pg.size(),
         metas=training_metadata,
     )
 
