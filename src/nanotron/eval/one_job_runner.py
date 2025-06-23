@@ -68,7 +68,9 @@ class LightEvalRunner:
                 current_step=self.config.general.step,
             )
         else:
-            logger.warning(f"Skipping evaluation at step {self.config.general.step} because it's not a multiple of {self.lighteval_config.eval_interval}")
+            logger.warning(
+                f"Skipping evaluation at step {self.config.general.step} because it's not a multiple of {self.lighteval_config.eval_interval}"
+            )
             return None, None
 
         return slurm_job_id, slurm_log
@@ -257,7 +259,12 @@ CUDA_DEVICE_MAX_CONNECTIONS=1 torchrun \\
 s5cmd cp --if-size-differ "{lighteval_config.output_dir}*" {lighteval_config.s3_save_path}/
 """
     if lighteval_config.upload_to_wandb:
-        gbs_tok = config.parallelism.dp * config.tokens.micro_batch_size * config.tokens.sequence_length * config.tokens.batch_accumulation_per_replica
+        gbs_tok = (
+            config.parallelism.dp
+            * config.tokens.micro_batch_size
+            * config.tokens.sequence_length
+            * config.tokens.batch_accumulation_per_replica
+        )
         slurm_script += f"""
 python {nanotron_path}/src/nanotron/eval/upload_to_wandb.py \\
     --wandb_project {lighteval_config.wandb_project} \\

@@ -17,30 +17,44 @@ from nanotron.config import (
     TokensArgs,
 )
 from nanotron.config.config import PretrainDatasetsArgs
+from nanotron.config.models_config import MoEConfig
 from nanotron.models import build_model
 from nanotron.models.qwen import Qwen2Config, Qwen2ForTraining
 from nanotron.parallel.context import ParallelContext
 from nanotron.trainer import mark_tied_parameters
 
-TINY_QWEN_CONFIG = Qwen2Config(
+QWEN_MOE_CONFIG = MoEConfig(
+    num_experts=8,
+    top_k=1,
+    enable_shared_expert=True,
+    token_dispatcher_type="alltoall",
+)
+
+QWEN_MODEL_CONFIG = {
+    "bos_token_id": 1,
+    "eos_token_id": 2,
+    "hidden_act": "silu",
+    "hidden_size": 128,
+    "initializer_range": 0.02,
+    "intermediate_size": 128 * 4,
+    "max_position_embeddings": 128,
+    "num_attention_heads": 4,
+    "num_hidden_layers": 4,
+    "num_key_value_heads": 2,
+    "pad_token_id": None,
+    "rms_norm_eps": 1e-06,
+    "rope_theta": 10000.0,
+    "tie_word_embeddings": False,
+    "use_cache": True,
+    "vocab_size": 4096,
+    "_attn_implementation": "flash_attention_2",
+}
+
+TINY_QWEN_CONFIG = Qwen2Config(**QWEN_MODEL_CONFIG)
+TINY_MOE_QWEN_CONFIG = Qwen2Config(
     **{
-        "bos_token_id": 1,
-        "eos_token_id": 2,
-        "hidden_act": "silu",
-        "hidden_size": 128,
-        "initializer_range": 0.02,
-        "intermediate_size": 128 * 4,
-        "max_position_embeddings": 128,
-        "num_attention_heads": 4,
-        "num_hidden_layers": 4,
-        "num_key_value_heads": 2,
-        "pad_token_id": None,
-        "rms_norm_eps": 1e-06,
-        "rope_theta": 10000.0,
-        "tie_word_embeddings": False,
-        "use_cache": True,
-        "vocab_size": 4096,
-        "_attn_implementation": "flash_attention_2",
+        **QWEN_MODEL_CONFIG,
+        "moe_config": QWEN_MOE_CONFIG,
     }
 )
 
