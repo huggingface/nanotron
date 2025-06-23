@@ -47,7 +47,7 @@ def save_optimizer(
     - If Zero-0 is used, optimizer states are replicated across all DPs. Only DP-0 saves the states
     - If Zero-1 is used, optimizer states are sharded across all DPs. Each DP saves its own states
     """
-    if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(parallel_context.dp_pg) > 0:
+    if (not optimizer.inherit_from(optim.ZeroDistributedOptimizer)) and dist.get_rank(parallel_context.dp_cp_pg) > 0:
         # this is Zero-0, so only DP-0 saves the optimizer states
         return
 
@@ -113,7 +113,7 @@ def save_lr_scheduler(
     root_folder: Path,
 ):
     """Saves lr scheduler states"""
-    if not is_zero and dist.get_rank(parallel_context.dp_pg) > 0:
+    if not is_zero and dist.get_rank(parallel_context.dp_cp_pg) > 0:
         # this is Zero-0, so only DP-0 saves the optimizer states
         return
 

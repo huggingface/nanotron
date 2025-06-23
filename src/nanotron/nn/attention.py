@@ -5,7 +5,7 @@ import torch
 from packaging import version
 
 from nanotron.nn.ring_attention import ring_flash_attn_varlen_func
-
+from nanotron.nn.llama3_ring_attention import llama3_flash_attn_varlen_qkvpacked_func
 
 # Replace direct import with a function for lazy loading
 def get_ring_flash_attn_cuda():
@@ -217,6 +217,7 @@ ALL_ATTENTION_FUNCTIONS = {
     "sdpa": sdpa_attention_forward,
     "ring_flash_triton": lambda *args, **kwargs: get_ring_flash_attn_cuda()(*args, **kwargs),
     "ring": ring_flash_attn_varlen_func,
+    "llama3_ring_attention": llama3_flash_attn_varlen_qkvpacked_func,
 }
 
 AttentionImplementation = Literal[tuple(ALL_ATTENTION_FUNCTIONS.keys())]

@@ -122,13 +122,13 @@ def save(
 
     # TODO @thomas21: sanity check, not sure whether that needs to happen at testing or now (depends how much it costs)
     ###
-    # SANITY CHECK: Check that the model params are synchronized across `parallel_context.dp_pg`
+    # SANITY CHECK: Check that the model params are synchronized across `parallel_context.dp_cp_pg`
     if sanity_checks:
         for name, param_or_buffer in sorted(model.state_dict().items(), key=lambda x: x[0]):
             assert_tensor_synced_across_pg(
                 tensor=param_or_buffer,
-                pg=parallel_context.dp_pg,
-                msg=lambda err: f"{name} are not synced across DP {err}",
+                pg=parallel_context.dp_cp_pg,
+                msg=lambda err: f"{name} are not synced across DP_CP {err}",
             )
 
         # SANITY CHECK: Check that the tied parameters are synchronized
@@ -150,7 +150,7 @@ def save(
                 tensor=tied_param, pg=group, msg=lambda err: f"Tied {tied_info.name} are not synced {err}"
             )
         if not optimizer.inherit_from(optim.ZeroDistributedOptimizer):
-            check_optim_state_in_sync(optimizer.state_dict(), parallel_context.dp_pg)
+            check_optim_state_in_sync(optimizer.state_dict(), parallel_context.dp_cp_pg)
 
         # SANITY CHECK: tied parameters have their optimizer states synchronized
         # Compute a mapping from id_ to index in the optimizer sense

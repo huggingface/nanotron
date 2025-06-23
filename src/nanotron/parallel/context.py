@@ -90,6 +90,15 @@ class ParallelContext:
             ]
         )
 
+        self.dp_cp_pg = self.create_new_group(
+            [
+                ranks[ep_rank, pp_rank, :, :, tp_rank].reshape(-1)
+                for tp_rank in range(self.tensor_parallel_size)
+                for pp_rank in range(self.pipeline_parallel_size)
+                for ep_rank in range(self.expert_parallel_size)
+            ]
+        )
+
         self.tp_and_ep_pg = self.create_new_group(
             [
                 ranks[:, pp_rank, dp_rank, cp_rank, :].reshape(-1)

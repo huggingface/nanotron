@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from functools import partial
 from math import ceil
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -312,10 +312,9 @@ def merge_named_param_groups(
 
     return named_param_groups
 
-
 def init_optimizer_and_grad_accumulator(
     parametrization_method: ParametrizationMethod,
-    model: nn.Module,
+    model: Union[nn.Module, DistributedDataParallel],
     optimizer_args: OptimizerArgs,
     parallel_context: ParallelContext,
 ) -> Tuple[BaseOptimizer, GradientAccumulator]:
@@ -446,13 +445,13 @@ def init_optimizer_and_grad_accumulator(
         assert isinstance(grad_accumulator, FP32GradientAccumulator)
         model.register_comm_hook(
             state=FP32GradBucketManager(
-                dp_pg=parallel_context.dp_pg,
+                dp_cp_pg=parallel_context.dp_cp_pg,
                 accumulator=grad_accumulator,
                 param_id_to_name={
                     id(param): param.get_tied_info().get_full_name_from_module_id_to_prefix(
                         module_id_to_prefix=module_id_to_prefix
                     )
-                    if param.is_tied
+                    if param.is_tied # a tied param exists only once physically in memory
                     else name
                     for name, param in unwrapped_model.named_parameters()
                 },

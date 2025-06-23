@@ -30,9 +30,8 @@ logger = logging.get_logger(__name__)
 def save_weights(model: nn.Module, parallel_context: ParallelContext, root_folder: Path):
     root_folder = root_folder / "model"
 
-    # We save only `dist.get_rank(parallel_context.dp_pg) == 0`
-    # TODO @thomasw21: Figure how this works with Zero-3
-    if dist.get_rank(parallel_context.dp_pg) != 0:
+    # We save only `dist.get_rank(parallel_context.dp_cp_pg) == 0`
+    if dist.get_rank(parallel_context.dp_cp_pg) != 0:
         return
 
     module_id_to_prefix = {id(module): f"{module_name}." for module_name, module in model.named_modules()}
