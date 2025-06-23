@@ -33,6 +33,8 @@ Nanotron is a library for pretraining transformer models. It provides a simple a
 
 📚 **Check out our [Ultrascale Playbook](https://huggingface.co/spaces/nanotron/ultrascale-playbook)** - A comprehensive guide to efficiently scale LLM training with Nanotron!
 
+📝 **AI generated docs thanks to [DeepWiki](https://deepwiki.com/huggingface/nanotron)**
+
 ## Installation
 
 To run the code in this project, first create a Python virtual environment using e.g. `uv`:
@@ -108,7 +110,7 @@ For detailed instructions on training your first model, check out our [Your Firs
 torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/{checkpoint_number}/ --tp 1 --pp 1
 ```
 
-Increase the value of `--tp` (tensor paralle) to accelerate generation with multiple GPUs and use a larger value of `--pp` (pipeline parallel) for very large models.
+Increase the value of `--tp` (tensor parallel) to accelerate generation with multiple GPUs and use a larger value of `--pp` (pipeline parallel) for very large models.
 
 ### Debugging with VSCode
 To debug with VSCode, add the following configuration to your `launch.json` file:
