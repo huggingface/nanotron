@@ -270,7 +270,7 @@ class DistributedTrainer:
         self.n_micro_batches_per_batch = self.config.tokens.batch_accumulation_per_replica
         self.global_batch_size = (
             self.micro_batch_size * self.n_micro_batches_per_batch * self.parallel_context.dp_pg.size()
-        )
+        ) # in terms of samples
         self.sequence_length = (
             self.config.tokens.sequence_length
         )  # Global sequence length not divided by context parallel size
@@ -339,7 +339,7 @@ class DistributedTrainer:
 
         log_rank("Start training", logger=logger, level=logging.INFO, rank=0, is_separator=True)
         log_rank(
-            f"mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_tokens_total: {metadata.consumed_tokens_total}",  # noqa
+            f"mbs: {self.micro_batch_size} | grad_accum: {self.n_micro_batches_per_batch} | cp: {self.parallel_context.cp_pg.size()} | sequence_length: {self.sequence_length} | global_batch_size: {self.global_batch_size} | train_steps: {self.config.tokens.train_steps} | start_iteration_step: {metadata.last_train_step} | consumed_tokens_total: {metadata.consumed_tokens_total}",  # noqa
             logger=logger,
             level=logging.INFO,
             rank=0,
@@ -350,21 +350,13 @@ class DistributedTrainer:
         # Initialize wandb for each TP group if TP > 1, but only for dp=0 ranks
         if wandb is not None:
             tp_size = self.parallel_context.tp_pg.size()
-            dp_rank = dist.get_rank(self.parallel_context.dp_pg)
+            dp_cp_rank = dist.get_rank(self.parallel_context.dp_cp_pg)
             tp_rank = dist.get_rank(self.parallel_context.tp_pg)
             world_rank = dist.get_rank(self.parallel_context.world_pg)
 
-            # Log all rank info for debugging purposes
-            log_rank(
-                f"Rank info - world_rank: {world_rank}, dp_rank: {dp_rank}, tp_rank: {tp_rank}, tp_size: {tp_size}, logger_ranks: {self.logger_ranks}",
-                logger=logger,
-                level=logging.INFO,
-                rank=world_rank,
-            )
-
             if tp_size > 1 and self.metrics_logging.log_level > 0:
                 # Create one wandb logger per TP group for DP=0 ranks
-                if dp_rank == 0:
+                if dp_cp_rank == 0:
                     # Create a run name that includes the TP group
                     run_name = f"{current_time}_{self.config.general.run}_tp_group_{tp_rank}"
 
@@ -647,6 +639,8 @@ class DistributedTrainer:
         nanotron_timer("sync_gradients", "cuda").start()
         # Sync tied weights
         if not isinstance(self.model, DistributedDataParallel):
+            if self.parallel_context.context_parallel_size > 1:
+                raise NotImplementedError("Context parallel size > 1 is not supported yet without DDP")
             # Manually sync across DP if it's not handled by DDP
             sync_gradients_across_dp(
                 module=self.model,
@@ -682,7 +676,7 @@ class DistributedTrainer:
             )
         nanotron_timer("clip_gradients", "cuda").end()
 
-        # Compute DP average loss and overlap with optimizer step
+        # Compute DP-CP average loss and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
             # This is an average on only one data rank.
             loss_avg = torch.stack(
@@ -694,8 +688,8 @@ class DistributedTrainer:
                 ).sum()  # already divided by n_micro_batches_per_batch
             else:
                 z_loss_avg = None
-            # sync loss across DP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
-            handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+            # sync loss across DP-CP (we should do the same for z_loss but it's only for logging so let's not sync it rn)
+            handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_cp_pg, async_op=True, op=dist.ReduceOp.AVG)
         else:
             z_loss_avg = None
             loss_avg = None
@@ -764,7 +758,7 @@ class DistributedTrainer:
 
         # Get rank information (used by both console and wandb logging)
         tp_size = self.parallel_context.tp_pg.size()
-        dp_rank = dist.get_rank(self.parallel_context.dp_pg)
+        dp_cp_rank = dist.get_rank(self.parallel_context.dp_cp_pg)
         tp_rank = dist.get_rank(self.parallel_context.tp_pg)
         world_rank = dist.get_rank(self.parallel_context.world_pg)
 
@@ -774,12 +768,7 @@ class DistributedTrainer:
         eta_seconds = int(remaining_steps * (elapsed_time_per_iteration_ms / 1000))
         basic_log_entries = [
             # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
-            LogItem(
-                "consumed_tokens",
-                self.metadata.consumed_train_samples
-                * self.config.tokens.sequence_length,  # TODO: not true if we change seqlen
-                "human_format",
-            ),  # , "12d"),
+            LogItem("consumed_tokens", self.metadata.consumed_tokens_total, "human_format"),
             LogItem("time_per_iteration_ms", elapsed_time_per_iteration_ms, "human_format"),  # , ".1f"),
             LogItem("tokens_per_sec", tokens_per_sec, "human_format"),  # , "1.6E"),
             LogItem(
@@ -901,7 +890,7 @@ class DistributedTrainer:
 
         # WandB logging - determine if this rank should log to wandb
         should_log_to_wandb = wandb is not None and (
-            (tp_size > 1 and dp_rank == 0 and self.metrics_logging.log_level > 0)
+            (tp_size > 1 and dp_cp_rank == 0 and self.metrics_logging.log_level > 0)
             or (tp_size > 1 and world_rank == self.logger_ranks[0] and self.metrics_logging.log_level == 0)
             or (tp_size == 1 and world_rank == self.logger_ranks[0])  # For TP>1, log from each TP group's dp=0 rank
         )
@@ -913,7 +902,7 @@ class DistributedTrainer:
 
         if should_log_detailed_metrics_to_wandb:
             assert not (
-                wandb.run is None and tp_size > 1 and dp_rank == 0
+                wandb.run is None and tp_size > 1 and dp_cp_rank == 0
             ), f"WandB is not initialized for TP rank {tp_rank}, but logging was requested. Make sure that wandb is initialize before training."
             all_log_entries = list(basic_log_entries)
 
@@ -1057,6 +1046,8 @@ class DistributedTrainer:
             reloaded_from_checkpoint = True
         if not reloaded_from_checkpoint:
             log_rank("No checkpoint path provided.", logger=logger, level=logging.INFO, rank=0)
+            if self.parallel_context.context_parallel_size > 1:
+                raise NotImplementedError("Init with Context parallel size > 1 not supported yet")
             if isinstance(self.config.model.init_method, ExistingCheckpointInit):
                 # Initialize model from an pretrained model checkpoint (without optimizer, lr_scheduler...)
                 self.param_shard_metadata = load_weights(
@@ -1096,7 +1087,7 @@ class DistributedTrainer:
         parallel_context = self.parallel_context
 
         parallel_config = config.parallelism
-        make_ddp = parallel_context.data_parallel_size > 1 and not (
+        make_ddp = parallel_context.data_parallel_size > 1 or parallel_context.context_parallel_size > 1 and not (
             config.optimizer.accumulate_grad_in_fp32 and config.optimizer.zero_stage > 0
         )
 
@@ -1161,7 +1152,7 @@ class DistributedTrainer:
             # TODO @thomasw21: DDP doesn't support broadcasting complex buffers (and we don't really need that broadcasting anyway)
             model = DistributedDataParallel(
                 model,
-                process_group=parallel_context.dp_pg,
+                process_group=parallel_context.dp_cp_pg,
                 broadcast_buffers=False,
                 bucket_cap_mb=config.model.ddp_bucket_cap_mb,
             )
@@ -1264,15 +1255,15 @@ class DistributedTrainer:
 
         # Update step/samples numbers before we save the config
         self.config.general.step = self.metadata.last_train_step
-        self.config.general.consumed_train_samples = self.metadata.consumed_train_samples
+        self.config.general.consumed_train_samples = self.metadata.consumed_train_samples # TODO: idc abt this
 
         save(
             model=self.unwrapped_model,
             optimizer=self.optimizer,
             lr_scheduler=self.lr_scheduler,
             should_save_model=bool(
-                dist.get_rank(self.parallel_context.dp_pg) == 0
-            ),  # We only save the weights on DP==0
+                dist.get_rank(self.parallel_context.dp_cp_pg) == 0
+            ),  # We only save the weights on DP_CP==0
             should_save_optimizer=True,
             should_save_lr_scheduler=True,
             should_save_config=bool(

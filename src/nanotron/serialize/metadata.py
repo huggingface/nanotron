@@ -30,7 +30,7 @@ class DataStageMetadata:
 
     def __post_init__(self):
         if self.sequence_length is None:
-            self.sequence_length = 4096
+            self.sequence_length = 4096 # TODO: temp
 
     def sanity_consumed_train_samples(self):
         assert self.consumed_train_samples*self.sequence_length == sum(self.consumed_tokens_per_dataset_folder.values()), f"Mismatch between the total consumed samples and the sum of consumed samples across dataset folders! consumed_train_samples={self.consumed_train_samples}, sequence_length={self.sequence_length}, consumed_tokens_per_dataset_folder={self.consumed_tokens_per_dataset_folder}"
@@ -91,6 +91,7 @@ class CheckpointMetadata:
     tp: int
     dp: int
     metas: TrainingMetadata
+    cp: int = 1
     custom_metas: Optional[Dict[str, Any]] = None
 
 
@@ -167,6 +168,7 @@ def save_meta(parallel_context: ParallelContext, root_folder: Path, training_met
         version=CHECKPOINT_VERSION,
         tp=parallel_context.tp_pg.size(),
         dp=parallel_context.dp_pg.size(),
+        cp=parallel_context.cp_pg.size(),
         metas=training_metadata,
     )
 
