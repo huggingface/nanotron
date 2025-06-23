@@ -60,7 +60,9 @@ def process_sft(examples, tokenizer, trainer_sequence_length):
         # Set position ids for all tokens (prompt and completion) to sequential values
         # But only where attention_mask is True (non-padding tokens)
         valid_length = attention_mask[i].sum().item()
-        position_ids[i, :valid_length] = torch.arange(valid_length)
+        position_ids[i, :valid_length] = torch.arange(
+            valid_length
+        )  # TODO: better to pad left, although in modeling we remove pads so it doesnt matter if left or right
 
         # Set label_mask to True only for completion tokens
         # If prompt consumes the entire sequence, no tokens are used for loss

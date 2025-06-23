@@ -35,6 +35,8 @@ class ParallelismArgs:
     recompute_layer: bool = False
     tp_recompute_allgather: bool = True
 
+    moe_layer_recompute: bool = False  # TODO: legacy config for smollm
+
     expert_parallel_size: int = 1
     context_parallel_size: int = 1
 

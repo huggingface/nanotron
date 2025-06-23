@@ -632,7 +632,7 @@ def get_config_from_dict(
                 InitScalingMethod: lambda x: InitScalingMethod[x.upper()],
                 SamplerType: lambda x: SamplerType[x.upper()],
             },
-            # strict_unions_match=True,
+            strict_unions_match=True,
             strict=True,
         ),
     )

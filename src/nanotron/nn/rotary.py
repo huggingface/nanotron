@@ -1,6 +1,35 @@
 import torch
+from flash_attn.layers.rotary import RotaryEmbedding as OriginalFlashRotaryEmbedding
 from flash_attn.layers.rotary import apply_rotary_emb as flash_apply_rotary_emb
 from torch import nn
+
+
+class FlashRotaryEmbedding(OriginalFlashRotaryEmbedding):
+    """
+    This is a modified version of the FlashRotaryEmbedding class that supports variable length sequences in case of inference.
+    """
+
+    def varlen_forward(self, x, seqlen_offsets, cu_seqlens, max_seqlen):
+        """
+        x: (batch_size, seqlen, nheads, headdim) if cu_seqlens is None
+            else (total_seqlen, nheads, headdim)
+        seqlen_offsets: (batch_size)
+        cu_seqlens: (batch_size + 1)
+        max_seqlen: int
+        """
+        assert not self.training, "This is supposed to be used only in inference"
+        assert max_seqlen is not None, "max_seqlen must be provided"
+        self._update_cos_sin_cache(max_seqlen, device=x.device, dtype=x.dtype)
+        flash_apply_rotary_emb(
+            x,
+            cos=self._cos_cached,
+            sin=self._sin_cached,
+            interleaved=self.interleaved,
+            inplace=True,
+            seqlen_offsets=seqlen_offsets,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+        )
 
 
 class RotaryEmbedding(nn.Module):
