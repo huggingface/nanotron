@@ -3,7 +3,7 @@ from abc import abstractmethod
 from enum import Enum, auto
 from typing import Dict
 
-from nanotron.config import Config, ModelArgs
+from nanotron.config import Config
 from nanotron.config.models_config import InitScalingMethod
 from nanotron.nn.layer_norm import LlamaRMSNorm, TritonRMSNorm
 from nanotron.nn.moe import GroupedMLP, Router
@@ -22,7 +22,7 @@ class ParametrizationMethod(Enum):
 
 
 class Parametrizator:
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: Config):
         self.config = config
 
     def parametrize(self, param_name: str, module: nn.Module):
@@ -128,7 +128,7 @@ class SpectralMupParametrizator(Parametrizator):
     https://arxiv.org/abs/2310.17813
     """
 
-    def __init__(self, config: ModelArgs):
+    def __init__(self, config: Config):
         super().__init__(config)
         self.MODULE_TO_PARAMETRIZE = {
             TensorParallelColumnLinear: self._parametrize_mup_weight,
