@@ -57,6 +57,7 @@ def get_args():
         required=True,
         help="Path to local stored dataset or repository on the Hugging Face hub that can be loaded with datasets.load_dataset",
     )
+    p1.add_argument("--name", type=str, default=None, help="Dataset configuration name. Optional")
     p1.add_argument("--column", type=str, default="text", help="Column to preprocess from the Dataset. Default: text")
     p1.add_argument("--split", type=str, default="train", help="Which split of the data to process. Default: train")
 
@@ -83,7 +84,7 @@ def main(args):
         datatrove_reader = HuggingFaceDatasetReader(
             dataset=args.dataset,
             text_key=args.column,
-            dataset_options={"split": args.split},
+            dataset_options={"split": args.split, "name": args.name},
         )
     else:
         datatrove_reader = JsonlReader(data_folder=args.dataset, text_key=args.column, glob_pattern=args.glob_pattern)
