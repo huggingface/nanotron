@@ -324,7 +324,11 @@ def get_dataloader(
 
     current_stage = None
     # WARNING: we assume we train on last stage
-    stage_idx = len(trainer.config.data_stages) - 1
+    stage_idx = len(trainer.config.data_stages) - 1  # Default to last stage
+    for idx, stage in enumerate(trainer.config.data_stages):
+        if trainer.iteration_step < stage.start_training_step:
+            stage_idx = max(0, idx - 1)
+            break
     stage_args = trainer.config.data_stages[stage_idx]
     if trainer.iteration_step+1 == stage_args.start_training_step:
         log_rank(f"Starting new stage {stage_args.name}", logger=logger, level=logging.INFO, rank=0)
