@@ -379,7 +379,7 @@ def get_dataloader(
 
 
 
-    dataloaders[current_stage.name] = get_dataloader_from_data_stage(
+    dataloaders[stage_args.name] = get_dataloader_from_data_stage(
         trainer,
         stage_args_data,
         consumed_train_samples_stage=cur_stage_consumed_train_samples,
