@@ -229,7 +229,6 @@ def log_rank(
     rank: Optional[int] = None,
     category: Optional[str] = None,
     is_separator: bool = False,
-    main_rank_only: bool = False,
     **kwargs,
 ):
     """Log only if the current process is the rank specified."""
@@ -247,8 +246,6 @@ def log_rank(
         kwargs["extra"] = kwargs.get("extra", {})
         kwargs["extra"]["separator"] = True
 
-    if main_rank_only:
-        rank = 0
     # rank is None means everyone logs
     if rank is None or dist.get_rank(group) == rank:
         if is_separator:

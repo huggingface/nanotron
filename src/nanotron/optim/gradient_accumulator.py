@@ -182,8 +182,7 @@ class FP32GradientAccumulator(GradientAccumulator):
             if not param.requires_grad:
                 continue
 
-            # MoE router weights are initialized in float32
-            assert param.dtype != torch.float or "router.weight" in name, f"Expected {name} not to be float"
+            assert param.dtype != torch.float, f"Expected {name} not to be float"
             assert param.is_contiguous(), f"Expected {name} to be contiguous"
 
             next_offset = offset + param.numel() * element_size

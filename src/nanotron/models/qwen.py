@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 from flash_attn.modules.mha import flash_attn_varlen_kvpacked_func
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.checkpoint import CheckpointFunction
 
 from nanotron import distributed as dist
@@ -336,7 +337,6 @@ class Qwen2MLP(nn.Module):
         config: Qwen2Config,
         parallel_config: Optional[ParallelismArgs],
         tp_pg: dist.ProcessGroup,
-        intermediate_size: int,
     ) -> None:
         super().__init__()
 
@@ -346,14 +346,14 @@ class Qwen2MLP(nn.Module):
             parallel_config.tp_linear_async_communication if parallel_config is not None else False
         )
 
+        # Define gate_up_proj as a merged layer for gate and up projections
         gate_up_contiguous_chunks = (
-            intermediate_size,  # shape of gate_linear
-            intermediate_size,  # shape of up_linear
+            config.intermediate_size,  # shape of gate_linear
+            config.intermediate_size,  # shape of up_linear
         )
-
         self.gate_up_proj = TensorParallelColumnLinear(
             config.hidden_size,
-            2 * intermediate_size,
+            2 * config.intermediate_size,
             pg=tp_pg,
             mode=tp_mode,
             bias=False,  # Qwen2 doesn't use bias for gate_up_proj
@@ -364,7 +364,7 @@ class Qwen2MLP(nn.Module):
 
         # Define down projection
         self.down_proj = TensorParallelRowLinear(
-            intermediate_size,
+            config.intermediate_size,
             config.hidden_size,
             pg=tp_pg,
             mode=tp_mode,
@@ -593,8 +593,6 @@ class Qwen2DecoderLayer(nn.Module):
 
         # Use MoE layer if this layer is in the MoE layers list
         if config.moe_config and layer_idx in config.moe_config.layers:
-            from nanotron.nn.moe import Qwen2MoELayer
-
             self.mlp = Qwen2MoELayer(
                 config=config,
                 parallel_config=parallel_config,
@@ -606,7 +604,6 @@ class Qwen2DecoderLayer(nn.Module):
                 config=config,
                 parallel_config=parallel_config,
                 tp_pg=tp_pg,
-                intermediate_size=config.intermediate_size,
             )
 
         self.recompute_layer = parallel_config.recompute_layer

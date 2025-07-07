@@ -22,7 +22,6 @@ dependencies = [
     "dacite",
     "tqdm",
     "datasets",
-    "torchtyping"
 ]
 
 [tool.setuptools.packages.find]
