@@ -369,6 +369,8 @@ class DistributedTrainer:
                     run_name = f"{current_time}_{self.config.general.run}_tp_group_{tp_rank}"
 
                     wandb.init(
+                        # space_id="HuggingFaceFW-Dev/finepdfs-trackio",
+                        # space_id="hynky/finepdfs-trackio",
                         project=self.config.general.project,
                         name=run_name,
                         config={"nanotron_config": self.config.as_dict()},
@@ -403,10 +405,12 @@ class DistributedTrainer:
                     ]
 
                 wandb.init(
+                    # space_id="HuggingFaceFW-Dev/finepdfs-trackio",
+                    # space_id="hynky/finepdfs-trackio",
                     project=self.config.general.project,
                     name=run_name,
                     config={"nanotron_config": self.config.as_dict()},
-                    settings=wandb.Settings(**wandb_settings),
+                    # settings=wandb.Settings(**wandb_settings),
                 )
                 # save config file
                 temp_config_path = tempfile.mktemp(suffix=".yaml", prefix="config")
@@ -938,7 +942,7 @@ class DistributedTrainer:
                     **tp_group_info,
                     "iteration_step": self.iteration_step,
                 },
-                step=self.iteration_step,
+                # step=self.iteration_step,
             )
             log_rank(
                 f"Successfully logged {len(all_log_entries)} metrics to WandB for tp_rank={tp_rank}",

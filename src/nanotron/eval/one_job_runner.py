@@ -114,7 +114,7 @@ def run_slurm_one_job(
     # Use lighteval config paths if available, otherwise use defaults
     eval_launch_script_path = os.path.join(lighteval_config.logs_path, general_run_name, "launch_scripts", f"step-{current_step}")
     eval_logs_path = os.path.join(lighteval_config.logs_path, general_run_name, "logs", f"step-{current_step}")
-    launch_config_path = os.path.join(lighteval_config.logs_path, general_run_name, "launch_config", f"step-{current_step}")
+    model_config_path = os.path.join(lighteval_config.logs_path, general_run_name, "model_config", f"step-{current_step}")
 
     # Use configured local path instead of hardcoded /tmp
     local_path = os.path.join(lighteval_config.local_checkpoint_dir, run_name, str(current_step))
@@ -126,20 +126,19 @@ def run_slurm_one_job(
     # Create directories
     os.makedirs(eval_launch_script_path, exist_ok=True)
     os.makedirs(eval_logs_path, exist_ok=True)
-    os.makedirs(launch_config_path, exist_ok=True)
+    os.makedirs(model_config_path, exist_ok=True)
 
 
     lighteval_config_yaml = {
-        "model": {
-            "base_params": {
-                "base_model": f"{hf_model_dir}",
-                "batch_size": lighteval_config.batch_size,
-                "trust_remote_code": True,
-                "max_gen_toks": None,
-                "generation_parameters": {
-                    "repetition_penalty": 1.2,
-                }
-        }
+        "model_parameters": {
+            "model_name": hf_model_dir,
+            "batch_size": lighteval_config.batch_size,
+            "trust_remote_code": True,
+            "dtype": "bfloat16",
+            "model_name_override": f"{general_run_name}/{current_step}",
+            "generation_parameters": {
+                "repetition_penalty": 1.2,
+            }
         }
     }
 
@@ -147,7 +146,7 @@ def run_slurm_one_job(
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     # Create a launch config file
-    lighteval_launch_config_path = os.path.join(launch_config_path, f"launch_config-{current_time}.yaml")
+    lighteval_launch_config_path = os.path.join(model_config_path, f"model_config-{current_time}.yaml")
     with open(lighteval_launch_config_path, "w") as f:
         yaml.dump(lighteval_config_yaml, f)
 
@@ -280,17 +279,17 @@ ls -la $LOCAL_DOWNLOAD_CHECKPOINT_FOLDER/
 # Add random sleep to avoid hub request conflicts
 # sleep $(( RANDOM % 300 ))
 
-# TODO: Ensure to only use args that are not None
 CUDA_DEVICE_MAX_CONNECTIONS=1 accelerate launch \\
     --multi_gpu \\
     --num_processes {slurm_config.gpus_per_node} \\
     -m lighteval accelerate \\
-    --custom-tasks {lighteval_config.tasks.custom_tasks} \\
-    --dataset-loading-processes {lighteval_config.tasks.dataset_loading_processes} \\
-    --max-samples {lighteval_config.tasks.max_samples} \\
-    --output-dir {lighteval_config.output_dir} \\
+    {f'--custom-tasks {lighteval_config.tasks.custom_tasks}' if lighteval_config.tasks.custom_tasks is not None else ''} \\
+    {f'--dataset-loading-processes {lighteval_config.tasks.dataset_loading_processes}' if lighteval_config.tasks.dataset_loading_processes is not None else ''} \\
+    {f'--max-samples {lighteval_config.tasks.max_samples}' if lighteval_config.tasks.max_samples is not None else ''} \\
+    {f'--output-dir {lighteval_config.output_dir}' if lighteval_config.output_dir is not None else ''} \\
+    --save-details \\
     {lighteval_launch_config_path} \\
-    {lighteval_config.tasks}
+    {lighteval_config.tasks.tasks}
     """
     if lighteval_config.output_dir is not None and lighteval_config.s3_save_path is not None:
         slurm_script += f"""
