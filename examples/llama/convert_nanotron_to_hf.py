@@ -173,3 +173,7 @@ if __name__ == "__main__":
     # Check if the conversion was successful by generating some text.
     if args.check_conversion:
         check_converted_model_generation(save_path=args.save_path)
+
+    # Destroy process group at the end if torch.distributed is initialized
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
