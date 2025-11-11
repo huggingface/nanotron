@@ -13,3 +13,4 @@ uv pip install -e $CURRENT_PATH/..
 uv pip install datasets transformers datatrove[io] numba wandb setuptools psutil
 # Fused kernels
 MAX_JOBS=16 uv pip install ninja triton "flash-attn>=2.5.0" --no-build-isolation
+MAX_JOBS=16 uv pip install --no-build-isolation git+https://github.com/fanshiqing/grouped_gemm@main
