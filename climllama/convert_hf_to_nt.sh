@@ -5,6 +5,11 @@ CKPT_PATH_NT=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_chec
 
 source nanotron/bin/activate
 
+export WORLD_SIZE=1
+export RANK=0
+export LOCAL_RANK=0
+export MASTER_ADDR=localhost
+export MASTER_PORT=12345
 python -m examples.llama.convert_hf_to_nanotron \
     --checkpoint_path $CKPT_PATH_HF \
     --save_path $CKPT_PATH_NT

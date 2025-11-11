@@ -68,6 +68,3 @@ requires = [
 
 [pytest]
 norecursedirs="tests/helpers"
-
-[tool.uv.extra-build-dependencies]
-flash-attn = ["torch"]
