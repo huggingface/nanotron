@@ -17,6 +17,7 @@ from nanotron import logging
 from nanotron.config import (
     DataArgs,
     DatasetStageArgs,
+    IndexedDatasetsArgs,
     NanosetDatasetsArgs,
     PretrainDatasetsArgs,
     Qwen2Config,
@@ -185,7 +186,41 @@ def get_dataloader_from_data_stage(
                 f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"
             )
 
-    # Case 3: Nanosets
+    # Case 3: Indexed datasets (Megatron/NeMo .bin + .idx)
+    elif isinstance(data.dataset, IndexedDatasetsArgs):
+        log_rank("Using Megatron IndexedDataset", logger=logger, level=logging.INFO, rank=0)
+        from nanotron.data.nemo_dataset import build_dataset
+
+        tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+
+        train_dataset = build_dataset(
+            cfg=data.dataset,
+            tokenizer=tokenizer,
+            data_prefix=data.dataset.data_prefix,
+            num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+            seq_length=trainer.sequence_length,
+            seed=data.seed,
+            skip_warmup=data.dataset.skip_warmup,
+            name="train",
+            parallel_context=trainer.parallel_context,
+        )
+
+        dataloader = get_train_dataloader(
+            train_dataset=train_dataset,
+            sequence_length=trainer.sequence_length,
+            parallel_context=trainer.parallel_context,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            micro_batch_size=trainer.micro_batch_size,
+            consumed_train_samples_stage=consumed_train_samples_stage,
+            dataloader_num_workers=data.num_loading_workers,
+            seed_worker=data.seed,
+            dataloader_drop_last=True,
+            use_position_ids=isinstance(trainer.model_config, Qwen2Config),
+        )
+
+    # Case 4: Nanosets
     elif isinstance(data.dataset, NanosetDatasetsArgs):
         log_rank("Using TokenizedBytes Dataloader", logger=logger, level=logging.INFO, rank=0)
         from nanotron.data.tokenized_bytes import get_tb_dataloader, get_tb_datasets

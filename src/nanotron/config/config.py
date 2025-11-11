@@ -3,7 +3,7 @@ import glob
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import List, Optional, Type, Union
+from typing import Dict, List, Optional, Type, Union
 
 import dacite
 import torch
@@ -206,11 +206,28 @@ class NanosetDatasetsArgs:
 
 
 @dataclass
+class IndexedDatasetsArgs:
+    """Arguments for Megatron/NeMo indexed datasets (.bin + .idx files)"""
+    data_prefix: Union[List[str], Dict[str, List[str]]]
+    splits_string: str = "969,30,1"
+    validation_drop_last: bool = True
+    eod_mask_loss: bool = False
+    no_seqlen_plus_one_input_tokens: bool = False
+    index_mapping_dir: Optional[str] = None
+    fim_rate: float = 0.0
+    fim_spm_rate: float = 0.0
+    fim_split_sample: Optional[str] = None
+    fragment_fim_rate: float = 0.0
+    no_fim_prefix: bool = False
+    skip_warmup: bool = False
+
+
+@dataclass
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
     dataset: Optional[
-        Union[PretrainDatasetsArgs, NanosetDatasetsArgs, SFTDatasetsArgs]
+        Union[PretrainDatasetsArgs, NanosetDatasetsArgs, SFTDatasetsArgs, IndexedDatasetsArgs]
     ]  # If None we use dummy_infinite_data_generator
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1
