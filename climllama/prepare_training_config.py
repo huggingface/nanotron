@@ -1,21 +1,23 @@
 """Script to prepare a training configuration YAML file from a Nanotron checkpoint.
 
 This script reads a Nanotron checkpoint, parses the model architecture, and generates
-a training configuration YAML file ready for finetuning or continued pretraining.
+a training configuration YAML file ready for finetuning or continued pretraining using
+Megatron/NeMo IndexedDataset format (.bin/.idx files).
 
 Usage:
     python climllama/prepare_training_config.py \
         --checkpoint_path /path/to/nanotron/checkpoint \
-        --output_config config_finetune.yaml \
+        --data_prefix /path/to/indexed/dataset \
+        --output_config config_train.yaml \
         --tokenizer_path /path/to/tokenizer \
-        --mode finetune
+        --mode pretrain
 
 Arguments:
     --checkpoint_path: Path to the Nanotron checkpoint directory (required)
+    --data_prefix: Path prefix to Megatron indexed dataset (.bin/.idx) (required)
     --output_config: Path to save the output YAML config (default: config_finetune.yaml)
     --tokenizer_path: HF tokenizer path or name (default: uses checkpoint path)
     --mode: Training mode - 'finetune' or 'pretrain' (default: finetune)
-    --dataset: HuggingFace dataset name or path (default: trl-lib/tldr for SFT)
     --train_steps: Number of training steps (default: 5000)
     --learning_rate: Learning rate (default: 1e-5 for finetune, 3e-4 for pretrain)
     --micro_batch_size: Micro batch size (default: 2)
@@ -23,12 +25,16 @@ Arguments:
     --dp: Data parallelism degree (default: 4)
     --tp: Tensor parallelism degree (default: 2)
     --pp: Pipeline parallelism degree (default: 1)
+    --splits_string: Train/val/test split ratios (default: 969,30,1)
+    --index_mapping_dir: Directory to cache index mappings (default: None)
+    --skip_warmup: Skip warmup when building indexed dataset (default: False)
 """
 
 import argparse
 import json
 import os
 from pathlib import Path
+from typing import Union, List, Dict, Optional
 
 from nanotron.config import (
     AdamWOptimizerArgs,
@@ -37,15 +43,14 @@ from nanotron.config import (
     DataArgs,
     DatasetStageArgs,
     GeneralArgs,
+    IndexedDatasetsArgs,
     LlamaConfig,
     LoggingArgs,
     LRSchedulerArgs,
     ModelArgs,
     OptimizerArgs,
     ParallelismArgs,
-    PretrainDatasetsArgs,
     RandomInit,
-    SFTDatasetsArgs,
     TokenizerArgs,
     TokensArgs,
 )
@@ -95,13 +100,45 @@ def calculate_parameters(model_config: LlamaConfig) -> int:
     return total_params
 
 
+def parse_data_prefix(data_prefix_str: str) -> List:
+    """Parse data_prefix string into proper format for IndexedDatasetsArgs.
+
+    Supports:
+    - Single path: "/path/to/dataset" -> ["/path/to/dataset"]
+    - Multiple paths with weights (comma-separated): "0.6,/path/to/dataset1,0.4,/path/to/dataset2"
+      -> [0.6, "/path/to/dataset1", 0.4, "/path/to/dataset2"]
+    - Simple list (comma-separated): "/path/to/dataset1,/path/to/dataset2"
+      -> ["/path/to/dataset1", "/path/to/dataset2"]
+    """
+    if "," in data_prefix_str:
+        parts = [p.strip() for p in data_prefix_str.split(",")]
+        # Check if it's a weighted format (alternating weights and paths)
+        try:
+            # Try to parse as weighted format: weight1,path1,weight2,path2,...
+            result: List = []
+            for part in parts:
+                try:
+                    # Try to convert to float (weight)
+                    result.append(float(part))
+                except ValueError:
+                    # It's a path string
+                    result.append(part)
+            return result
+        except Exception:
+            # If parsing fails, return as list of paths
+            return parts
+    else:
+        # Single path, but IndexedDatasetsArgs expects List, so wrap it
+        return [data_prefix_str]
+
+
 def create_training_config(
     checkpoint_path: str,
     tokenizer_path: str,
-    mode: str = "finetune",
-    dataset: str = "trl-lib/tldr",
+    data_prefix: str,
+    mode: str = "pretrain",
     train_steps: int = 5000,
-    learning_rate: float = None,
+    learning_rate: Optional[float] = None,
     micro_batch_size: int = 2,
     sequence_length: int = 4096,
     dp: int = 4,
@@ -110,6 +147,9 @@ def create_training_config(
     batch_accumulation: int = 1,
     checkpoint_interval: int = 500,
     seed: int = 42,
+    splits_string: str = "969,30,1",
+    index_mapping_dir: Optional[str] = None,
+    skip_warmup: bool = False,
 ) -> Config:
     """Create a training configuration from checkpoint."""
 
@@ -174,35 +214,28 @@ def create_training_config(
         batch_accumulation_per_replica=batch_accumulation,
     )
 
-    # Data configuration based on mode
-    if mode == "finetune":
-        data_stages = [
-            DatasetStageArgs(
-                name="Supervised Fine-Tuning Stage",
-                start_training_step=1,
-                data=DataArgs(
-                    dataset=SFTDatasetsArgs(
-                        hf_dataset_or_datasets=dataset,
-                        hf_dataset_splits="train",
-                    ),
-                    seed=seed,
+    # Data configuration using Megatron IndexedDataset
+    # Parse data_prefix to support single path or weighted blending
+    parsed_data_prefix = parse_data_prefix(data_prefix)
+
+    data_stages = [
+        DatasetStageArgs(
+            name="Training Stage",
+            start_training_step=1,
+            data=DataArgs(
+                dataset=IndexedDatasetsArgs(
+                    data_prefix=parsed_data_prefix,
+                    splits_string=splits_string,
+                    validation_drop_last=True,
+                    eod_mask_loss=False,
+                    no_seqlen_plus_one_input_tokens=False,
+                    index_mapping_dir=index_mapping_dir,
+                    skip_warmup=skip_warmup,
                 ),
+                seed=seed,
             ),
-        ]
-    else:  # pretrain mode
-        data_stages = [
-            DatasetStageArgs(
-                name="Pretraining Stage",
-                start_training_step=1,
-                data=DataArgs(
-                    dataset=PretrainDatasetsArgs(
-                        hf_dataset_or_datasets=dataset,
-                        text_column_name="text",
-                    ),
-                    seed=seed,
-                ),
-            ),
-        ]
+        ),
+    ]
 
     # Checkpoint configuration
     checkpoints_path = os.path.join(os.path.dirname(checkpoint_path), "finetuned_checkpoints")
@@ -277,10 +310,10 @@ def main():
     )
 
     parser.add_argument(
-        "--dataset",
+        "--data_prefix",
         type=str,
-        default="trl-lib/tldr",
-        help="HuggingFace dataset name or path (default: trl-lib/tldr)",
+        required=True,
+        help="Path prefix to Megatron indexed dataset (.bin/.idx files) or list of paths with weights",
     )
 
     parser.add_argument(
@@ -353,6 +386,26 @@ def main():
         help="Random seed (default: 42)",
     )
 
+    parser.add_argument(
+        "--splits_string",
+        type=str,
+        default="969,30,1",
+        help="Train/val/test split ratios (default: 969,30,1)",
+    )
+
+    parser.add_argument(
+        "--index_mapping_dir",
+        type=str,
+        default=None,
+        help="Directory to cache index mappings (default: None)",
+    )
+
+    parser.add_argument(
+        "--skip_warmup",
+        action="store_true",
+        help="Skip warmup when building indexed dataset",
+    )
+
     args = parser.parse_args()
 
     # Use checkpoint path as tokenizer path if not specified
@@ -360,18 +413,19 @@ def main():
 
     print(f"Creating {args.mode} configuration from checkpoint: {args.checkpoint_path}")
     print(f"Tokenizer path: {tokenizer_path}")
-    print(f"Dataset: {args.dataset}")
+    print(f"Data prefix: {args.data_prefix}")
     print(f"Training steps: {args.train_steps}")
     print(f"Learning rate: {args.learning_rate if args.learning_rate else 'auto'}")
     print(f"Parallelism: DP={args.dp}, TP={args.tp}, PP={args.pp}")
+    print(f"Splits: {args.splits_string}")
     print()
 
     # Create config
     config = create_training_config(
         checkpoint_path=args.checkpoint_path,
         tokenizer_path=tokenizer_path,
+        data_prefix=args.data_prefix,
         mode=args.mode,
-        dataset=args.dataset,
         train_steps=args.train_steps,
         learning_rate=args.learning_rate,
         micro_batch_size=args.micro_batch_size,
@@ -382,6 +436,9 @@ def main():
         batch_accumulation=args.batch_accumulation,
         checkpoint_interval=args.checkpoint_interval,
         seed=args.seed,
+        splits_string=args.splits_string,
+        index_mapping_dir=args.index_mapping_dir,
+        skip_warmup=args.skip_warmup,
     )
 
     # Save config
