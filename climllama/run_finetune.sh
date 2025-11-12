@@ -27,8 +27,6 @@ fi
 # Create logs directory if it doesn't exist
 mkdir -p logs
 
-# Activate environment
-source $BASE_PATH/.venv/bin/activate
 
 export http_proxy=http://proxy.cscs.ch:8080
 export https_proxy=http://proxy.cscs.ch:8080
@@ -39,11 +37,14 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo ""
 
-# Run training
-# numactl --membind=0-3 # not available on container
-srun -A a122 --environment=cuda129_ub2404 \
- torchrun \
+CMD="source $BASE_PATH/.venv/bin/activate && torchrun \
  --nproc_per_node=4 \
  --nnodes=$SLURM_NNODES \
  --start-method forkserver \
- $BASE_PATH/run_train.py --config-file $CONFIG_FILE
+ $BASE_PATH/run_train.py --config-file $CONFIG_FILE"
+
+# Run training
+# numactl --membind=0-3 # not available on container
+srun -A a122 --environment=cuda129_ub2404 \
+    bash -c "$CMD"
+ 
