@@ -338,7 +338,6 @@ def get_train_dataloader(
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
             parallel_context=parallel_context,
-            sequence_sep_tokens=sequence_sep_tokens,
         )
     else:
         data_collator = DataCollatorForCLM(
@@ -452,7 +451,6 @@ def get_train_dataloader_with_megatron_sampler(
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
             parallel_context=parallel_context,
-            sequence_sep_tokens=sequence_sep_tokens,
         )
     else:
         data_collator = DataCollatorForCLM(
