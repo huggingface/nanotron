@@ -158,13 +158,13 @@ class FlashRotaryEmbedding(OrigFlashRotaryEmbedding):
         device=None,
         seq_len_interpolation_factor=None,
     ):
+        # Don't pass seq_len_interpolation_factor to parent class - it's a custom parameter
         super().__init__(
-            dim,
-            base,
-            interleaved,
-            scale_base,
-            pos_idx_in_fp32,
-            device,
+            dim=dim,
+            base=base,
+            interleaved=interleaved,
+            scale_base=scale_base,
+            device=device,
         )
         self.seq_len_interpolation_factor = seq_len_interpolation_factor
 
