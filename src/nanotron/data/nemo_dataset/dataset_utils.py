@@ -53,12 +53,12 @@ def get_datasets_weights_and_num_samples(
     for i in range(num_datasets):
         try:
             weights[i] = float(data_prefix[2 * i])
-        except ValueError:
+        except ValueError as e:
             raise ValueError(
-                f"Expected weight at index {2 * i}, but got '{data_prefix[2 * i]}'. "
+                f"Expected numeric weight at index {2 * i}, but got '{data_prefix[2 * i]}'. "
                 "The data prefix should be in the format of: weight-1, data-prefix-1, weight-2, data-prefix-2, .. "
                 f"Got data_prefix={data_prefix}"
-            )
+            ) from e
         prefixes[i] = (data_prefix[2 * i + 1]).strip()
     # Normalize weights
     weight_sum = 0.0

@@ -94,13 +94,19 @@ def build_dataset(
                 is_blended = False
 
         if not is_blended:
-            # Not blended format - treat as single dataset with potentially malformed config
-            raise ValueError(
-                f"data_prefix has {len(data_prefix)} elements but is not in blended dataset format. "
-                "For a single dataset, use a list with 1 element: ['/path/to/dataset']. "
-                "For blended datasets, use format: [weight1, path1, weight2, path2, ...] "
-                f"where weights are numbers. Got: {data_prefix}"
+            # Not blended format - treat as multiple paths with equal weights
+            # Convert to blended format: [1.0, path1, 1.0, path2, ...]
+            log_rank(
+                f"data_prefix has {len(data_prefix)} paths without weights. "
+                f"Treating as {len(data_prefix)} datasets with equal weights.",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
             )
+            blended_data_prefix = []
+            for path in data_prefix:
+                blended_data_prefix.extend([1.0, path])
+            data_prefix = blended_data_prefix
 
         output = get_datasets_weights_and_num_samples(data_prefix, num_samples)
         prefixes, weights, datasets_num_samples = output
@@ -202,12 +208,19 @@ def build_train_valid_test_datasets(
                 is_blended = False
 
         if not is_blended:
-            raise ValueError(
-                f"data_prefix has {len(data_prefix)} elements but is not in blended dataset format. "
-                "For a single dataset, use a list with 1 element: ['/path/to/dataset']. "
-                "For blended datasets, use format: [weight1, path1, weight2, path2, ...] "
-                f"where weights are numbers. Got: {data_prefix}"
+            # Not blended format - treat as multiple paths with equal weights
+            # Convert to blended format: [1.0, path1, 1.0, path2, ...]
+            log_rank(
+                f"data_prefix has {len(data_prefix)} paths without weights. "
+                f"Treating as {len(data_prefix)} datasets with equal weights.",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
             )
+            blended_data_prefix = []
+            for path in data_prefix:
+                blended_data_prefix.extend([1.0, path])
+            data_prefix = blended_data_prefix
 
         # Parse the values.
         output = get_datasets_weights_and_num_samples(data_prefix, train_valid_test_num_samples)
