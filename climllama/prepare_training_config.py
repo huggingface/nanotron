@@ -79,6 +79,7 @@ from nanotron.config import (
     ModelArgs,
     OptimizerArgs,
     ParallelismArgs,
+    Qwen2Config,
     RandomInit,
     TokenizerArgs,
     TokensArgs,
@@ -87,12 +88,12 @@ from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.logging import human_format
 
 
-def load_model_config(checkpoint_path: str) -> LlamaConfig:
+def load_model_config(checkpoint_path: str) -> Union[LlamaConfig, Qwen2Config]:
     """Load model configuration from checkpoint.
 
-    This function automatically filters out any fields that are not valid
-    for LlamaConfig, making it compatible with checkpoints from different
-    model types (e.g., Qwen2Config).
+    This function automatically detects the config type (LlamaConfig or Qwen2Config)
+    and filters out any incompatible fields, making it robust to checkpoints from
+    different model types.
     """
     config_path = Path(checkpoint_path) / MODEL_CONFIG_FILE_NAME
 
@@ -105,27 +106,51 @@ def load_model_config(checkpoint_path: str) -> LlamaConfig:
     with open(config_path, "r") as f:
         model_config_dict = json.load(f)
 
-    # Get all valid field names for LlamaConfig using dataclass introspection
-    valid_fields = {field.name for field in dataclasses.fields(LlamaConfig)}
+    # Auto-detect config type based on indicator fields
+    is_qwen2 = model_config_dict.get("is_qwen2_config", False)
+    is_llama = model_config_dict.get("is_llama_config", False)
 
-    # Filter out any fields that are not valid for LlamaConfig
+    # Determine which config class to use
+    if is_qwen2 and not is_llama:
+        config_cls = Qwen2Config
+        config_name = "Qwen2Config"
+    elif is_llama and not is_qwen2:
+        config_cls = LlamaConfig
+        config_name = "LlamaConfig"
+    else:
+        # Default to LlamaConfig if both are true/false or neither is set
+        # But check for Qwen2-specific fields to make a better guess
+        qwen2_specific_fields = {"rope_seq_len_interpolation_factor", "sliding_window_size", "moe_config"}
+        if any(field in model_config_dict for field in qwen2_specific_fields):
+            config_cls = Qwen2Config
+            config_name = "Qwen2Config"
+        else:
+            config_cls = LlamaConfig
+            config_name = "LlamaConfig"
+
+    print(f"Detected config type: {config_name}")
+
+    # Get all valid field names for the detected config using dataclass introspection
+    valid_fields = {field.name for field in dataclasses.fields(config_cls)}
+
+    # Filter out any fields that are not valid for the config
     filtered_config = {k: v for k, v in model_config_dict.items() if k in valid_fields}
 
     # Log any fields that were filtered out for debugging
     removed_fields = set(model_config_dict.keys()) - set(filtered_config.keys())
     if removed_fields:
-        print(f"Note: Filtered out fields not in LlamaConfig: {sorted(removed_fields)}")
+        print(f"Note: Filtered out fields not in {config_name}: {sorted(removed_fields)}")
 
     # Handle optional fields that might be None in the JSON
     if "_attn_implementation" in filtered_config and filtered_config["_attn_implementation"] is None:
         filtered_config.pop("_attn_implementation")
 
-    model_config = LlamaConfig(**filtered_config)
+    model_config = config_cls(**filtered_config)
 
     return model_config
 
 
-def calculate_parameters(model_config: LlamaConfig) -> int:
+def calculate_parameters(model_config: Union[LlamaConfig, Qwen2Config]) -> int:
     """Calculate approximate number of parameters."""
     # Base parameters (embeddings)
     base_params = model_config.vocab_size * model_config.hidden_size * 2
