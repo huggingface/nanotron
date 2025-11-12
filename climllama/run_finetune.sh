@@ -15,7 +15,7 @@
 set -euo pipefail
 
 CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune.yaml
-BASE_PATH=/capstor/scratch/cscs/lhuang/nanotron_climllama
+WORKDIR=/capstor/scratch/cscs/lhuang/nanotron_climllama
 
 # Check if config exists
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -30,6 +30,28 @@ mkdir -p logs
 
 export http_proxy=http://proxy.cscs.ch:8080
 export https_proxy=http://proxy.cscs.ch:8080
+export OMP_NUM_THREADS=4
+
+# ******** Master port, address and world size MUST be passed as variables for DDP to work
+export MASTER_PORT=$(expr 10000 + $(echo -n $SLURM_JOBID | tail -c 4))
+echo "MASTER_PORT"=$MASTER_PORT
+
+master_addr=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+export MASTER_ADDR=$master_addr
+echo "MASTER_ADDR="$MASTER_ADDR
+# ******************************************************************************************
+
+# Git metadata
+if git -C "$WORKDIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  GIT_BRANCH=$(git -C "$WORKDIR" branch --show-current)
+  GIT_COMMIT=$(git -C "$WORKDIR" rev-parse HEAD)
+  GIT_LOG=$(git -C "$WORKDIR" log -1 --pretty=format:'%h | %an | %ad | %s' --date=iso)
+  echo "Git branch: ${GIT_BRANCH}"
+  echo "Git commit: ${GIT_COMMIT}"
+  echo "Last commit: ${GIT_LOG}"
+else
+  echo "Git metadata unavailable."
+fi
 
 echo "Starting finetuning with config: $CONFIG_FILE"
 echo "Using 4 GPUs"
@@ -37,11 +59,13 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo ""
 
-CMD="source $BASE_PATH/.venv/bin/activate && torchrun \
+CMD="source $WORKDIR/.venv/bin/activate && torchrun \
  --nproc_per_node=4 \
  --nnodes=$SLURM_NNODES \
  --start-method forkserver \
- $BASE_PATH/run_train.py --config-file $CONFIG_FILE"
+ --rdzv_backend=c10d \
+ --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
+ $WORKDIR/run_train.py --config-file $CONFIG_FILE"
 
 # Run training
 # numactl --membind=0-3 # not available on container
