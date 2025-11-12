@@ -114,7 +114,7 @@ def build_dataset(
         for i in range(len(prefixes)):
             dataset = _build_dataset(prefixes[i], datasets_num_samples[i])
             datasets.append(dataset)
-        return BlendableDataset(datasets, weights, num_samples, parallel_context=parallel_context)
+        return BlendableDataset(datasets, weights, num_samples, parallel_context=parallel_context, seed=seed)
 
 
 def build_train_valid_test_datasets(
@@ -254,13 +254,13 @@ def build_train_valid_test_datasets(
         # Blend.
         blending_train_dataset = None
         if train_datasets:
-            blending_train_dataset = BlendableDataset(train_datasets, weights, train_n, parallel_context)
+            blending_train_dataset = BlendableDataset(train_datasets, weights, train_n, parallel_context, seed=seed)
         blending_valid_dataset = None
         if valid_datasets:
-            blending_valid_dataset = BlendableDataset(valid_datasets, weights, valid_n, parallel_context)
+            blending_valid_dataset = BlendableDataset(valid_datasets, weights, valid_n, parallel_context, seed=seed)
         blending_test_dataset = None
         if test_datasets:
-            blending_test_dataset = BlendableDataset(test_datasets, weights, test_n, parallel_context)
+            blending_test_dataset = BlendableDataset(test_datasets, weights, test_n, parallel_context, seed=seed)
 
         return (blending_train_dataset, blending_valid_dataset, blending_test_dataset)
 
