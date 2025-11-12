@@ -398,12 +398,20 @@ class GPTDataset(Dataset):
         if self.fim_spm_rate > 1 or self.fim_spm_rate < 0:
             raise ValueError("SPM rate must be a probability 0 <= rate <= 1")
         self.tokenizer = tokenizer
-        self.suffix_tok_id, self.prefix_tok_id, self.middle_tok_id, self.pad_tok_id, self.eod_tok_id = (
-            self.tokenizer.vocab[tok] for tok in [FIM_SUFFIX, FIM_PREFIX, FIM_MIDDLE, FIM_PAD, EOD]
-        )
-        self.fim_split_sample = (
-            self.tokenizer.vocab[cfg.fim_split_sample] if cfg.fim_split_sample is not None else None
-        )
+        if self.fim_rate > 0:
+            self.suffix_tok_id, self.prefix_tok_id, self.middle_tok_id, self.pad_tok_id, self.eod_tok_id = (
+                self.tokenizer.vocab[tok] for tok in [FIM_SUFFIX, FIM_PREFIX, FIM_MIDDLE, FIM_PAD, EOD]
+            )
+            self.fim_split_sample = (
+                self.tokenizer.vocab[cfg.fim_split_sample] if cfg.fim_split_sample is not None else None
+            )
+        else:
+            self.suffix_tok_id = None
+            self.prefix_tok_id = None
+            self.middle_tok_id = None
+            self.pad_tok_id = None
+            self.eod_tok_id = None
+            self.fim_split_sample = None
         self.fragment_fim_rate = cfg.fragment_fim_rate
         self.no_fim_prefix = cfg.no_fim_prefix
         self.np_rng = np.random.RandomState(seed=seed)  # rng state for FIM
