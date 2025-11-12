@@ -7,6 +7,9 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
 ```
 """
+import os
+os.environ['TRITON_CACHE_DIR'] = f'/tmp/triton_cache_{os.getpid()}'
+os.makedirs(os.environ['TRITON_CACHE_DIR'], exist_ok=True)
 import argparse
 import time
 from pprint import pformat
