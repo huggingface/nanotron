@@ -650,6 +650,14 @@ def main():
         wandb_entity=args.wandb_entity,
     )
 
+    # Check if output file exists and ask for permission to overwrite
+    if os.path.exists(args.output_config):
+        print(f"\n⚠️  Warning: File '{args.output_config}' already exists!")
+        response = input("Do you want to overwrite it? (y/N): ").strip().lower()
+        if response not in ['y', 'yes']:
+            print("Operation cancelled. No file was written.")
+            return
+
     # Save config
     config.save_as_yaml(args.output_config)
     print(f"\n✓ Config saved to {args.output_config}")
