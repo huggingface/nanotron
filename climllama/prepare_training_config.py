@@ -5,16 +5,30 @@ a training configuration YAML file ready for finetuning or continued pretraining
 Megatron/NeMo IndexedDataset format (.bin/.idx files).
 
 Usage:
+    # Single dataset
     python climllama/prepare_training_config.py \
         --checkpoint_path /path/to/nanotron/checkpoint \
         --data_prefix /path/to/indexed/dataset \
         --output_config config_train.yaml \
-        --tokenizer_path /path/to/tokenizer \
         --mode pretrain
+
+    # Multiple datasets with wildcards
+    python climllama/prepare_training_config.py \
+        --checkpoint_path /path/to/checkpoint \
+        --data_prefix "/path/to/data/*" \
+        --output_config config_train.yaml
+
+    # Weighted blending with wildcards
+    python climllama/prepare_training_config.py \
+        --checkpoint_path /path/to/checkpoint \
+        --data_prefix "0.7,/path/data_*,0.3,/other/files_*" \
+        --output_config config_train.yaml
 
 Arguments:
     --checkpoint_path: Path to the Nanotron checkpoint directory (required)
     --data_prefix: Path prefix to Megatron indexed dataset (.bin/.idx) (required)
+                   Supports wildcards: "/path/data_*" or "/path/*"
+                   Supports weighted blending: "0.6,/path1,0.4,/path2"
     --output_config: Path to save the output YAML config (default: config_finetune.yaml)
     --tokenizer_path: HF tokenizer path or name (default: uses checkpoint path)
     --mode: Training mode - 'finetune' or 'pretrain' (default: finetune)
@@ -31,6 +45,7 @@ Arguments:
 """
 
 import argparse
+import glob
 import json
 import os
 from pathlib import Path
@@ -100,36 +115,80 @@ def calculate_parameters(model_config: LlamaConfig) -> int:
     return total_params
 
 
+def expand_wildcard_paths(path_pattern: str) -> List[str]:
+    """Expand wildcard pattern to list of matching paths without extensions.
+
+    For IndexedDataset files, we need to match .bin/.idx pairs and return the prefix.
+    Example: "/path/data_*.bin" -> ["/path/data_1", "/path/data_2"]
+    """
+    # If the pattern ends with .bin or .idx, match those files and strip extension
+    if path_pattern.endswith('.bin') or path_pattern.endswith('.idx'):
+        matched_files = glob.glob(path_pattern)
+        # Remove .bin/.idx extension to get the prefix
+        return sorted(list(set([os.path.splitext(f)[0] for f in matched_files])))
+
+    # If pattern contains wildcard but no extension, try matching with .bin
+    if '*' in path_pattern and not path_pattern.endswith(('.bin', '.idx')):
+        bin_pattern = path_pattern + '.bin' if not path_pattern.endswith('/') else path_pattern + '*.bin'
+        matched_files = glob.glob(bin_pattern)
+        if matched_files:
+            return sorted(list(set([os.path.splitext(f)[0] for f in matched_files])))
+
+    # If it's a directory pattern like "path/*", look for all .bin files
+    if path_pattern.endswith('/*') or path_pattern.endswith('*'):
+        bin_pattern = path_pattern + '.bin' if not path_pattern.endswith('*') else path_pattern.rstrip('*') + '*.bin'
+        matched_files = glob.glob(bin_pattern)
+        if matched_files:
+            return sorted(list(set([os.path.splitext(f)[0] for f in matched_files])))
+
+    # No wildcard or no matches, return as-is
+    return [path_pattern]
+
+
 def parse_data_prefix(data_prefix_str: str) -> List:
     """Parse data_prefix string into proper format for IndexedDatasetsArgs.
 
     Supports:
     - Single path: "/path/to/dataset" -> ["/path/to/dataset"]
+    - Wildcard patterns: "/path/data_*" -> ["/path/data_1", "/path/data_2", ...]
+    - Directory wildcard: "/path/*" -> ["/path/file1", "/path/file2", ...]
     - Multiple paths with weights (comma-separated): "0.6,/path/to/dataset1,0.4,/path/to/dataset2"
       -> [0.6, "/path/to/dataset1", 0.4, "/path/to/dataset2"]
+    - Weighted with wildcards: "0.6,/path/data_*,0.4,/other/file_*"
     - Simple list (comma-separated): "/path/to/dataset1,/path/to/dataset2"
       -> ["/path/to/dataset1", "/path/to/dataset2"]
     """
     if "," in data_prefix_str:
         parts = [p.strip() for p in data_prefix_str.split(",")]
         # Check if it's a weighted format (alternating weights and paths)
-        try:
-            # Try to parse as weighted format: weight1,path1,weight2,path2,...
-            result: List = []
-            for part in parts:
-                try:
-                    # Try to convert to float (weight)
-                    result.append(float(part))
-                except ValueError:
-                    # It's a path string
-                    result.append(part)
-            return result
-        except Exception:
-            # If parsing fails, return as list of paths
-            return parts
+        result: List = []
+        for part in parts:
+            try:
+                # Try to convert to float (weight)
+                result.append(float(part))
+            except ValueError:
+                # It's a path string, expand wildcards
+                expanded = expand_wildcard_paths(part)
+                if len(expanded) == 1:
+                    result.append(expanded[0])
+                else:
+                    # If wildcard expands to multiple files, add them with equal weights
+                    # Calculate per-file weight (divide the previous weight by number of files)
+                    if result and isinstance(result[-1], float):
+                        # We have a weight before this, split it among expanded files
+                        weight = result.pop()
+                        per_file_weight = weight / len(expanded)
+                        for exp_path in expanded:
+                            result.append(per_file_weight)
+                            result.append(exp_path)
+                    else:
+                        # No weight specified, just add all paths
+                        result.extend(expanded)
+        return result
     else:
-        # Single path, but IndexedDatasetsArgs expects List, so wrap it
-        return [data_prefix_str]
+        # Single path or pattern, expand wildcards
+        expanded = expand_wildcard_paths(data_prefix_str)
+        return expanded
 
 
 def create_training_config(
@@ -217,6 +276,27 @@ def create_training_config(
     # Data configuration using Megatron IndexedDataset
     # Parse data_prefix to support single path or weighted blending
     parsed_data_prefix = parse_data_prefix(data_prefix)
+
+    # Log the expanded dataset paths
+    print(f"\nDataset configuration:")
+    if isinstance(parsed_data_prefix, list):
+        # Check if it's weighted format (alternating floats and strings)
+        has_weights = any(isinstance(item, float) for item in parsed_data_prefix)
+        if has_weights:
+            print(f"  Using weighted blending with {len([x for x in parsed_data_prefix if isinstance(x, str)])} datasets:")
+            i = 0
+            while i < len(parsed_data_prefix):
+                if isinstance(parsed_data_prefix[i], float):
+                    weight = parsed_data_prefix[i]
+                    path = parsed_data_prefix[i + 1] if i + 1 < len(parsed_data_prefix) else "unknown"
+                    print(f"    - {weight:.3f}: {path}")
+                    i += 2
+                else:
+                    i += 1
+        else:
+            print(f"  Using {len(parsed_data_prefix)} dataset(s):")
+            for path in parsed_data_prefix:
+                print(f"    - {path}")
 
     data_stages = [
         DatasetStageArgs(
@@ -313,7 +393,9 @@ def main():
         "--data_prefix",
         type=str,
         required=True,
-        help="Path prefix to Megatron indexed dataset (.bin/.idx files) or list of paths with weights",
+        help="Path prefix to Megatron indexed dataset (.bin/.idx files). "
+        "Supports wildcards (e.g., '/path/data_*' or '/path/*') and "
+        "weighted blending (e.g., '0.6,/path1,0.4,/path2')",
     )
 
     parser.add_argument(
