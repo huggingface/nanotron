@@ -72,6 +72,6 @@ CMD="source $WORKDIR/.venv/bin/activate && torchrun \
 
 # Run training
 # numactl --membind=0-3 # not available on container
-srun -A a122 --environment=cuda129_ub2404 \
+srun --label -A a122 --environment=cuda129_ub2404 \
     bash -c "$CMD"
  
