@@ -48,7 +48,6 @@ python climllama/prepare_training_config.py \
     --tp $TP \
     --pp $PP \
     --enable_wandb \
-    --model_type llama \
     --splits_string $SPLITS_STRING \
     ${INDEX_MAPPING_DIR:+--index_mapping_dir $INDEX_MAPPING_DIR} \
     $SKIP_WARMUP
