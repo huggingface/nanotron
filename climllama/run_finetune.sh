@@ -40,8 +40,9 @@ echo "Node: $SLURM_NODELIST"
 echo ""
 
 # Run training
+# numactl --membind=0-3 # not available on container
 srun -A a122 --environment=cuda129_ub2404 \
- numactl --membind=0-3 torchrun \
+ torchrun \
  --nproc_per_node=4 \
  --nnodes=$SLURM_NNODES \
  --start-method forkserver \
