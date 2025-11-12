@@ -3,7 +3,14 @@ from pathlib import Path
 from typing import Any, List, Optional, Union
 
 from nanotron.config.utils_config import InitScalingMethod
-from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, AttentionImplementation
+
+try:
+    from nanotron.nn.attention import ALL_ATTENTION_FUNCTIONS, AttentionImplementation
+except Exception:  # pragma: no cover - best effort fallback when flash-attn isn't available
+    ALL_ATTENTION_FUNCTIONS = {}
+    AttentionImplementation = str  # type: ignore[assignment]
+
+ATTENTION_REGISTRY_AVAILABLE = bool(ALL_ATTENTION_FUNCTIONS)
 
 # The default attention implementation to use
 DEFAULT_ATTENTION_IMPLEMENTATION = "flash_attention_2"
@@ -103,7 +110,7 @@ class LlamaConfig:
             self.num_key_value_heads = self.num_attention_heads
 
         # Validate that the attention implementation is valid
-        if self._attn_implementation is not None:
+        if self._attn_implementation is not None and ATTENTION_REGISTRY_AVAILABLE:
             assert (
                 self._attn_implementation in ALL_ATTENTION_FUNCTIONS
             ), f"Invalid attention implementation: {self._attn_implementation}. Available options are: {ALL_ATTENTION_FUNCTIONS.keys()}"
@@ -176,7 +183,7 @@ class Qwen2Config:
             self.moe_config.layers = list(range(self.num_hidden_layers))
 
         # Validate that the attention implementation is valid
-        if self._attn_implementation is not None:
+        if self._attn_implementation is not None and ATTENTION_REGISTRY_AVAILABLE:
             assert (
                 self._attn_implementation in ALL_ATTENTION_FUNCTIONS
             ), f"Invalid attention implementation: {self._attn_implementation}. Available options are: {ALL_ATTENTION_FUNCTIONS.keys()}"
@@ -263,7 +270,7 @@ class Starcoder2Config:
             self.multi_query = True
 
         # Validate that the attention implementation is valid
-        if self._attn_implementation is not None:
+        if self._attn_implementation is not None and ATTENTION_REGISTRY_AVAILABLE:
             assert (
                 self._attn_implementation in ALL_ATTENTION_FUNCTIONS
             ), f"Invalid attention implementation: {self._attn_implementation}. Available options are: {ALL_ATTENTION_FUNCTIONS.keys()}"
