@@ -39,7 +39,7 @@ python climllama/prepare_training_config.py \
     --tokenizer_path $TOKENIZER_PATH \
     --output_config $OUTPUT_CONFIG \
     --mode finetune \
-    --data_prefix $DATA_PREFIX \
+    --data_prefix "$DATA_PREFIX" \
     --train_steps $TRAIN_STEPS \
     --learning_rate $LEARNING_RATE \
     --micro_batch_size $MICRO_BATCH_SIZE \

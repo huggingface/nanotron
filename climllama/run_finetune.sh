@@ -1,9 +1,19 @@
 #!/bin/bash
+#SBATCH --job-name=climllama_finetune
+#SBATCH -A a122
+#SBATCH --mem=260000
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gpus-per-node=4
+#SBATCH --cpus-per-task=96
+#SBATCH --time=24:00:00
+#SBATCH --output=logs/finetune_%j.out
 
 # Script to run finetuning with the generated config
 # Make sure you've run prepare_finetune_config.sh first to generate the config file
 
-CONFIG_FILE=climllama/config_finetune.yaml
+BASE_PATH=$(realpath "$(dirname "${BASH_SOURCE[0]}")/..")
+CONFIG_FILE=$BASE_PATH/climllama/config_finetune.yaml
 
 # Check if config exists
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -12,20 +22,25 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
+# Create logs directory if it doesn't exist
+mkdir -p logs
+
 # Activate environment
-source nanotron/bin/activate
+source $BASE_PATH/.venv/bin/activate
 
-# Set environment variables for distributed training
-export CUDA_DEVICE_MAX_CONNECTIONS=1
-export FI_PROVIDER="efa"  # For AWS EFA networking, remove if not using EFA
-
-# Calculate number of GPUs needed (DP * TP * PP)
-# You should adjust this based on your config
-NPROC=8  # Default: DP=4, TP=2, PP=1 -> 8 GPUs
+export http_proxy=http://proxy.cscs.ch:8080
+export https_proxy=http://proxy.cscs.ch:8080
 
 echo "Starting finetuning with config: $CONFIG_FILE"
 echo "Using $NPROC GPUs"
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node: $SLURM_NODELIST"
 echo ""
 
 # Run training
-torchrun --nproc_per_node=$NPROC run_train.py --config-file $CONFIG_FILE
+srun -A a122 --environment=cuda129_ub2404 \
+ numactl --membind=0-3 torchrun \
+ --nproc_per_node=4 \
+ --nnodes=$SLURM_NNODES \
+ --start-method forkserver \
+ $BASE_PATH/run_train.py --config-file $CONFIG_FILE
