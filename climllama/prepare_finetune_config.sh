@@ -23,7 +23,7 @@ TP=2  # Tensor parallel
 PP=1  # Pipeline parallel
 
 # Activate environment
-source nanotron/bin/activate
+source .venv/bin/activate
 
 # Generate config
 python climllama/prepare_training_config.py \
