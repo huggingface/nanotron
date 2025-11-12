@@ -337,21 +337,51 @@ def create_training_config(
     if isinstance(parsed_data_prefix, list):
         # Check if it's weighted format (alternating floats and strings)
         has_weights = any(isinstance(item, float) for item in parsed_data_prefix)
+
+        # Configuration for auto-folding
+        MAX_DISPLAY_ROWS = 10
+        MAX_PATH_LENGTH = 100
+
+        def truncate_path(path: str, max_length: int = MAX_PATH_LENGTH) -> str:
+            """Truncate path if too long, showing start and end."""
+            if len(path) <= max_length:
+                return path
+            keep_chars = (max_length - 5) // 2
+            return f"{path[:keep_chars]} ... {path[-keep_chars:]}"
+
+        def print_items(items, format_fn):
+            """Print items with auto-folding if too many."""
+            total = len(items)
+            if total > MAX_DISPLAY_ROWS:
+                show_first = MAX_DISPLAY_ROWS // 2
+                show_last = MAX_DISPLAY_ROWS - show_first
+                for item in items[:show_first]:
+                    print(format_fn(item))
+                print(f"    ... ({total - MAX_DISPLAY_ROWS} more datasets) ...")
+                for item in items[-show_last:]:
+                    print(format_fn(item))
+            else:
+                for item in items:
+                    print(format_fn(item))
+
         if has_weights:
-            print(f"  Using weighted blending with {len([x for x in parsed_data_prefix if isinstance(x, str)])} datasets:")
+            # Collect all weighted entries
+            weighted_entries = []
             i = 0
             while i < len(parsed_data_prefix):
                 if isinstance(parsed_data_prefix[i], float):
                     weight = parsed_data_prefix[i]
                     path = parsed_data_prefix[i + 1] if i + 1 < len(parsed_data_prefix) else "unknown"
-                    print(f"    - {weight:.3f}: {path}")
+                    weighted_entries.append((weight, path))
                     i += 2
                 else:
                     i += 1
+
+            print(f"  Using weighted blending with {len(weighted_entries)} datasets:")
+            print_items(weighted_entries, lambda x: f"    - {x[0]:.3f}: {truncate_path(x[1])}")
         else:
             print(f"  Using {len(parsed_data_prefix)} dataset(s):")
-            for path in parsed_data_prefix:
-                print(f"    - {path}")
+            print_items(parsed_data_prefix, lambda path: f"    - {truncate_path(path)}")
 
     data_stages = [
         DatasetStageArgs(
