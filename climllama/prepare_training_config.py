@@ -653,8 +653,6 @@ def main():
     # Save config
     config.save_as_yaml(args.output_config)
     print(f"\n✓ Config saved to {args.output_config}")
-    print(f"\nYou can now start training with:")
-    print(f"  sbatch run_finetune.sh {args.output_config}")
 
 
 if __name__ == "__main__":

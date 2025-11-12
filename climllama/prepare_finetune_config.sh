@@ -55,4 +55,4 @@ python climllama/prepare_training_config.py \
 echo ""
 echo "Config generated successfully!"
 echo "To start training, run:"
-echo "  bash climllama/run_finetune.sh"
+echo "  sbatch climllama/run_finetune.sh"
