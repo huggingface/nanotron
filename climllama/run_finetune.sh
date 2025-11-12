@@ -13,7 +13,7 @@
 # Make sure you've run prepare_finetune_config.sh first to generate the config file
 
 BASE_PATH=$(realpath "$(dirname "${BASH_SOURCE[0]}")/..")
-CONFIG_FILE=$BASE_PATH/climllama/config_finetune.yaml
+CONFIG_FILE=${CONFIG_FILE:-$BASE_PATH/climllama/config_finetune.yaml}
 
 # Check if config exists
 if [ ! -f "$CONFIG_FILE" ]; then

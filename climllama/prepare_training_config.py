@@ -409,6 +409,7 @@ def create_training_config(
             resume_checkpoint_path=checkpoint_path,
             load_lr_scheduler=False,  # Don't load old scheduler for finetuning
             load_optimizer=False,  # Don't load old optimizer for finetuning
+            checkpoints_path_is_shared_file_system=True,
         ),
         parallelism=parallelism,
         model=ModelArgs(
@@ -623,8 +624,7 @@ def main():
     config.save_as_yaml(args.output_config)
     print(f"\n✓ Config saved to {args.output_config}")
     print(f"\nYou can now start training with:")
-    print(f"  export CUDA_DEVICE_MAX_CONNECTIONS=1")
-    print(f"  torchrun --nproc_per_node={args.dp * args.tp * args.pp} run_train.py --config-file {args.output_config}")
+    print(f"  sbatch run_finetune.sh {args.output_config}")
 
 
 if __name__ == "__main__":
