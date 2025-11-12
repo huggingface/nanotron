@@ -84,6 +84,24 @@ def build_dataset(
         return _build_dataset(data_prefix[0], num_samples)
 
     else:
+        # Check if data_prefix is in blended format [weight1, path1, weight2, path2, ...]
+        # If it has an odd number of elements or first element is not a number, it's not blended format
+        is_blended = len(data_prefix) % 2 == 0
+        if is_blended:
+            try:
+                float(data_prefix[0])  # Check if first element can be converted to float (weight)
+            except (ValueError, TypeError):
+                is_blended = False
+
+        if not is_blended:
+            # Not blended format - treat as single dataset with potentially malformed config
+            raise ValueError(
+                f"data_prefix has {len(data_prefix)} elements but is not in blended dataset format. "
+                "For a single dataset, use a list with 1 element: ['/path/to/dataset']. "
+                "For blended datasets, use format: [weight1, path1, weight2, path2, ...] "
+                f"where weights are numbers. Got: {data_prefix}"
+            )
+
         output = get_datasets_weights_and_num_samples(data_prefix, num_samples)
         prefixes, weights, datasets_num_samples = output
         datasets = []
@@ -175,6 +193,22 @@ def build_train_valid_test_datasets(
             )
 
         # Blending dataset.
+        # Check if data_prefix is in blended format [weight1, path1, weight2, path2, ...]
+        is_blended = len(data_prefix) % 2 == 0
+        if is_blended:
+            try:
+                float(data_prefix[0])  # Check if first element can be converted to float (weight)
+            except (ValueError, TypeError):
+                is_blended = False
+
+        if not is_blended:
+            raise ValueError(
+                f"data_prefix has {len(data_prefix)} elements but is not in blended dataset format. "
+                "For a single dataset, use a list with 1 element: ['/path/to/dataset']. "
+                "For blended datasets, use format: [weight1, path1, weight2, path2, ...] "
+                f"where weights are numbers. Got: {data_prefix}"
+            )
+
         # Parse the values.
         output = get_datasets_weights_and_num_samples(data_prefix, train_valid_test_num_samples)
         prefixes, weights, datasets_train_valid_test_num_samples = output
