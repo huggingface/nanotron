@@ -57,6 +57,7 @@ Arguments:
 """
 
 import argparse
+import dataclasses
 import glob
 import json
 import os
@@ -87,7 +88,12 @@ from nanotron.logging import human_format
 
 
 def load_model_config(checkpoint_path: str) -> LlamaConfig:
-    """Load model configuration from checkpoint."""
+    """Load model configuration from checkpoint.
+
+    This function automatically filters out any fields that are not valid
+    for LlamaConfig, making it compatible with checkpoints from different
+    model types (e.g., Qwen2Config).
+    """
     config_path = Path(checkpoint_path) / MODEL_CONFIG_FILE_NAME
 
     if not config_path.exists():
@@ -99,15 +105,22 @@ def load_model_config(checkpoint_path: str) -> LlamaConfig:
     with open(config_path, "r") as f:
         model_config_dict = json.load(f)
 
-    # Remove the is_llama_config and is_qwen2_config flags before creating LlamaConfig
-    model_config_dict.pop("is_llama_config", None)
-    model_config_dict.pop("is_qwen2_config", None)
+    # Get all valid field names for LlamaConfig using dataclass introspection
+    valid_fields = {field.name for field in dataclasses.fields(LlamaConfig)}
+
+    # Filter out any fields that are not valid for LlamaConfig
+    filtered_config = {k: v for k, v in model_config_dict.items() if k in valid_fields}
+
+    # Log any fields that were filtered out for debugging
+    removed_fields = set(model_config_dict.keys()) - set(filtered_config.keys())
+    if removed_fields:
+        print(f"Note: Filtered out fields not in LlamaConfig: {sorted(removed_fields)}")
 
     # Handle optional fields that might be None in the JSON
-    if "_attn_implementation" in model_config_dict and model_config_dict["_attn_implementation"] is None:
-        model_config_dict.pop("_attn_implementation")
+    if "_attn_implementation" in filtered_config and filtered_config["_attn_implementation"] is None:
+        filtered_config.pop("_attn_implementation")
 
-    model_config = LlamaConfig(**model_config_dict)
+    model_config = LlamaConfig(**filtered_config)
 
     return model_config
 
