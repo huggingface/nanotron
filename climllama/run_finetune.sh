@@ -12,8 +12,10 @@
 # Script to run finetuning with the generated config
 # Make sure you've run prepare_finetune_config.sh first to generate the config file
 
-BASE_PATH=$(realpath "$(dirname "${BASH_SOURCE[0]}")/..")
-CONFIG_FILE=${CONFIG_FILE:-$BASE_PATH/climllama/config_finetune.yaml}
+set -euo pipefail
+
+CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune.yaml
+BASE_PATH=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama
 
 # Check if config exists
 if [ ! -f "$CONFIG_FILE" ]; then
