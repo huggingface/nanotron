@@ -3,7 +3,7 @@
 CKPT_PATH_HF=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_checkpoints/exp_fsq_245_split_vocab32768/llama_3B_vocab_32768/iter_0204000_hf
 CKPT_PATH_NT=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_checkpoints/exp_fsq_245_split_vocab32768/llama_3B_vocab_32768/iter_0204000_nanotron
 
-source nanotron/bin/activate
+source .venv/bin/activate
 
 export WORLD_SIZE=1
 export RANK=0
