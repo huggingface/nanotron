@@ -166,6 +166,7 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
                 self._dtype_size = self._dtype().itemsize
 
                 self._len = struct.unpack("<Q", stream.read(8))[0]
+                self._doc_count = struct.unpack("<Q", stream.read(8))[0]
                 offset = stream.tell()
 
             if not skip_warmup:
