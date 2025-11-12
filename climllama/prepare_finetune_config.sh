@@ -47,8 +47,8 @@ python climllama/prepare_training_config.py \
     --dp $DP \
     --tp $TP \
     --pp $PP \
-    --splits_string $SPLITS_STRING \
     --enable_wandb \
+    --splits_string $SPLITS_STRING \
     ${INDEX_MAPPING_DIR:+--index_mapping_dir $INDEX_MAPPING_DIR} \
     $SKIP_WARMUP
 
