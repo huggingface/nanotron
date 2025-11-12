@@ -24,6 +24,15 @@ Usage:
         --data_prefix "0.7,/path/data_*,0.3,/other/files_*" \
         --output_config config_train.yaml
 
+    # Enable WandB logging
+    python climllama/prepare_training_config.py \
+        --checkpoint_path /path/to/checkpoint \
+        --data_prefix /path/to/data \
+        --output_config config_train.yaml \
+        --enable_wandb \
+        --wandb_project my_project \
+        --wandb_entity my_team
+
 Arguments:
     --checkpoint_path: Path to the Nanotron checkpoint directory (required)
     --data_prefix: Path prefix to Megatron indexed dataset (.bin/.idx) (required)
@@ -42,6 +51,9 @@ Arguments:
     --splits_string: Train/val/test split ratios (default: 969,30,1)
     --index_mapping_dir: Directory to cache index mappings (default: None)
     --skip_warmup: Skip warmup when building indexed dataset (default: False)
+    --enable_wandb: Enable Weights & Biases logging (default: False)
+    --wandb_project: WandB project name (default: uses mode name)
+    --wandb_entity: WandB entity/team name (default: None)
 """
 
 import argparse
@@ -62,6 +74,7 @@ from nanotron.config import (
     LlamaConfig,
     LoggingArgs,
     LRSchedulerArgs,
+    MetricsLoggingArgs,
     ModelArgs,
     OptimizerArgs,
     ParallelismArgs,
@@ -86,8 +99,9 @@ def load_model_config(checkpoint_path: str) -> LlamaConfig:
     with open(config_path, "r") as f:
         model_config_dict = json.load(f)
 
-    # Remove the is_llama_config flag before creating LlamaConfig
+    # Remove the is_llama_config and is_qwen2_config flags before creating LlamaConfig
     model_config_dict.pop("is_llama_config", None)
+    model_config_dict.pop("is_qwen2_config", None)
 
     # Handle optional fields that might be None in the JSON
     if "_attn_implementation" in model_config_dict and model_config_dict["_attn_implementation"] is None:
@@ -209,6 +223,9 @@ def create_training_config(
     splits_string: str = "969,30,1",
     index_mapping_dir: Optional[str] = None,
     skip_warmup: bool = False,
+    enable_wandb: bool = False,
+    wandb_project: Optional[str] = None,
+    wandb_entity: Optional[str] = None,
 ) -> Config:
     """Create a training configuration from checkpoint."""
 
@@ -323,10 +340,27 @@ def create_training_config(
 
     run_name = f"{mode}_%date_%jobid"
 
+    # Set WandB project name
+    if wandb_project is None:
+        wandb_project = f"llama_{mode}"
+
+    # Metrics logging configuration (for detailed wandb logging)
+    metrics_logging = None
+    if enable_wandb:
+        metrics_logging = MetricsLoggingArgs(
+            log_level=0,  # 0 = basic metrics, 1 = detailed per-layer metrics
+            log_detail_interval=10,  # Log detailed metrics every N steps
+        )
+        print(f"\nWandB logging enabled:")
+        print(f"  - Project: {wandb_project}")
+        if wandb_entity:
+            print(f"  - Entity: {wandb_entity}")
+        print(f"  - Run name: {run_name}")
+
     # Create full config
     config = Config(
         general=GeneralArgs(
-            project=f"llama_{mode}",
+            project=wandb_project,
             run=run_name,
             seed=seed,
             ignore_sanity_checks=False,
@@ -348,6 +382,7 @@ def create_training_config(
         logging=LoggingArgs(),
         tokens=tokens,
         data_stages=data_stages,
+        metrics_logging=metrics_logging,
     )
 
     return config
@@ -488,6 +523,26 @@ def main():
         help="Skip warmup when building indexed dataset",
     )
 
+    parser.add_argument(
+        "--enable_wandb",
+        action="store_true",
+        help="Enable Weights & Biases logging (default: False)",
+    )
+
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default=None,
+        help="WandB project name (default: llama_{mode})",
+    )
+
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default=None,
+        help="WandB entity/team name (default: None)",
+    )
+
     args = parser.parse_args()
 
     # Use checkpoint path as tokenizer path if not specified
@@ -521,6 +576,9 @@ def main():
         splits_string=args.splits_string,
         index_mapping_dir=args.index_mapping_dir,
         skip_warmup=args.skip_warmup,
+        enable_wandb=args.enable_wandb,
+        wandb_project=args.wandb_project,
+        wandb_entity=args.wandb_entity,
     )
 
     # Save config

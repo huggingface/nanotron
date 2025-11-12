@@ -2,7 +2,7 @@
 
 # Configuration script to prepare finetuning config from converted checkpoint
 # This script demonstrates how to use prepare_training_config.py with Megatron IndexedDataset
-
+set -euo pipefail
 # Paths from your conversion script
 CKPT_PATH_NT=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_checkpoints/exp_fsq_245_split_vocab32768/llama_3B_vocab_32768/iter_0204000_nanotron
 TOKENIZER_PATH=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/pretrained_tokenizer
