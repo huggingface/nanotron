@@ -34,7 +34,7 @@ export http_proxy=http://proxy.cscs.ch:8080
 export https_proxy=http://proxy.cscs.ch:8080
 
 echo "Starting finetuning with config: $CONFIG_FILE"
-echo "Using $NPROC GPUs"
+echo "Using 4 GPUs"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo ""
