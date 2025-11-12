@@ -8,7 +8,6 @@ Usage:
     # Single dataset
     python climllama/prepare_training_config.py \
         --checkpoint_path /path/to/nanotron/checkpoint \
-        --model_type llama \
         --data_prefix /path/to/indexed/dataset \
         --output_config config_train.yaml \
         --mode pretrain
@@ -16,21 +15,18 @@ Usage:
     # Multiple datasets with wildcards
     python climllama/prepare_training_config.py \
         --checkpoint_path /path/to/checkpoint \
-        --model_type qwen2 \
         --data_prefix "/path/to/data/*" \
         --output_config config_train.yaml
 
     # Weighted blending with wildcards
     python climllama/prepare_training_config.py \
         --checkpoint_path /path/to/checkpoint \
-        --model_type llama \
         --data_prefix "0.7,/path/data_*,0.3,/other/files_*" \
         --output_config config_train.yaml
 
     # Enable WandB logging
     python climllama/prepare_training_config.py \
         --checkpoint_path /path/to/checkpoint \
-        --model_type llama \
         --data_prefix /path/to/data \
         --output_config config_train.yaml \
         --enable_wandb \
@@ -39,7 +35,6 @@ Usage:
 
 Arguments:
     --checkpoint_path: Path to the Nanotron checkpoint directory (required)
-    --model_type: Model architecture type - 'llama' or 'qwen2' (default: llama)
     --data_prefix: Path prefix to Megatron indexed dataset (.bin/.idx) (required)
                    Supports wildcards: "/path/data_*" or "/path/*"
                    Supports weighted blending: "0.6,/path1,0.4,/path2"
@@ -59,7 +54,6 @@ Arguments:
     --enable_wandb: Enable Weights & Biases logging (default: False)
     --wandb_project: WandB project name (default: uses mode name)
     --wandb_entity: WandB entity/team name (default: None)
-    --model_type: Model architecture type - 'llama' or 'qwen2' (default: llama)
 """
 
 import argparse
@@ -68,7 +62,7 @@ import glob
 import json
 import os
 from pathlib import Path
-from typing import Union, List, Dict, Optional
+from typing import List, Dict, Optional
 
 from nanotron.config import (
     AdamWOptimizerArgs,
@@ -78,7 +72,6 @@ from nanotron.config import (
     DatasetStageArgs,
     GeneralArgs,
     IndexedDatasetsArgs,
-    LlamaConfig,
     LoggingArgs,
     LRSchedulerArgs,
     MetricsLoggingArgs,
@@ -94,16 +87,14 @@ from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.logging import human_format
 
 
-def load_model_config(checkpoint_path: str, model_type: str) -> Union[LlamaConfig, Qwen2Config]:
+def load_model_config(checkpoint_path: str) -> Qwen2Config:
     """Load model configuration from checkpoint.
 
-    This function loads the specified config type (LlamaConfig or Qwen2Config)
-    and filters out any incompatible fields, making it robust to checkpoints from
-    different model types.
+    This function loads Qwen2Config and filters out any incompatible fields,
+    making it robust to checkpoints from different model types.
 
     Args:
         checkpoint_path: Path to the checkpoint directory
-        model_type: Model architecture type - 'llama' or 'qwen2'
     """
     config_path = Path(checkpoint_path) / MODEL_CONFIG_FILE_NAME
 
@@ -116,15 +107,9 @@ def load_model_config(checkpoint_path: str, model_type: str) -> Union[LlamaConfi
     with open(config_path, "r") as f:
         model_config_dict = json.load(f)
 
-    # Determine which config class to use based on specified model_type
-    if model_type.lower() == "qwen2":
-        config_cls = Qwen2Config
-        config_name = "Qwen2Config"
-    elif model_type.lower() == "llama":
-        config_cls = LlamaConfig
-        config_name = "LlamaConfig"
-    else:
-        raise ValueError(f"Invalid model_type: {model_type}. Must be 'llama' or 'qwen2'")
+    # Always use Qwen2Config (hardcoded in nanotron)
+    config_cls = Qwen2Config
+    config_name = "Qwen2Config"
 
     print(f"Using config type: {config_name}")
 
@@ -148,7 +133,7 @@ def load_model_config(checkpoint_path: str, model_type: str) -> Union[LlamaConfi
     return model_config
 
 
-def calculate_parameters(model_config: Union[LlamaConfig, Qwen2Config]) -> int:
+def calculate_parameters(model_config: Qwen2Config) -> int:
     """Calculate approximate number of parameters."""
     # Base parameters (embeddings)
     base_params = model_config.vocab_size * model_config.hidden_size * 2
@@ -245,7 +230,6 @@ def create_training_config(
     checkpoint_path: str,
     tokenizer_path: str,
     data_prefix: str,
-    model_type: str,
     mode: str = "pretrain",
     train_steps: int = 5000,
     learning_rate: Optional[float] = None,
@@ -267,7 +251,7 @@ def create_training_config(
     """Create a training configuration from checkpoint."""
 
     # Load model config from checkpoint
-    model_config = load_model_config(checkpoint_path, model_type)
+    model_config = load_model_config(checkpoint_path)
 
     # Calculate parameters for logging
     total_params = calculate_parameters(model_config)
@@ -471,14 +455,6 @@ def main():
     )
 
     parser.add_argument(
-        "--model_type",
-        type=str,
-        default="llama",
-        choices=["llama", "qwen2"],
-        help="Model architecture type - 'llama' or 'qwen2' (default: llama)",
-    )
-
-    parser.add_argument(
         "--output_config",
         type=str,
         default="config_finetune.yaml",
@@ -638,7 +614,6 @@ def main():
         checkpoint_path=args.checkpoint_path,
         tokenizer_path=tokenizer_path,
         data_prefix=args.data_prefix,
-        model_type=args.model_type,
         mode=args.mode,
         train_steps=args.train_steps,
         learning_rate=args.learning_rate,
