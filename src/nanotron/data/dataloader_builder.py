@@ -10,6 +10,7 @@ from nanotron.data.dataloader import (
 from nanotron.data.nanoset import Nanoset
 from nanotron.data.samplers import (
     EmptyInfiniteDataset,
+    get_megatron_sampler,
     get_sampler,
 )
 from nanotron.parallel import ParallelContext

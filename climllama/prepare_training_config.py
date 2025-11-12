@@ -51,6 +51,8 @@ Arguments:
     --splits_string: Train/val/test split ratios (default: 969,30,1)
     --index_mapping_dir: Directory to cache index mappings (default: None)
     --skip_warmup: Skip warmup when building indexed dataset (default: False)
+    --sampler_type: Megatron sampler type - 'sequential', 'random', or 'cyclic' (default: sequential)
+    --pad_samples_to_global_batch_size: Pad last batch to global batch size (default: True)
     --enable_wandb: Enable Weights & Biases logging (default: False)
     --wandb_project: WandB project name (default: uses mode name)
     --wandb_entity: WandB entity/team name (default: None)
@@ -244,6 +246,8 @@ def create_training_config(
     splits_string: str = "969,30,1",
     index_mapping_dir: Optional[str] = None,
     skip_warmup: bool = False,
+    sampler_type: str = "sequential",
+    pad_samples_to_global_batch_size: bool = True,
     enable_wandb: bool = False,
     wandb_project: Optional[str] = None,
     wandb_entity: Optional[str] = None,
@@ -379,6 +383,9 @@ def create_training_config(
                     no_seqlen_plus_one_input_tokens=False,
                     index_mapping_dir=index_mapping_dir,
                     skip_warmup=skip_warmup,
+                    # Megatron sampler configuration
+                    sampler_type=sampler_type,
+                    pad_samples_to_global_batch_size=pad_samples_to_global_batch_size,
                 ),
                 seed=seed,
             ),
@@ -576,6 +583,28 @@ def main():
     )
 
     parser.add_argument(
+        "--sampler_type",
+        type=str,
+        choices=["sequential", "random", "cyclic"],
+        default="sequential",
+        help="Megatron sampler type: 'sequential' (deterministic), 'random' (shuffled), or 'cyclic' (default: sequential)",
+    )
+
+    parser.add_argument(
+        "--pad_samples_to_global_batch_size",
+        action="store_true",
+        default=True,
+        help="Pad last batch to global batch size (default: True)",
+    )
+
+    parser.add_argument(
+        "--no_pad_samples_to_global_batch_size",
+        dest="pad_samples_to_global_batch_size",
+        action="store_false",
+        help="Do not pad last batch to global batch size",
+    )
+
+    parser.add_argument(
         "--enable_wandb",
         action="store_true",
         help="Enable Weights & Biases logging (default: False)",
@@ -607,6 +636,7 @@ def main():
     print(f"Learning rate: {args.learning_rate if args.learning_rate else 'auto'}")
     print(f"Parallelism: DP={args.dp}, TP={args.tp}, PP={args.pp}")
     print(f"Splits: {args.splits_string}")
+    print(f"Megatron Sampler: {args.sampler_type} (pad_last_batch={args.pad_samples_to_global_batch_size})")
     print()
 
     # Create config
@@ -628,6 +658,8 @@ def main():
         splits_string=args.splits_string,
         index_mapping_dir=args.index_mapping_dir,
         skip_warmup=args.skip_warmup,
+        sampler_type=args.sampler_type,
+        pad_samples_to_global_batch_size=args.pad_samples_to_global_batch_size,
         enable_wandb=args.enable_wandb,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,

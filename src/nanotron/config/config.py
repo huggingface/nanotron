@@ -220,6 +220,9 @@ class IndexedDatasetsArgs:
     fragment_fim_rate: float = 0.0
     no_fim_prefix: bool = False
     skip_warmup: bool = False
+    # Megatron sampler configuration
+    sampler_type: str = "sequential"  # Options: "sequential", "random", "cyclic"
+    pad_samples_to_global_batch_size: bool = True
 
 
 @dataclass

@@ -111,6 +111,79 @@ def get_sampler(
     return sampler
 
 
+def get_megatron_sampler(
+    total_samples: int,
+    consumed_samples: int,
+    micro_batch_size: int,
+    data_parallel_rank: int,
+    data_parallel_size: int,
+    global_batch_size: int,
+    drop_last: bool = True,
+    pad_samples_to_global_batch_size: bool = False,
+    sampler_type: str = "sequential",
+) -> Union[MegatronPretrainingSampler, MegatronPretrainingRandomSampler, MegatronPretrainingCyclicSampler]:
+    """
+    Returns a Megatron-style sampler for distributed training.
+
+    Args:
+        total_samples: Total number of samples in the dataset
+        consumed_samples: Number of samples already consumed (for resumption)
+        micro_batch_size: Batch size per data parallel rank
+        data_parallel_rank: Current data parallel rank
+        data_parallel_size: Total number of data parallel ranks
+        global_batch_size: Global batch size across all ranks
+        drop_last: Whether to drop the last incomplete batch
+        pad_samples_to_global_batch_size: Whether to pad the last batch to global batch size
+        sampler_type: Type of sampler to use. Options:
+            - "sequential": MegatronPretrainingSampler (deterministic, sequential)
+            - "random": MegatronPretrainingRandomSampler (epoch-based shuffling)
+            - "cyclic": MegatronPretrainingCyclicSampler (cyclic without shuffling)
+
+    Returns:
+        Megatron sampler instance
+    """
+    if sampler_type == "sequential":
+        sampler = MegatronPretrainingSampler(
+            total_samples=total_samples,
+            consumed_samples=consumed_samples,
+            micro_batch_size=micro_batch_size,
+            data_parallel_rank=data_parallel_rank,
+            data_parallel_size=data_parallel_size,
+            global_batch_size=global_batch_size,
+            drop_last=drop_last,
+            pad_samples_to_global_batch_size=pad_samples_to_global_batch_size,
+        )
+    elif sampler_type == "random":
+        sampler = MegatronPretrainingRandomSampler(
+            total_samples=total_samples,
+            consumed_samples=consumed_samples,
+            micro_batch_size=micro_batch_size,
+            data_parallel_rank=data_parallel_rank,
+            data_parallel_size=data_parallel_size,
+            global_batch_size=global_batch_size,
+            drop_last=drop_last,
+            pad_samples_to_global_batch_size=pad_samples_to_global_batch_size,
+        )
+    elif sampler_type == "cyclic":
+        sampler = MegatronPretrainingCyclicSampler(
+            total_samples=total_samples,
+            consumed_samples=consumed_samples,
+            micro_batch_size=micro_batch_size,
+            data_parallel_rank=data_parallel_rank,
+            data_parallel_size=data_parallel_size,
+            global_batch_size=global_batch_size,
+            drop_last=drop_last,
+            pad_samples_to_global_batch_size=pad_samples_to_global_batch_size,
+        )
+    else:
+        raise ValueError(
+            f"Invalid sampler_type: {sampler_type}. "
+            f"Must be one of: 'sequential', 'random', 'cyclic'"
+        )
+
+    return sampler
+
+
 class EmptyInfiniteDataset:
     """
     Hack as removing all columns from a datasets.Dataset makes the number of rows 0.

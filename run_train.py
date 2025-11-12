@@ -26,6 +26,7 @@ from nanotron.config import (
 from nanotron.data.dataloader import (
     dummy_infinite_data_generator,
     get_train_dataloader,
+    get_train_dataloader_with_megatron_sampler,
 )
 from nanotron.data.processing import (
     clm_process,
@@ -206,18 +207,32 @@ def get_dataloader_from_data_stage(
             parallel_context=trainer.parallel_context,
         )
 
-        dataloader = get_train_dataloader(
+        # Use Megatron sampler for IndexedDataset/BlendableDataset
+        sampler_type = getattr(data.dataset, "sampler_type", "sequential")
+        log_rank(
+            f"Using Megatron sampler type: {sampler_type}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
+        dataloader = get_train_dataloader_with_megatron_sampler(
             train_dataset=train_dataset,
             sequence_length=trainer.sequence_length,
             parallel_context=trainer.parallel_context,
             input_pp_rank=input_pp_rank,
             output_pp_rank=output_pp_rank,
             micro_batch_size=trainer.micro_batch_size,
-            consumed_train_samples_stage=consumed_train_samples_stage,
+            global_batch_size=trainer.global_batch_size,
+            consumed_train_samples=consumed_train_samples_stage,
             dataloader_num_workers=data.num_loading_workers,
             seed_worker=data.seed,
             dataloader_drop_last=True,
             use_position_ids=isinstance(trainer.model_config, Qwen2Config),
+            sampler_type=sampler_type,
+            pad_samples_to_global_batch_size=getattr(
+                data.dataset, "pad_samples_to_global_batch_size", False
+            ),
         )
 
     # Case 4: Nanosets

@@ -9,7 +9,7 @@ from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import Config
 from nanotron.data.clm_collator import DataCollatorForCLM, DataCollatorForCLMWithPositionIds
-from nanotron.data.samplers import EmptyInfiniteDataset, get_sampler
+from nanotron.data.samplers import EmptyInfiniteDataset, get_megatron_sampler, get_sampler
 from nanotron.logging.timers import nanotron_timer
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
@@ -369,6 +369,120 @@ def get_train_dataloader(
         sampler=train_sampler,
         collate_fn=data_collator,
         drop_last=dataloader_drop_last,
+        num_workers=dataloader_num_workers,
+        pin_memory=dataloader_pin_memory,
+        worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
+        persistent_workers=True if dataloader_num_workers > 0 else False,
+    )
+
+
+def get_train_dataloader_with_megatron_sampler(
+    train_dataset: Union["datasets.Dataset", "torch.utils.data.Dataset"],
+    sequence_length: int,
+    parallel_context: ParallelContext,
+    input_pp_rank: int,
+    output_pp_rank: int,
+    micro_batch_size: int,
+    global_batch_size: int,
+    consumed_train_samples: int,
+    dataloader_num_workers: int,
+    seed_worker: int,
+    dataloader_drop_last: bool = True,
+    dataloader_pin_memory: bool = True,
+    sequence_sep_tokens: Optional[List[int]] = None,
+    use_position_ids: bool = True,
+    sampler_type: str = "sequential",
+    pad_samples_to_global_batch_size: bool = False,
+) -> DataLoader:
+    """
+    Get a PyTorch DataLoader for training using Megatron-style samplers.
+
+    This function is designed for use with IndexedDataset/BlendableDataset and uses
+    MegatronPretrainingSampler variants instead of standard DistributedSampler.
+
+    Args:
+        train_dataset: Dataset (GPTDataset, BlendableDataset, or HF Dataset)
+        sequence_length: Maximum sequence length
+        parallel_context: Process groups information
+        input_pp_rank: Rank responsible for input data
+        output_pp_rank: Rank responsible for output/label data
+        micro_batch_size: Batch size per DP rank
+        global_batch_size: Global batch size across all DP ranks
+        consumed_train_samples: Samples already consumed (for resumption)
+        dataloader_num_workers: Number of DataLoader workers
+        seed_worker: Random seed (kept for compatibility)
+        dataloader_drop_last: Drop last incomplete batch
+        dataloader_pin_memory: Use pinned memory
+        sequence_sep_tokens: Sequence separator tokens for position IDs
+        use_position_ids: Use position IDs in collator
+        sampler_type: 'sequential', 'random', or 'cyclic'
+        pad_samples_to_global_batch_size: Pad last batch to global batch size
+
+    Returns:
+        DataLoader with Megatron sampler
+    """
+    # Handle HuggingFace datasets
+    if isinstance(train_dataset, datasets.Dataset):
+        if dist.get_rank(parallel_context.pp_pg) in [input_pp_rank, output_pp_rank]:
+            train_dataset = train_dataset.with_format(
+                type="numpy", columns=["input_ids"], output_all_columns=True
+            )
+        else:
+            assert train_dataset.column_names == ["input_ids"], (
+                f"Dataset has to have a single column, with `input_ids` as the column name. "
+                f"Current dataset: {train_dataset}"
+            )
+            dataset_length = len(train_dataset)
+            train_dataset = train_dataset.remove_columns(column_names="input_ids")
+            assert (
+                len(train_dataset) == 0
+            ), f"Dataset has to be empty after removing the `input_ids` column. Current dataset: {train_dataset}"
+            train_dataset = EmptyInfiniteDataset(length=dataset_length)
+            dataloader_num_workers = 0
+    # Handle torch datasets (GPTDataset, BlendableDataset)
+    elif dist.get_rank(parallel_context.pp_pg) not in [input_pp_rank, output_pp_rank]:
+        dataset_length = len(train_dataset)
+        train_dataset = EmptyInfiniteDataset(length=dataset_length)
+        dataloader_num_workers = 0
+
+    # Setup data collator
+    if use_position_ids:
+        data_collator = DataCollatorForCLMWithPositionIds(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+            sequence_sep_tokens=sequence_sep_tokens,
+        )
+    else:
+        data_collator = DataCollatorForCLM(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+        )
+
+    # Get DP info
+    dp_ranks_size = parallel_context.dp_pg.size()
+    dp_rank = parallel_context.dp_pg.rank()
+
+    # Create Megatron sampler
+    train_sampler = get_megatron_sampler(
+        total_samples=len(train_dataset),
+        consumed_samples=consumed_train_samples,
+        micro_batch_size=micro_batch_size,
+        data_parallel_rank=dp_rank,
+        data_parallel_size=dp_ranks_size,
+        global_batch_size=global_batch_size,
+        drop_last=dataloader_drop_last,
+        pad_samples_to_global_batch_size=pad_samples_to_global_batch_size,
+        sampler_type=sampler_type,
+    )
+
+    return DataLoader(
+        train_dataset,
+        batch_sampler=train_sampler,  # Use batch_sampler instead of sampler + batch_size
+        collate_fn=data_collator,
         num_workers=dataloader_num_workers,
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
