@@ -31,6 +31,7 @@ mkdir -p logs
 export http_proxy=http://proxy.cscs.ch:8080
 export https_proxy=http://proxy.cscs.ch:8080
 export OMP_NUM_THREADS=4
+export LOCAL_WORLD_SIZE=4 # Number of GPUs per node
 
 # ******** Master port, address and world size MUST be passed as variables for DDP to work
 export MASTER_PORT=$(expr 10000 + $(echo -n $SLURM_JOBID | tail -c 4))
@@ -61,6 +62,7 @@ echo ""
 
 CMD="source $WORKDIR/.venv/bin/activate && torchrun \
  --nproc_per_node=4 \
+ --node_rank $SLURM_NODEID \
  --nnodes=$SLURM_NNODES \
  --start-method forkserver \
  --rdzv_backend=c10d \

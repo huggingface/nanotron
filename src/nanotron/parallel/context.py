@@ -21,7 +21,7 @@ class ParallelContext:
     ):
         """Initialize parallel context."""
         world_size = int(os.environ["WORLD_SIZE"])
-        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", "8")) if world_size > 8 else world_size
+        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", "4")) if world_size > 4 else world_size
 
         assert (
             tensor_parallel_size * pipeline_parallel_size * context_parallel_size * data_parallel_size
