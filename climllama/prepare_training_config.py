@@ -509,8 +509,8 @@ def main():
     parser.add_argument(
         "--micro_batch_size",
         type=int,
-        default=2,
-        help="Micro batch size (default: 2)",
+        default=8,
+        help="Micro batch size (default: 8)",
     )
 
     parser.add_argument(
