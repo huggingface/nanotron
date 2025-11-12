@@ -13,9 +13,9 @@
 # limitations under the License.
 
 CXXFLAGS += -O3 -Wall -shared -std=c++11 -fPIC -fdiagnostics-color
-CPPFLAGS += $(shell python3 -m pybind11 --includes)
+CPPFLAGS += $(shell python -m pybind11 --includes)
 LIBNAME = helpers
-LIBEXT = $(shell python3-config --extension-suffix)
+LIBEXT = $(shell python -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')
 
 default: $(LIBNAME)$(LIBEXT)
 
