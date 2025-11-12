@@ -373,6 +373,7 @@ class GPTDataset(Dataset):
     ):
         super().__init__()
         self.name = name
+        self.folder_path = data_prefix  # Add folder_path attribute for BlendableDataset compatibility
         self.indexed_dataset = indexed_dataset
         self.drop_last = drop_last
         self.seq_length = seq_length
