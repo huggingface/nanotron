@@ -32,6 +32,7 @@ export http_proxy=http://proxy.cscs.ch:8080
 export https_proxy=http://proxy.cscs.ch:8080
 export OMP_NUM_THREADS=4
 export LOCAL_WORLD_SIZE=4 # Number of GPUs per node
+export CUDA_DEVICE_MAX_CONNECTIONS=1 # required for TP > 1
 
 # ******** Master port, address and world size MUST be passed as variables for DDP to work
 export MASTER_PORT=$(expr 10000 + $(echo -n $SLURM_JOBID | tail -c 4))
