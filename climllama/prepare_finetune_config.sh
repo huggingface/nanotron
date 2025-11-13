@@ -30,7 +30,7 @@ DP=8  # Data parallel
 TP=1  # Tensor parallel
 PP=1  # Pipeline parallel
 GRAD_ACCUMULATION_STEPS=1  # Gradient accumulation steps
-ZERO_STAGE=1  # ZeRO optimizer stage
+ZERO_STAGE=0  # ZeRO optimizer stage
 
 # Activate environment
 source .venv/bin/activate

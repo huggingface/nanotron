@@ -57,6 +57,10 @@ Arguments:
     --wandb_project: WandB project name (default: uses mode name)
     --wandb_entity: WandB entity/team name (default: None)
     --zero_stage: ZeRO optimizer stage - 0 (disabled), 1 (optimizer states), 2 (+ gradients), 3 (+ parameters) (default: 0)
+    --accumulate_grad_in_fp32: Accumulate gradients in FP32 for better numerical stability (default: True)
+    --no_accumulate_grad_in_fp32: Do not accumulate gradients in FP32 (use native precision)
+
+    Note: zero_stage > 0 is incompatible with accumulate_grad_in_fp32=True (reduce_scatter not implemented)
 """
 
 import argparse
@@ -253,6 +257,7 @@ def create_training_config(
     wandb_project: Optional[str] = None,
     wandb_entity: Optional[str] = None,
     zero_stage: int = 0,
+    accumulate_grad_in_fp32: bool = True,
 ) -> Config:
     """Create a training configuration from checkpoint."""
 
@@ -288,7 +293,7 @@ def create_training_config(
         zero_stage=zero_stage,
         weight_decay=0.01,
         clip_grad=1.0,
-        accumulate_grad_in_fp32=True,
+        accumulate_grad_in_fp32=accumulate_grad_in_fp32,
         learning_rate_scheduler=lr_scheduler,
         optimizer_factory=AdamWOptimizerArgs(
             adam_eps=1e-08,
@@ -633,11 +638,41 @@ def main():
         "--zero_stage",
         type=int,
         choices=[0, 1, 2, 3],
-        default=1,
+        default=0,
         help="ZeRO optimizer stage: 0 (disabled), 1 (optimizer states), 2 (+ gradients), 3 (+ parameters) (default: 0)",
     )
 
+    parser.add_argument(
+        "--accumulate_grad_in_fp32",
+        action="store_true",
+        default=True,
+        help="Accumulate gradients in FP32 for better numerical stability (default: True)",
+    )
+
+    parser.add_argument(
+        "--no_accumulate_grad_in_fp32",
+        dest="accumulate_grad_in_fp32",
+        action="store_false",
+        help="Do not accumulate gradients in FP32 (use native precision)",
+    )
+
     args = parser.parse_args()
+
+    # Validate ZeRO stage compatibility with FP32 gradient accumulation
+    if args.zero_stage > 0 and args.accumulate_grad_in_fp32:
+        print(f"\n{'='*80}")
+        print(f"ERROR: Incompatible configuration detected!")
+        print(f"{'='*80}")
+        print(f"ZeRO stage {args.zero_stage} with accumulate_grad_in_fp32=True is not currently supported.")
+        print(f"The reduce_scatter operation for FP32 gradient accumulation with ZeRO is not implemented.")
+        print(f"\nPlease choose ONE of the following options:")
+        print(f"  1. Keep FP32 gradient accumulation (recommended for numerical stability):")
+        print(f"     --zero_stage 0")
+        print(f"\n  2. Use ZeRO Stage {args.zero_stage} with native precision gradients:")
+        print(f"     --no_accumulate_grad_in_fp32")
+        print(f"\nMemory savings with ZeRO Stage 1 (DP={args.dp}): ~{100 * (args.dp - 1) / args.dp:.1f}% of optimizer memory")
+        print(f"{'='*80}\n")
+        exit(1)
 
     # Use checkpoint path as tokenizer path if not specified
     tokenizer_path = args.tokenizer_path if args.tokenizer_path else args.checkpoint_path
@@ -649,6 +684,7 @@ def main():
     print(f"Learning rate: {args.learning_rate if args.learning_rate else 'auto'}")
     print(f"Parallelism: DP={args.dp}, TP={args.tp}, PP={args.pp}")
     print(f"ZeRO stage: {args.zero_stage}")
+    print(f"FP32 gradient accumulation: {args.accumulate_grad_in_fp32}")
     print(f"Splits: {args.splits_string}")
     print(f"Megatron Sampler: {args.sampler_type} (pad_last_batch={args.pad_samples_to_global_batch_size})")
     print()
@@ -678,6 +714,7 @@ def main():
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
         zero_stage=args.zero_stage,
+        accumulate_grad_in_fp32=args.accumulate_grad_in_fp32,
     )
 
     # Check if output file exists and ask for permission to overwrite
