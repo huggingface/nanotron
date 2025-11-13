@@ -761,6 +761,11 @@ class DistributedTrainer:
             global_batch_size=self.global_batch_size,
         )
 
+        # Calculate MFU (Model FLOPS Utilization)
+        from nanotron.helpers import get_peak_tflops
+        theoretical_tflops = get_peak_tflops()
+        mfu = (model_tflops / theoretical_tflops) * 100
+
         # Get rank information (used by both console and wandb logging)
         tp_size = self.parallel_context.tp_pg.size()
         dp_cp_rank = dist.get_rank(self.parallel_context.dp_cp_pg)
@@ -789,7 +794,7 @@ class DistributedTrainer:
             LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
             LogItem("lr", lr, "human_format"),  # , ".3E"),
             LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
-            # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
+            LogItem("mfu_%", mfu, ".2f"),  # Model FLOPS Utilization
             LogItem("gpu_mem_%", cuda_mem_percent, ".1f"),
             LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
         ]
@@ -1001,6 +1006,7 @@ class DistributedTrainer:
                 hardware_tflops,
                 tokens_per_sec,
                 num_params=self.num_params,
+                mfu=mfu,
             )
             log_rank("Throughput logging complete", logger=logger, level=logging.INFO, rank=0)
             if not self.config.profiler:

@@ -628,6 +628,7 @@ def create_table_log(
     bandwidth,
     num_params,
     slurm_job_id,
+    mfu=0,
 ):
     return [
         LogItem("job_id", slurm_job_id, "s"),
@@ -639,6 +640,7 @@ def create_table_log(
         LogItem("gbs", config.global_batch_size, "d"),
         LogItem("mTFLOPs", model_tflops, ".2f"),
         LogItem("hTFLOPs", hardware_tflops, ".2f"),
+        LogItem("MFU%", mfu, ".2f"),
         LogItem("tok/s/gpu", tokens_per_sec / parallel_context.world_pg.size(), ".2f"),
         LogItem("Mem Alloc (GB)", torch.cuda.max_memory_allocated() / 1024**3, ".2f"),
         LogItem("Mem Res (GB)", torch.cuda.max_memory_reserved() / 1024**3, ".2f"),
@@ -773,11 +775,12 @@ def log_throughput(
     tokens_per_sec=0,
     bandwidth=0,
     num_params={"total": 0, "local": 0},
+    mfu=0,
 ):
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "N/A")
 
     table_log = create_table_log(
-        config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, num_params, slurm_job_id
+        config, parallel_context, model_tflops, hardware_tflops, tokens_per_sec, bandwidth, num_params, slurm_job_id, mfu
     )
     column_widths = [max(len(item.tag), len(get_formatted_value(item))) for item in table_log]
     table_output = create_table_output(table_log, column_widths)
@@ -849,3 +852,21 @@ def get_consumed_train_samples_of_a_data_stage_from_ckp(
         metadata.data_stages.append(actual_stage)
 
     return actual_stage.consumed_train_samples, actual_stage.consumed_tokens_per_dataset_folder
+
+
+def get_peak_tflops() -> float:
+    """Get theoretical peak TFLOPS for the current hardware.
+
+    Returns the theoretical peak TFLOPS (FP16/BF16) for the GPU. Can be configured via
+    the HARDWARE_MAX_TFLOPS environment variable. Defaults to H100 SXM (989 TFLOPS).
+
+    Common values (FP16/BF16):
+    - H100 SXM: 989 TFLOPS
+    - H100 PCIe: 756 TFLOPS
+    - A100: 312 TFLOPS
+    - V100: 125 TFLOPS
+
+    Returns:
+        float: Theoretical peak TFLOPS
+    """
+    return float(os.environ.get('HARDWARE_MAX_TFLOPS', '989'))  # H100 SXM default
