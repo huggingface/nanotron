@@ -284,10 +284,11 @@ class GeneralArgs:
 
     Args:
         project: Name of the project (a project gather several runs in common tensorboard/hub-folders)
-        run: Name of the run
+        run: Name of the run (supports placeholders: %date, %jobid, %githash)
         step: Global step (updated when we save the checkpoint)
         consumed_train_samples: Number of samples consumed during training (should be actually just step*batch_size)
         ignore_sanity_checks: Whether to ignore sanity checks
+        _expand_run_template: Whether to expand %date, %jobid, and %githash placeholders in run name (default: True)
     """
 
     project: str
@@ -297,14 +298,23 @@ class GeneralArgs:
     consumed_train_samples: Optional[int] = None # TODO: remove this
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = True
+    _expand_run_template: bool = True
 
     def __post_init__(self):
         if self.seed is None:
             self.seed = DEFAULT_SEED
         if self.run is None:
             self.run = "%date_%jobid"
-        self.run = self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
-        self.run = self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
+
+        # Only expand if flag is True (default behavior)
+        if self._expand_run_template:
+            self.run = self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+            self.run = self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
+            # Get git commit hash from environment variable (first 7 chars)
+            git_hash = os.environ.get("GIT_COMMIT_HASH", "unknown")
+            if git_hash != "unknown" and len(git_hash) > 7:
+                git_hash = git_hash[:7]
+            self.run = self.run.replace("%githash", git_hash)
 
 
 @dataclass

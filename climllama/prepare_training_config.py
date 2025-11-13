@@ -235,7 +235,7 @@ def create_training_config(
     mode: str = "pretrain",
     train_steps: int = 5000,
     learning_rate: Optional[float] = None,
-    micro_batch_size: int = 2,
+    micro_batch_size: int = 4,
     sequence_length: int = 4096,
     dp: int = 4,
     tp: int = 2,
@@ -396,7 +396,7 @@ def create_training_config(
     checkpoints_path = os.path.join(os.path.dirname(checkpoint_path), "finetuned_checkpoints")
     os.makedirs(checkpoints_path, exist_ok=True)
 
-    run_name = f"{mode}_%date_%jobid"
+    run_name = f"{mode}_%date_%jobid_%githash"
 
     # Set WandB project name
     if wandb_project is None:
@@ -407,7 +407,7 @@ def create_training_config(
     if enable_wandb:
         metrics_logging = MetricsLoggingArgs(
             log_level=0,  # 0 = basic metrics, 1 = detailed per-layer metrics
-            log_detail_interval=10,  # Log detailed metrics every N steps
+            log_detail_interval=100,  # Log detailed metrics every N steps
         )
         print(f"\nWandB logging enabled:")
         print(f"  - Project: {wandb_project}")
@@ -422,6 +422,7 @@ def create_training_config(
             run=run_name,
             seed=seed,
             ignore_sanity_checks=False,
+            _expand_run_template=False,  # Don't expand when saving - delay until runtime
         ),
         checkpoints=CheckpointsArgs(
             checkpoints_path=checkpoints_path,
@@ -438,7 +439,9 @@ def create_training_config(
         ),
         tokenizer=TokenizerArgs(tokenizer_name_or_path=tokenizer_path),
         optimizer=optimizer,
-        logging=LoggingArgs(),
+        logging=LoggingArgs(
+            iteration_step_info_interval=10,
+        ),
         tokens=tokens,
         data_stages=data_stages,
         metrics_logging=metrics_logging,
