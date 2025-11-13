@@ -771,6 +771,12 @@ class DistributedTrainer:
         lr = self.lr_scheduler.get_last_lr()[0]
         remaining_steps = self.config.tokens.train_steps - self.iteration_step
         eta_seconds = int(remaining_steps * (elapsed_time_per_iteration_ms / 1000))
+
+        # Calculate GPU memory percentage for console logging
+        cuda_allocated = torch.cuda.memory_allocated()
+        cuda_total = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+        cuda_mem_percent = (cuda_allocated / cuda_total * 100) if cuda_total > 0 else 0
+
         basic_log_entries = [
             # LogItem("consumed_samples", self.consumed_train_samples, "human_format"),  # , "12d"),
             LogItem("consumed_tokens", self.metadata.consumed_tokens_total, "human_format"),
@@ -784,6 +790,7 @@ class DistributedTrainer:
             LogItem("lr", lr, "human_format"),  # , ".3E"),
             LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
             # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
+            LogItem("gpu_mem_%", cuda_mem_percent, ".1f"),
             LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
         ]
 
@@ -923,14 +930,29 @@ class DistributedTrainer:
                 all_log_entries.append(LogItem(name, value, "human_format"))
 
             total, used, free = shutil.disk_usage("/")
+
+            # Calculate GPU memory percentage
+            cuda_allocated = torch.cuda.memory_allocated()
+            cuda_reserved = torch.cuda.max_memory_reserved()
+            cuda_total = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+            cuda_allocated_percent = (cuda_allocated / cuda_total * 100) if cuda_total > 0 else 0
+            cuda_reserved_percent = (cuda_reserved / cuda_total * 100) if cuda_total > 0 else 0
+
             all_log_entries.extend(
                 [
                     LogItem(
-                        "cuda_memory_allocated", torch.cuda.memory_allocated(), "human_format"
+                        "cuda_memory_allocated", cuda_allocated, "human_format"
                     ),  #  / 1024**2, ".2f"),
                     LogItem(
-                        "cuda_max_memory_reserved", torch.cuda.max_memory_reserved(), "human_format"
+                        "cuda_memory_allocated_percent", cuda_allocated_percent, ".2f"
+                    ),
+                    LogItem(
+                        "cuda_max_memory_reserved", cuda_reserved, "human_format"
                     ),  #  / 1024**2, ".2f"),
+                    LogItem(
+                        "cuda_max_memory_reserved_percent", cuda_reserved_percent, ".2f"
+                    ),
+                    LogItem("cuda_memory_total", cuda_total, "human_format"),
                     LogItem("hd_total_memory_tb", total, "human_format"),  #  / (2**40), ".2f"),
                     LogItem("hd_used_memory_tb", used, "human_format"),  #  / (2**40), ".2f"),
                     LogItem("hd_free_memory_tb", free, "human_format"),  #  / (2**40), ".2f"),
