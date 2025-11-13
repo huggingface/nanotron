@@ -690,6 +690,17 @@ def main():
 
     # Save config
     config.save_as_yaml(args.output_config)
+
+    # Modify the saved YAML file to set _expand_run_template to true
+    with open(args.output_config, 'r') as f:
+        yaml_content = f.read()
+
+    # Replace _expand_run_template: false with _expand_run_template: true
+    yaml_content = yaml_content.replace('_expand_run_template: false', '_expand_run_template: true')
+
+    with open(args.output_config, 'w') as f:
+        f.write(yaml_content)
+
     print(f"\n✓ Config saved to {args.output_config}")
 
 
