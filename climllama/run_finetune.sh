@@ -48,6 +48,7 @@ if git -C "$WORKDIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   GIT_BRANCH=$(git -C "$WORKDIR" branch --show-current)
   GIT_COMMIT=$(git -C "$WORKDIR" rev-parse HEAD)
   GIT_LOG=$(git -C "$WORKDIR" log -1 --pretty=format:'%h | %an | %ad | %s' --date=iso)
+  export GIT_COMMIT_HASH=$GIT_COMMIT # Export for saving ckpt in training scripts
   echo "Git branch: ${GIT_BRANCH}"
   echo "Git commit: ${GIT_COMMIT}"
   echo "Last commit: ${GIT_LOG}"
