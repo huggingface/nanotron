@@ -56,6 +56,7 @@ Arguments:
     --enable_wandb: Enable Weights & Biases logging (default: False)
     --wandb_project: WandB project name (default: uses mode name)
     --wandb_entity: WandB entity/team name (default: None)
+    --zero_stage: ZeRO optimizer stage - 0 (disabled), 1 (optimizer states), 2 (+ gradients), 3 (+ parameters) (default: 0)
 """
 
 import argparse
@@ -251,6 +252,7 @@ def create_training_config(
     enable_wandb: bool = False,
     wandb_project: Optional[str] = None,
     wandb_entity: Optional[str] = None,
+    zero_stage: int = 0,
 ) -> Config:
     """Create a training configuration from checkpoint."""
 
@@ -283,7 +285,7 @@ def create_training_config(
 
     # Optimizer configuration
     optimizer = OptimizerArgs(
-        zero_stage=0,
+        zero_stage=zero_stage,
         weight_decay=0.01,
         clip_grad=1.0,
         accumulate_grad_in_fp32=True,
@@ -627,6 +629,14 @@ def main():
         help="WandB entity/team name (default: None)",
     )
 
+    parser.add_argument(
+        "--zero_stage",
+        type=int,
+        choices=[0, 1, 2, 3],
+        default=1,
+        help="ZeRO optimizer stage: 0 (disabled), 1 (optimizer states), 2 (+ gradients), 3 (+ parameters) (default: 0)",
+    )
+
     args = parser.parse_args()
 
     # Use checkpoint path as tokenizer path if not specified
@@ -638,6 +648,7 @@ def main():
     print(f"Training steps: {args.train_steps}")
     print(f"Learning rate: {args.learning_rate if args.learning_rate else 'auto'}")
     print(f"Parallelism: DP={args.dp}, TP={args.tp}, PP={args.pp}")
+    print(f"ZeRO stage: {args.zero_stage}")
     print(f"Splits: {args.splits_string}")
     print(f"Megatron Sampler: {args.sampler_type} (pad_last_batch={args.pad_samples_to_global_batch_size})")
     print()
@@ -666,6 +677,7 @@ def main():
         enable_wandb=args.enable_wandb,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
+        zero_stage=args.zero_stage,
     )
 
     # Check if output file exists and ask for permission to overwrite

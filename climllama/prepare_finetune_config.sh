@@ -17,7 +17,7 @@ OUTPUT_CONFIG=climllama/config_finetune.yaml
 DATA_PREFIX="/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/*"
 TRAIN_STEPS=5000
 LEARNING_RATE=1e-5
-MICRO_BATCH_SIZE=4
+MICRO_BATCH_SIZE=3
 SEQUENCE_LENGTH=4096
 
 # IndexedDataset specific settings
@@ -26,9 +26,11 @@ INDEX_MAPPING_DIR=""  # Optional: directory to cache index mappings
 SKIP_WARMUP=""  # Optional: add "--skip_warmup" to skip warmup
 
 # Parallelism settings (adjust based on your GPU count)
-DP=4  # Data parallel
-TP=2  # Tensor parallel
+DP=8  # Data parallel
+TP=1  # Tensor parallel
 PP=1  # Pipeline parallel
+GRAD_ACCUMULATION_STEPS=1  # Gradient accumulation steps
+ZERO_STAGE=1  # ZeRO optimizer stage
 
 # Activate environment
 source .venv/bin/activate
@@ -47,6 +49,8 @@ python climllama/prepare_training_config.py \
     --dp $DP \
     --tp $TP \
     --pp $PP \
+    --batch_accumulation $GRAD_ACCUMULATION_STEPS \
+    --zero_stage $ZERO_STAGE \
     --enable_wandb \
     --splits_string $SPLITS_STRING \
     ${INDEX_MAPPING_DIR:+--index_mapping_dir $INDEX_MAPPING_DIR} \
