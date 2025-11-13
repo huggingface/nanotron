@@ -25,9 +25,9 @@ INDEX_MAPPING_DIR=""  # Optional: directory to cache index mappings
 SKIP_WARMUP=""  # Optional: add "--skip_warmup" to skip warmup
 
 # Parallelism settings (adjust based on your GPU count)
-MICRO_BATCH_SIZE=8
-DP=2  # Data parallel
-TP=4  # Tensor parallel
+MICRO_BATCH_SIZE=4
+DP=4  # Data parallel
+TP=2  # Tensor parallel
 PP=1  # Pipeline parallel
 GRAD_ACCUMULATION_STEPS=8  # Gradient accumulation steps
 ZERO_STAGE=0  # ZeRO optimizer stage
