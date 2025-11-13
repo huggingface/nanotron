@@ -587,6 +587,9 @@ class DistributedTrainer:
                 self.metadata.current_stage.consumed_train_samples += self.global_batch_size
                 assert self.metadata.current_stage.sequence_length == self.sequence_length, "Sequence length mismatch between the current stage and the global sequence length"
 
+                # End the iteration timer (must be done every iteration, not just when logging)
+                self.iteration_timer.end()
+
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg, tbi_logs=tbi_logs)
 
@@ -747,8 +750,7 @@ class DistributedTrainer:
     ) -> None:
         # TODO @nouamanetazi: Megatron-LM seems to be using a barrier to report their interval time. Check if this is necessary. https://github.com/NouamaneTazi/Megatron-LM/blob/e241a96c3085b18e36c6cee1d68a8155de77b5a6/megatron/training.py#L607
         dist.barrier()
-        # End the iteration timer and get elapsed time in milliseconds
-        self.iteration_timer.end()
+        # Get elapsed time in milliseconds (timer already ended before this function)
         elapsed_time_per_iteration_ms = self.iteration_timer.elapsed * 1000
         tokens_per_sec = (
             self.global_batch_size * self.sequence_length / (elapsed_time_per_iteration_ms / 1000)
