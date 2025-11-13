@@ -17,7 +17,7 @@ OUTPUT_CONFIG=climllama/config_finetune.yaml
 DATA_PREFIX="/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/*"
 TRAIN_STEPS=5000
 LEARNING_RATE=1e-5
-MICRO_BATCH_SIZE=2
+MICRO_BATCH_SIZE=4
 SEQUENCE_LENGTH=4096
 
 # IndexedDataset specific settings

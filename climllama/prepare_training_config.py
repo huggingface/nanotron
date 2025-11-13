@@ -43,7 +43,7 @@ Arguments:
     --mode: Training mode - 'finetune' or 'pretrain' (default: finetune)
     --train_steps: Number of training steps (default: 5000)
     --learning_rate: Learning rate (default: 1e-5 for finetune, 3e-4 for pretrain)
-    --micro_batch_size: Micro batch size (default: 2)
+    --micro_batch_size: Micro batch size (default: 4)
     --sequence_length: Sequence length (default: 4096)
     --dp: Data parallelism degree (default: 4)
     --tp: Tensor parallelism degree (default: 2)
@@ -512,8 +512,8 @@ def main():
     parser.add_argument(
         "--micro_batch_size",
         type=int,
-        default=8,
-        help="Micro batch size (default: 8)",
+        default=4,
+        help="Micro batch size (default: 4)",
     )
 
     parser.add_argument(
