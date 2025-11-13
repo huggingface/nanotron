@@ -25,12 +25,14 @@ INDEX_MAPPING_DIR=""  # Optional: directory to cache index mappings
 SKIP_WARMUP=""  # Optional: add "--skip_warmup" to skip warmup
 
 # Parallelism settings (adjust based on your GPU count)
+# Keep GBS = 1024
 MICRO_BATCH_SIZE=4
 DP=4  # Data parallel
 TP=2  # Tensor parallel
 PP=1  # Pipeline parallel
-GRAD_ACCUMULATION_STEPS=8  # Gradient accumulation steps
+GRAD_ACCUMULATION_STEPS=32  # Gradient accumulation steps
 ZERO_STAGE=0  # ZeRO optimizer stage
+DISABLE_SANITY_CHECK="" # Optional: add "--disable_sanity_check" to disable sanity checks
 
 # Activate environment
 source .venv/bin/activate
@@ -54,7 +56,8 @@ python climllama/prepare_training_config.py \
     --enable_wandb \
     --splits_string $SPLITS_STRING \
     ${INDEX_MAPPING_DIR:+--index_mapping_dir $INDEX_MAPPING_DIR} \
-    $SKIP_WARMUP
+    $SKIP_WARMUP \
+    $DISABLE_SANITY_CHECK
 
 echo ""
 echo "Config generated successfully!"

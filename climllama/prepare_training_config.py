@@ -59,6 +59,7 @@ Arguments:
     --zero_stage: ZeRO optimizer stage - 0 (disabled), 1 (optimizer states), 2 (+ gradients), 3 (+ parameters) (default: 0)
     --accumulate_grad_in_fp32: Accumulate gradients in FP32 for better numerical stability (default: True)
     --no_accumulate_grad_in_fp32: Do not accumulate gradients in FP32 (use native precision)
+    --disable_sanity_check: Disable sanity checks (default: False)
 
     Note: zero_stage > 0 is incompatible with accumulate_grad_in_fp32=True (reduce_scatter not implemented)
 """
@@ -258,6 +259,7 @@ def create_training_config(
     wandb_entity: Optional[str] = None,
     zero_stage: int = 0,
     accumulate_grad_in_fp32: bool = True,
+    disable_sanity_check: bool = False,
 ) -> Config:
     """Create a training configuration from checkpoint."""
 
@@ -428,7 +430,7 @@ def create_training_config(
             project=wandb_project,
             run=run_name,
             seed=seed,
-            ignore_sanity_checks=False,
+            ignore_sanity_checks=disable_sanity_check,
             _expand_run_template=False,  # Don't expand when saving - delay until runtime
         ),
         checkpoints=CheckpointsArgs(
@@ -656,6 +658,12 @@ def main():
         help="Do not accumulate gradients in FP32 (use native precision)",
     )
 
+    parser.add_argument(
+        "--disable_sanity_check",
+        action="store_true",
+        help="Disable sanity checks (default: False)",
+    )
+
     args = parser.parse_args()
 
     # Validate ZeRO stage compatibility with FP32 gradient accumulation
@@ -715,6 +723,7 @@ def main():
         wandb_entity=args.wandb_entity,
         zero_stage=args.zero_stage,
         accumulate_grad_in_fp32=args.accumulate_grad_in_fp32,
+        disable_sanity_check=args.disable_sanity_check,
     )
 
     # Check if output file exists and ask for permission to overwrite
