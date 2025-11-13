@@ -61,8 +61,8 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo ""
 
-CMD="source $WORKDIR/.venv/bin/activate && torchrun \
- --nproc_per_node=4 \
+CMD="source $WORKDIR/.venv/bin/activate && \
+ torchrun --nproc_per_node=4 \
  --node_rank $SLURM_NODEID \
  --nnodes=$SLURM_NNODES \
  --start-method forkserver \

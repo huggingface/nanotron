@@ -1238,14 +1238,16 @@ class DistributedTrainer:
                     self.config.lighteval.eval_interval is None
                     or self.iteration_step % self.config.lighteval.eval_interval == 0
                 ):
-                    checkpoint_path = Path(self.config.checkpoints.checkpoints_path) / f"{self.config.general.step}"
+                    checkpoint_path = Path(self.config.checkpoints.checkpoints_path) / self.config.general.run / f"{self.config.general.step}"
                     self.lighteval_runner.eval_single_checkpoint(checkpoint_path)
 
     def save_checkpoint(self) -> Path:
         self.pre_save_checkpoint()
 
         checkpoints_path = self.config.checkpoints.checkpoints_path
-        checkpoint_path = Path(checkpoints_path) / f"{self.iteration_step}"
+        # Create subfolder with run name
+        run_folder = Path(checkpoints_path) / self.config.general.run
+        checkpoint_path = run_folder / f"{self.iteration_step}"
         if self.config.checkpoints.checkpoints_path_is_shared_file_system:
             should_mkdir = dist.get_rank(self.parallel_context.world_pg) == 0
         else:
@@ -1281,7 +1283,7 @@ class DistributedTrainer:
         save_random_states(
             random_states=self.random_states, parallel_context=self.parallel_context, root_folder=checkpoint_path
         )
-        with open(checkpoints_path / "latest.txt", mode="w") as fo:
+        with open(run_folder / "latest.txt", mode="w") as fo:
             fo.write(f"{self.iteration_step}")
 
         if hasattr(self.model_config, "to_json_file"):
