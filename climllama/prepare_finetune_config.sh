@@ -21,7 +21,7 @@ SEQUENCE_LENGTH=4096
 
 # IndexedDataset specific settings
 SPLITS_STRING="969,30,1"  # Train/val/test split ratios
-INDEX_MAPPING_DIR=""  # Optional: directory to cache index mappings
+INDEX_MAPPING_DIR="/iopsstor/scratch/cscs/lhuang/cache/nanotron-index-mapping"  # Optional: directory to cache index mappings
 SKIP_WARMUP=""  # Optional: add "--skip_warmup" to skip warmup
 
 # Parallelism settings (adjust based on your GPU count)
