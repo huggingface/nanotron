@@ -116,7 +116,10 @@ def get_hf_config(config: NanotronConfigs) -> HFSmollm3Config:
     else:
         attrs["use_sliding_window"] = False
         attrs["sliding_window"] = None
-    attrs["no_rope_layer_interval"] = config.no_rope_layer
+    if config.no_rope_layer is None:
+        attrs["no_rope_layers"] = [1] * config.num_hidden_layers
+    else:
+        attrs["no_rope_layer_interval"] = config.no_rope_layer
     return HFSmollm3Config(**attrs)
 
 
