@@ -1,0 +1,6 @@
+# Add absolute positional embedding to Climllama
+Climllama currently use Llama Architecture (in HF, use LlamaForCausalLM, in nanotron use Qwen2 due to conversion). I want to create a new Model class called ClimLlama, it inherits the Qwen2 model and add absolute positional embedding (so we have hybrid PE now: absolute PE + RoPE). Ref on positional embedding: climllama/note_collator_position_id.md . 
+
+Also, Create `ClimllamaDataset` inheriting `GPTDataset` that returns the necessary position indices (for embedding) including variable indices `var_idx` , resolution level indices `res_idx`, lead time indices `leadtime_idx` (in hours). It also returns extra positions for position encoding: `x=cos(lat)sin(lon)`, `y=cos(lat)cos(lon)`, `z=sin(lat)`, `cos_hour_of_day`, `sin_hour_of_day`, `cos_day_of_year`, `sin_day_of_year`, where hour of day and day of year is normalized to [0, 2pi], lat and lon is the longitude and latitude of the cell center. If in current resolution, we have a grid size of nxm (spanning the globe by default), then the longitude of the centers would be `linspace(w, 2pi - w, m)` where `w = 2pi / (2m)` , latitude would be `linspace(pi/2-h, -pi/2+h, n)` where `h = pi / (2n)`. 
+
+Create `DataCollatorForClimLlama` following `DataCollatorForCLMWithPositionIds` that feed the additional position indices and positions into Climllama Model.
