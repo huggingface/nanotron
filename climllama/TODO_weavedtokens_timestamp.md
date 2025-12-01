@@ -22,9 +22,8 @@ Where:
 - Each element represents the **base timestamp** of the corresponding document
 - Array index matches document index in the indexed dataset
 
-**Storage Options**:
+**Storage in datetime64[s]**:
 
-**Option A - datetime64[s]**:
 ```python
 timestamps = np.array([
     np.datetime64('2020-01-01T00:00:00'),
@@ -33,18 +32,6 @@ timestamps = np.array([
     ...
 ], dtype='datetime64[s]')
 ```
-
-**Option B - Unix timestamp (int64)**:
-```python
-timestamps = np.array([
-    1577836800,  # 2020-01-01 00:00:00 UTC
-    1577858400,  # 2020-01-01 06:00:00 UTC
-    1577880000,  # 2020-01-01 12:00:00 UTC
-    ...
-], dtype=np.int64)
-```
-
-**Recommended**: Option A (datetime64[s]) for better readability and numpy datetime support.
 
 ---
 
@@ -138,12 +125,10 @@ def weave_and_index(
 
     # Iterate through all samples
     for idx in range(len(weaver)):
-        # Get weaved token sequence
-        tokens = weaver[idx]  # 1D int32 array
-
-        # Get metadata including timestamp
-        metadata = weaver.get_metadata(idx)
-        timestamp = metadata['timestamp']  # datetime64 or datetime object
+        # Get weaved token sequence with metadata
+        result = weaver[idx]  # Returns dict with 'tokens' and metadata
+        tokens = result['tokens']  # 1D int32 array
+        timestamp = result['timestamp']  # datetime64 or datetime object
 
         # Add document to indexed dataset
         builder.add_document(tokens)
