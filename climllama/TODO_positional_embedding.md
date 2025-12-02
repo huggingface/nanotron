@@ -638,14 +638,12 @@ model:
 - [x] Create `ClimLlamaForTraining` in `src/nanotron/models/climllama.py`
 
 ### Data Pipeline
-- [ ] Create `ClimLlamaDataset` in `src/nanotron/data/climllama_dataset.py`
-  - [ ] Implement `_load_resolutions_from_metadata()` to load resolution hierarchy
-  - [ ] Implement `_precompute_spatial_grids()` for all resolution levels
-  - [ ] Implement `_parse_special_tokens()` to extract var_idx, res_idx, spatial positions
-  - [ ] Implement timestamp loading from `{data_prefix}_timestamps.npy`
-  - [ ] Implement `_compute_temporal_features()` for temporal encoding
-  - [ ] Implement `_get_document_timestamp()` for timestamp lookup
-- [ ] Create `DataCollatorForClimLlama` in `src/nanotron/data/climllama_collator.py`
+- [x] Create `ClimLlamaDataset` in `src/nanotron/data/climllama_dataset.py`
+  - [x] Implement `_load_resolutions_from_metadata()` to load resolution hierarchy
+  - [x] Implement on-the-fly position generation using `atmtokenizer.eval.weaved_tokens_position`
+  - [x] Implement timestamp loading from `{data_prefix}_timestamps.npy`
+  - [x] Implement `_get_document_timestamp()` for timestamp lookup
+- [x] Create `DataCollatorForClimLlama` in `src/nanotron/data/climllama_collator.py`
 
 ### Integration
 - [x] Register ClimLlama in model config registry (in `src/nanotron/trainer.py`)

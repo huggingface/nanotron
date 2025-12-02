@@ -173,3 +173,8 @@ tb_logs/
 
 # MacOS
 .DS_Store
+
+data/*/*.idx
+data/*/*.json
+data/*/*.npy
+data/*/*.bin
