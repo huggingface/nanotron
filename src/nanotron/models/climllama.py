@@ -275,7 +275,7 @@ class ClimLlamaModel(nn.Module):
         # Note: position_ids is torch.Tensor at this point (TensorPointer only on non-participating PP ranks)
         cu_seqlens: Optional[Union[torch.Tensor, Dict[str, torch.Tensor]]] = None
         if isinstance(position_ids, torch.Tensor) and position_ids.numel() > 0:
-            start_indices = torch.where(position_ids.view(-1) == 0)[0]
+            start_indices = torch.where(position_ids.reshape(-1) == 0)[0]
             cu_seqlens = torch.cat(
                 [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
             ).to(torch.int32)
