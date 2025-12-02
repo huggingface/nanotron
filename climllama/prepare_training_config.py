@@ -4,6 +4,9 @@ This script reads a Nanotron checkpoint, parses the model architecture, and gene
 a training configuration YAML file ready for finetuning or continued pretraining using
 Megatron/NeMo IndexedDataset format (.bin/.idx files).
 
+Supports both standard Qwen2/Llama models and ClimLlama models with climate-specific
+positional embeddings.
+
 Usage:
     # Single dataset
     python climllama/prepare_training_config.py \
@@ -33,6 +36,13 @@ Usage:
         --wandb_project my_project \
         --wandb_entity my_team
 
+    # Explicitly specify ClimLlama model type
+    python climllama/prepare_training_config.py \
+        --checkpoint_path /path/to/climllama/checkpoint \
+        --data_prefix /path/to/climate/data \
+        --output_config config_climllama.yaml \
+        --model_type climllama
+
 Arguments:
     --checkpoint_path: Path to the Nanotron checkpoint directory (required)
     --data_prefix: Path prefix to Megatron indexed dataset (.bin/.idx) (required)
@@ -60,6 +70,7 @@ Arguments:
     --accumulate_grad_in_fp32: Accumulate gradients in FP32 for better numerical stability (default: True)
     --no_accumulate_grad_in_fp32: Do not accumulate gradients in FP32 (use native precision)
     --disable_sanity_check: Disable sanity checks (default: False)
+    --model_type: Model type to use - 'qwen2' (standard), 'climllama' (with position embedding), or auto-detect (default: auto-detect)
 
     Note: zero_stage > 0 is incompatible with accumulate_grad_in_fp32=True (reduce_scatter not implemented)
 """
@@ -91,18 +102,20 @@ from nanotron.config import (
     TokenizerArgs,
     TokensArgs,
 )
+from nanotron.config.models_config import ClimLlamaConfig
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.logging import human_format
 
 
-def load_model_config(checkpoint_path: str) -> Qwen2Config:
+def load_model_config(checkpoint_path: str, model_type: Optional[str] = None) -> Qwen2Config:
     """Load model configuration from checkpoint.
 
-    This function loads Qwen2Config and filters out any incompatible fields,
+    This function loads model configuration and filters out any incompatible fields,
     making it robust to checkpoints from different model types.
 
     Args:
         checkpoint_path: Path to the checkpoint directory
+        model_type: Override model type detection. Options: "qwen2", "climllama", or None (auto-detect)
     """
     config_path = Path(checkpoint_path) / MODEL_CONFIG_FILE_NAME
 
@@ -115,9 +128,21 @@ def load_model_config(checkpoint_path: str) -> Qwen2Config:
     with open(config_path, "r") as f:
         model_config_dict = json.load(f)
 
-    # Always use Qwen2Config (hardcoded in nanotron)
-    config_cls = Qwen2Config
-    config_name = "Qwen2Config"
+    # Determine the config type based on model_type override or auto-detection
+    if model_type == "climllama":
+        config_cls = ClimLlamaConfig
+        config_name = "ClimLlamaConfig"
+    elif model_type == "qwen2":
+        config_cls = Qwen2Config
+        config_name = "Qwen2Config"
+    else:
+        # Auto-detect based on config contents
+        if model_config_dict.get("is_climllama_config", False):
+            config_cls = ClimLlamaConfig
+            config_name = "ClimLlamaConfig"
+        else:
+            config_cls = Qwen2Config
+            config_name = "Qwen2Config"
 
     print(f"Using config type: {config_name}")
 
@@ -135,6 +160,11 @@ def load_model_config(checkpoint_path: str) -> Qwen2Config:
     # Handle optional fields that might be None in the JSON
     if "_attn_implementation" in filtered_config and filtered_config["_attn_implementation"] is None:
         filtered_config.pop("_attn_implementation")
+
+    # Handle tuple fields for ClimLlamaConfig (variables)
+    if config_cls == ClimLlamaConfig and "variables" in filtered_config:
+        if isinstance(filtered_config["variables"], list):
+            filtered_config["variables"] = tuple(filtered_config["variables"])
 
     model_config = config_cls(**filtered_config)
 
@@ -260,11 +290,41 @@ def create_training_config(
     zero_stage: int = 0,
     accumulate_grad_in_fp32: bool = True,
     disable_sanity_check: bool = False,
+    model_type: Optional[str] = None,
 ) -> Config:
-    """Create a training configuration from checkpoint."""
+    """Create a training configuration from checkpoint.
+
+    Args:
+        checkpoint_path: Path to the Nanotron checkpoint directory
+        tokenizer_path: Path to the tokenizer
+        data_prefix: Path prefix to dataset files
+        mode: Training mode - 'finetune' or 'pretrain'
+        train_steps: Number of training steps
+        learning_rate: Learning rate (auto if None)
+        micro_batch_size: Micro batch size
+        sequence_length: Sequence length
+        dp: Data parallelism degree
+        tp: Tensor parallelism degree
+        pp: Pipeline parallelism degree
+        batch_accumulation: Gradient accumulation steps
+        checkpoint_interval: Save checkpoint every N steps
+        seed: Random seed
+        splits_string: Train/val/test split ratios
+        index_mapping_dir: Directory to cache index mappings
+        skip_warmup: Skip warmup when building indexed dataset
+        sampler_type: Megatron sampler type
+        pad_samples_to_global_batch_size: Pad last batch
+        enable_wandb: Enable WandB logging
+        wandb_project: WandB project name
+        wandb_entity: WandB entity/team name
+        zero_stage: ZeRO optimizer stage
+        accumulate_grad_in_fp32: Accumulate gradients in FP32
+        disable_sanity_check: Disable sanity checks
+        model_type: Model type override - 'qwen2', 'climllama', or None (auto-detect)
+    """
 
     # Load model config from checkpoint
-    model_config = load_model_config(checkpoint_path)
+    model_config = load_model_config(checkpoint_path, model_type=model_type)
 
     # Calculate parameters for logging
     total_params = calculate_parameters(model_config)
@@ -664,6 +724,15 @@ def main():
         help="Disable sanity checks (default: False)",
     )
 
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        choices=["qwen2", "climllama"],
+        default=None,
+        help="Model type to use: 'qwen2' (standard Qwen2/Llama), 'climllama' (climate model with hybrid PE). "
+        "If not specified, auto-detects from checkpoint config.",
+    )
+
     args = parser.parse_args()
 
     # Validate ZeRO stage compatibility with FP32 gradient accumulation
@@ -688,6 +757,7 @@ def main():
     print(f"Creating {args.mode} configuration from checkpoint: {args.checkpoint_path}")
     print(f"Tokenizer path: {tokenizer_path}")
     print(f"Data prefix: {args.data_prefix}")
+    print(f"Model type: {args.model_type if args.model_type else 'auto-detect'}")
     print(f"Training steps: {args.train_steps}")
     print(f"Learning rate: {args.learning_rate if args.learning_rate else 'auto'}")
     print(f"Parallelism: DP={args.dp}, TP={args.tp}, PP={args.pp}")
@@ -724,6 +794,7 @@ def main():
         zero_stage=args.zero_stage,
         accumulate_grad_in_fp32=args.accumulate_grad_in_fp32,
         disable_sanity_check=args.disable_sanity_check,
+        model_type=args.model_type,
     )
 
     # Check if output file exists and ask for permission to overwrite

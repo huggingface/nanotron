@@ -62,6 +62,7 @@ from nanotron.logging.timers import nanotron_timer
 from nanotron.metrics_logging import MetricsLogger
 from nanotron.models import NanotronModel, build_model
 from nanotron.models.base import check_model_has_grad
+from nanotron.models.climllama import ClimLlamaForTraining
 from nanotron.models.llama import LlamaForTraining, RotaryEmbedding
 from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.models.starcoder2 import Starcoder2ForTraining
@@ -112,6 +113,7 @@ CONFIG_TO_MODEL_CLASS = {
     "LlamaConfig": LlamaForTraining,
     "Starcoder2Config": Starcoder2ForTraining,
     "Qwen2Config": Qwen2ForTraining,
+    "ClimLlamaConfig": ClimLlamaForTraining,
 }
 
 try:

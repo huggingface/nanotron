@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Tuple, Union
 
 from nanotron.config.utils_config import InitScalingMethod
 
@@ -296,4 +296,55 @@ class Starcoder2Config:
         return self.intermediate_size
 
 
-NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Qwen2Config, Any]
+@dataclass
+class ClimLlamaConfig(Qwen2Config):
+    """Configuration for ClimLlama with climate-specific positional embeddings.
+
+    Extends Qwen2Config with hybrid positional embeddings:
+    - Learned absolute PE for climate-specific spatial-temporal information
+    - RoPE for relative position encoding (inherited from Qwen2)
+    """
+
+    is_climllama_config: bool = True  # Differentiate from Qwen2Config
+
+    # Absolute positional embedding parameters
+    # When setting to false, it should be compatible with Qwen2/Llama Model
+    use_absolute_position_embeddings: bool = True
+
+    # Discrete position embedding vocab sizes
+    # Always allocate one extra size for position embedding, index 0 for unknown
+    var_vocab_size: int = 13  # Number of pressure-level and surface-level atmosphere/climate variables
+    variables: Tuple[str, ...] = (
+        "unk",
+        "z",
+        "t",
+        "q",
+        "u",
+        "v",
+        "w",
+        "t2m",
+        "msl",
+        "u10",
+        "v10",
+        "tp_1h",
+        "tp_6h",
+    )
+
+    res_vocab_size: int = 12  # Number of resolution levels
+    leadtime_vocab_size: int = 13  # Embed 12 possible lead times, e.g., 0h, 6h, ..., 72h
+    leadtime_step: str = "6h"
+
+    # Spatial-temporal continuous position encoding
+    use_spatial_temporal_encoding: bool = True
+    spatial_temporal_encoding_dim: int = 128  # Dimension for encoding x,y,z,time features
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Validate variable configuration
+        if len(self.variables) != self.var_vocab_size:
+            raise ValueError(
+                f"Number of variables ({len(self.variables)}) must match var_vocab_size ({self.var_vocab_size})"
+            )
+
+
+NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Qwen2Config, "ClimLlamaConfig", Any]

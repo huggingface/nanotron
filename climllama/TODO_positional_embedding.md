@@ -781,10 +781,10 @@ model:
 ## Implementation Checklist
 
 ### Core Components
-- [ ] Create `ClimLlamaConfig` in `src/nanotron/config/models_config.py`
-- [ ] Create `ClimLlamaEmbedding` in `src/nanotron/models/climllama.py`
-- [ ] Create `ClimLlamaModel` in `src/nanotron/models/climllama.py`
-- [ ] Create `ClimLlamaForTraining` in `src/nanotron/models/climllama.py`
+- [x] Create `ClimLlamaConfig` in `src/nanotron/config/models_config.py`
+- [x] Create `ClimLlamaEmbedding` in `src/nanotron/models/climllama.py`
+- [x] Create `ClimLlamaModel` in `src/nanotron/models/climllama.py`
+- [x] Create `ClimLlamaForTraining` in `src/nanotron/models/climllama.py`
 
 ### Data Pipeline
 - [ ] Create `ClimLlamaDataset` in `src/nanotron/data/climllama_dataset.py`
@@ -797,9 +797,9 @@ model:
 - [ ] Create `DataCollatorForClimLlama` in `src/nanotron/data/climllama_collator.py`
 
 ### Integration
-- [ ] Register ClimLlama in model config registry
-- [ ] Create example training configuration YAML
-- [ ] Update `prepare_training_config.py` to support ClimLlama
+- [x] Register ClimLlama in model config registry (in `src/nanotron/trainer.py`)
+- [x] Create example training configuration YAML
+- [x] Update `prepare_training_config.py` to support ClimLlama
 
 ### Testing
 - [ ] Unit tests for embedding layer
