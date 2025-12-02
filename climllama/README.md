@@ -248,6 +248,31 @@ After training completes, you can:
 
 3. **Evaluate** the model using your evaluation pipeline
 
+## Testing
+
+Run the unit tests for ClimLlama components:
+
+```bash
+# Run all ClimLlama tests
+python -m pytest tests/test_climllama.py -v
+
+# Run specific test class
+python -m pytest tests/test_climllama.py::TestClimLlamaConfig -v
+python -m pytest tests/test_climllama.py::TestClimLlamaEmbedding -v
+python -m pytest tests/test_climllama.py::TestDataCollatorForCLMWithPositionIds -v
+python -m pytest tests/test_climllama.py::TestHybridPositionalEmbedding -v
+
+# Run with coverage
+python -m pytest tests/test_climllama.py -v --cov=src/nanotron/models/climllama --cov=src/nanotron/data/clm_collator
+```
+
+The test suite covers:
+- **ClimLlamaConfig**: Configuration validation and serialization
+- **ClimLlamaEmbedding**: Embedding layer with hybrid positional encodings
+- **DataCollatorForCLMWithPositionIds**: Data collation with position IDs and document masking
+- **HybridPositionalEmbedding**: Integration of absolute + RoPE positional embeddings
+- **SpatialTemporalFeatures**: Spatial-temporal feature encoding validation
+
 ## Resources
 
 - [Nanotron Documentation](../../docs/your-first-training.md)
