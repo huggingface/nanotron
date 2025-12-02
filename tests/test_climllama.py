@@ -32,6 +32,7 @@ class TestClimLlamaConfig:
         assert config.res_vocab_size == 12
         assert config.leadtime_vocab_size == 13
         assert config.spatial_temporal_encoding_dim == 128
+        assert config.max_tp == 4
         assert len(config.variables) == config.var_vocab_size
 
     def test_variable_vocab_size_validation(self):
@@ -354,11 +355,14 @@ def test_spatial_temporal_projection_dimensions(tp: int, dp: int, pp: int):
 def _test_spatial_temporal_projection_dimensions(parallel_context: ParallelContext):
     from nanotron.models.climllama import ClimLlamaEmbedding
 
+    # Note: vocab sizes must be divisible by max TP (4) for TensorParallelEmbedding
     config = ClimLlamaConfig(
         hidden_size=128,
         vocab_size=100,
-        var_vocab_size=5,
-        variables=("unk", "t", "q", "u", "v"),
+        var_vocab_size=8,
+        variables=("unk", "t", "q", "u", "v", "w", "z", "sp"),
+        res_vocab_size=4,
+        leadtime_vocab_size=8,
         spatial_temporal_encoding_dim=64,
         use_spatial_temporal_encoding=True,
     )
@@ -560,6 +564,10 @@ def test_collator_output_structure(tp: int, dp: int, pp: int):
 
 def _test_collator_output_structure(parallel_context: ParallelContext):
     from nanotron.data.clm_collator import DataCollatorForCLMWithPositionIds
+    from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+    from nanotron import distributed as dist
+
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
 
     collator = DataCollatorForCLMWithPositionIds(
         sequence_length=16,
@@ -568,24 +576,33 @@ def _test_collator_output_structure(parallel_context: ParallelContext):
         parallel_context=parallel_context,
     )
 
-    # Create sample data
-    examples = [
-        {
-            "input_ids": np.arange(17),  # seq_len + 1
-            "positions": np.arange(17),
-        },
-        {
-            "input_ids": np.arange(17),
-            "positions": np.arange(17),
-        },
-    ]
+    if current_pp_rank == 0:
+        # Create sample data for participating rank
+        examples = [
+            {
+                "input_ids": np.arange(17),  # seq_len + 1
+                "positions": np.arange(17),
+            },
+            {
+                "input_ids": np.arange(17),
+                "positions": np.arange(17),
+            },
+        ]
 
-    result = collator(examples)
+        result = collator(examples)
 
-    assert "input_ids" in result
-    assert "position_ids" in result
-    assert "label_ids" in result
-    assert "label_mask" in result
+        assert "input_ids" in result
+        assert "position_ids" in result
+        assert "label_ids" in result
+        assert "label_mask" in result
+    else:
+        # Non-participating ranks should provide empty examples
+        examples = [{}, {}]
+        result = collator(examples)
+
+        # Should return TensorPointers for non-participating ranks
+        assert isinstance(result["input_ids"], TensorPointer)
+        assert isinstance(result["label_ids"], TensorPointer)
 
     parallel_context.destroy()
 
@@ -599,6 +616,10 @@ def test_collator_position_ids_shape(tp: int, dp: int, pp: int):
 
 def _test_collator_position_ids_shape(parallel_context: ParallelContext):
     from nanotron.data.clm_collator import DataCollatorForCLMWithPositionIds
+    from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+    from nanotron import distributed as dist
+
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
 
     seq_len = 32
     batch_size = 4
@@ -610,18 +631,27 @@ def _test_collator_position_ids_shape(parallel_context: ParallelContext):
         parallel_context=parallel_context,
     )
 
-    examples = [
-        {
-            "input_ids": np.arange(seq_len + 1),
-            "positions": np.arange(seq_len + 1),
-        }
-        for _ in range(batch_size)
-    ]
+    if current_pp_rank == 0:
+        examples = [
+            {
+                "input_ids": np.arange(seq_len + 1),
+                "positions": np.arange(seq_len + 1),
+            }
+            for _ in range(batch_size)
+        ]
 
-    result = collator(examples)
+        result = collator(examples)
 
-    assert result["input_ids"].shape == (batch_size, seq_len)
-    assert result["position_ids"].shape == (batch_size, seq_len)
+        assert result["input_ids"].shape == (batch_size, seq_len)
+        assert result["position_ids"].shape == (batch_size, seq_len)
+    else:
+        # Non-participating ranks should provide empty examples
+        examples = [{} for _ in range(batch_size)]
+        result = collator(examples)
+
+        # Should return TensorPointers for non-participating ranks
+        assert isinstance(result["input_ids"], TensorPointer)
+        assert isinstance(result["label_ids"], TensorPointer)
 
     parallel_context.destroy()
 
@@ -635,6 +665,10 @@ def test_collator_label_mask_with_doc_boundaries(tp: int, dp: int, pp: int):
 
 def _test_collator_label_mask_with_doc_boundaries(parallel_context: ParallelContext):
     from nanotron.data.clm_collator import DataCollatorForCLMWithPositionIds
+    from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+    from nanotron import distributed as dist
+
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
 
     seq_len = 16
 
@@ -646,26 +680,34 @@ def _test_collator_label_mask_with_doc_boundaries(parallel_context: ParallelCont
         use_doc_masking=True,
     )
 
-    # Create example with document boundary at position 8
-    # Position IDs: 0,1,2,3,4,5,6,7, 0,1,2,3,4,5,6,7,0
-    positions = np.concatenate([np.arange(8), np.arange(9)])
+    if current_pp_rank == 0:
+        # Create example with document boundary at position 8
+        # Position IDs: 0,1,2,3,4,5,6,7, 0,1,2,3,4,5,6,7,0
+        positions = np.concatenate([np.arange(8), np.arange(9)])
 
-    examples = [
-        {
-            "input_ids": np.arange(seq_len + 1),
-            "positions": positions,
-        }
-    ]
+        examples = [
+            {
+                "input_ids": np.arange(seq_len + 1),
+                "positions": positions,
+            }
+        ]
 
-    result = collator(examples)
+        result = collator(examples)
 
-    # Label mask should be False at document boundaries
-    label_mask = result["label_mask"]
-    assert label_mask.dtype == np.bool_
+        # Label mask should be False at document boundaries
+        label_mask = result["label_mask"]
+        assert label_mask.dtype == np.bool_
 
-    # Position 7 should be masked (before the 0 at position 8)
-    # After shifting, the label at index 7 corresponds to position 8 (which is 0)
-    assert label_mask[0, 7] == False  # Document boundary
+        # Position 7 should be masked (before the 0 at position 8)
+        # After shifting, the label at index 7 corresponds to position 8 (which is 0)
+        assert label_mask[0, 7] == False  # Document boundary
+    else:
+        # Non-participating ranks should provide empty examples
+        examples = [{}]
+        result = collator(examples)
+
+        # Should return TensorPointers for non-participating ranks
+        assert isinstance(result["label_mask"], TensorPointer)
 
     parallel_context.destroy()
 
@@ -760,9 +802,9 @@ def _test_collator_non_participating_rank(parallel_context: ParallelContext):
         examples = [{}, {}]
         result = collator(examples)
 
-        # Should return TensorPointers
+        # Should return TensorPointers (collator returns "positions" for non-participating ranks)
         assert isinstance(result["input_ids"], TensorPointer)
-        assert isinstance(result["position_ids"], TensorPointer)
+        assert isinstance(result["positions"], TensorPointer)
         assert isinstance(result["label_ids"], TensorPointer)
         assert isinstance(result["label_mask"], TensorPointer)
 

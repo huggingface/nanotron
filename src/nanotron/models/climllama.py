@@ -64,6 +64,13 @@ class ClimLlamaEmbedding(nn.Module):
 
         tp_mode = parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE
 
+        def round_up_to_max_tp(num_embeddings: int) -> int:
+            """Round up num_embeddings to be divisible by max_tp for checkpoint compatibility."""
+            max_tp = config.max_tp
+            if num_embeddings % max_tp == 0:
+                return num_embeddings
+            return ((num_embeddings // max_tp) + 1) * max_tp
+
         # Token embeddings (standard)
         self.token_embedding = TensorParallelEmbedding(
             num_embeddings=config.vocab_size,
@@ -74,23 +81,24 @@ class ClimLlamaEmbedding(nn.Module):
         )
 
         # Discrete position embeddings
+        # Note: num_embeddings is rounded up to max_tp for checkpoint compatibility across TP sizes
         if config.use_absolute_position_embeddings:
             self.var_embedding = TensorParallelEmbedding(
-                num_embeddings=config.var_vocab_size,
+                num_embeddings=round_up_to_max_tp(config.var_vocab_size),
                 embedding_dim=config.hidden_size,
                 pg=tp_pg,
                 mode=tp_mode,
             )
 
             self.res_embedding = TensorParallelEmbedding(
-                num_embeddings=config.res_vocab_size,
+                num_embeddings=round_up_to_max_tp(config.res_vocab_size),
                 embedding_dim=config.hidden_size,
                 pg=tp_pg,
                 mode=tp_mode,
             )
 
             self.leadtime_embedding = TensorParallelEmbedding(
-                num_embeddings=config.leadtime_vocab_size,
+                num_embeddings=round_up_to_max_tp(config.leadtime_vocab_size),
                 embedding_dim=config.hidden_size,
                 pg=tp_pg,
                 mode=tp_mode,
