@@ -232,14 +232,41 @@ class ClimLlamaForTraining(NanotronModel):
 
 ### Phase 2: Dataset Implementation
 
-#### 2.1 Create ClimLlamaDataset
+#### 2.1 Position Generation Strategy
+
+**Selected Approach: On-the-fly Position Generation using `atmtokenizer.eval.weaved_tokens_position`**
+
+We use the `WeavedTokensPositionVisitor` from atmtokenizer to generate positional metadata on-the-fly during training. This ensures consistency between tokenizer and model while avoiding the need for precomputed position arrays.
+
+**Reference**: `../atmtokenizer/atmtokenizer/eval/weaved_tokens_position.py`
+
+The `WeavedTokensPositionVisitor` traverses the Lark parse tree and assigns each token:
+- `leadtime`: Lead time ID (hours from timestamp_0)
+- `resolution`: Resolution level ID
+- `variable`: Variable ID
+- `grid_i`, `grid_j`: Grid row/column indices (for CODEBOOK_TOKEN only)
+- `grid_lat`, `grid_lon`: Latitude/longitude in degrees
+- `grid_x`, `grid_y`, `grid_z`: Cartesian coordinates on unit sphere
+- `timestamp`: Absolute timestamp (timestamp_0 + leadtime_hours)
+- `cos_hour_of_day`, `sin_hour_of_day`: Temporal encoding for hour
+- `cos_day_of_year`, `sin_day_of_year`: Temporal encoding for day
+
+#### 2.2 ClimLlamaDataset
+
 **File**: `src/nanotron/data/climllama_dataset.py` (new file)
 
-**Reference**: `GPTDataset` in [src/nanotron/data/nemo_dataset/__init__.py](../src/nanotron/data/nemo_dataset/__init__.py) (lines 359-579)
+**Reference**: `GPTDataset` in [src/nanotron/data/nemo_dataset/__init__.py](../src/nanotron/data/nemo_dataset/__init__.py)
 
 ```python
+from atmtokenizer.eval.weaved_tokens_position import get_leaf_positions
+from atmtokenizer.eval.special_tokens import create_special_tokens
+from atmtokenizer.eval.lark_grammar import WEAVED_TOKENS_GRAMMAR
+from lark import Lark
+from datetime import datetime
+
+
 class ClimLlamaDataset(GPTDataset):
-    """Dataset for ClimLlama that returns climate-specific position information."""
+    """Dataset for ClimLlama that generates position arrays on-the-fly."""
 
     def __init__(
         self,
@@ -254,6 +281,7 @@ class ClimLlamaDataset(GPTDataset):
         seed,
         parallel_context,
         drop_last=True,
+        codebook_size: int = 32768,
     ):
         super().__init__(
             cfg, tokenizer, name, data_prefix, documents,
@@ -261,13 +289,12 @@ class ClimLlamaDataset(GPTDataset):
             parallel_context, drop_last
         )
 
-        # Extract grid size (resolutions) from dataset metadata
-        # The dataset folder contains metadata.json with resolution information
-        # in model_config["resolutions"] (e.g., [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32])
-        self.resolutions = self._load_resolutions_from_metadata(data_prefix)
+        # Setup Lark parser and special tokens for position generation
+        self.parser = Lark(WEAVED_TOKENS_GRAMMAR, parser='lalr')
+        self.special_tokens = create_special_tokens(codebook_size=codebook_size)
 
-        # Precompute lat/lon grids for each resolution level
-        self._precompute_spatial_grids()
+        # Load resolution shapes from metadata
+        self.resolution_shapes = self._load_resolution_shapes_from_metadata(data_prefix)
 
         # Load global timestamp array
         # See TODO_weavedtokens_timestamp.md for specification
@@ -280,8 +307,8 @@ class ClimLlamaDataset(GPTDataset):
             print(f"Temporal features will use fallback epoch time")
             self.timestamps = None
 
-    def _load_resolutions_from_metadata(self, data_prefix):
-        """Load resolution information from dataset metadata.json.
+    def _load_resolution_shapes_from_metadata(self, data_prefix) -> Dict[int, Tuple[int, int]]:
+        """Load resolution shapes from dataset metadata.json.
 
         The dataset folder contains metadata.json with structure:
         {
@@ -291,344 +318,168 @@ class ClimLlamaDataset(GPTDataset):
             }
         }
 
-        These resolution values should be expanded to (n_lat, n_lon) tuples:
-        [(1, 2), (2, 4), (3, 6), ..., (32, 64)]
-
-        Args:
-            data_prefix: Path to the dataset (can be a prefix or full path)
-
         Returns:
-            List of (n_lat, n_lon) tuples for each resolution level
+            Dict mapping resolution ID to (height, width) tuple
+            E.g., {0: (1, 2), 1: (2, 4), 2: (3, 6), ...}
         """
         import json
         from pathlib import Path
 
-        # Find metadata.json in the dataset directory
-        # data_prefix might be like "/path/to/dataset/train" or "/path/to/dataset"
         data_path = Path(data_prefix)
         if data_path.is_file():
             data_path = data_path.parent
 
-        # Search for metadata.json
         metadata_path = data_path / "metadata.json"
         if not metadata_path.exists():
-            # Try parent directory
             metadata_path = data_path.parent / "metadata.json"
 
         if not metadata_path.exists():
-            # Fallback to default resolutions
-            print(f"Warning: metadata.json not found at {data_path}, using default resolutions")
-            return [(1, 2), (2, 4), (3, 6), (4, 8), (5, 10), (6, 12), (8, 16), (10, 20), (13, 26), (16, 32), (32, 64)]
+            print(f"Warning: metadata.json not found, using default resolutions")
+            default_res = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32]
+            return {i: (n, 2 * n) for i, n in enumerate(default_res)}
 
-        # Load metadata
         with open(metadata_path, 'r') as f:
             metadata = json.load(f)
 
-        # Extract resolutions from model_config
         resolution_values = metadata.get("model_config", {}).get("resolutions", [])
-
         if not resolution_values:
-            print(f"Warning: No resolutions found in metadata.json, using default")
-            return [(1, 2), (2, 4), (3, 6), (4, 8), (5, 10), (6, 12), (8, 16), (10, 20), (13, 26), (16, 32), (32, 64)]
+            default_res = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32]
+            return {i: (n, 2 * n) for i, n in enumerate(default_res)}
 
-        # Expand to (n_lat, n_lon) tuples where n_lon = 2 * n_lat
-        resolutions = [(n, 2 * n) for n in resolution_values]
+        # Map resolution ID to (height, width) tuple
+        return {i: (n, 2 * n) for i, n in enumerate(resolution_values)}
 
-        print(f"Loaded {len(resolutions)} resolution levels from metadata: {resolutions}")
-        return resolutions
-
-    def _precompute_spatial_grids(self):
-        """Precompute latitude and longitude grids for each resolution level.
-
-        For climate data, we have a hierarchy of resolutions stored as (n_lat, n_lon) tuples.
-        For example: [(1, 2), (2, 4), (3, 6), ..., (32, 64)]
-        """
-        self.spatial_grids = {}
-
-        for res_idx, (n_lat, n_lon) in enumerate(self.resolutions):
-            # Longitude: linspace(w, 2π - w, m) where w = 2π / (2m)
-            w = 2 * np.pi / (2 * n_lon)
-            lon_centers = np.linspace(w, 2 * np.pi - w, n_lon)
-
-            # Latitude: linspace(π/2 - h, -π/2 + h, n) where h = π / (2n)
-            h = np.pi / (2 * n_lat)
-            lat_centers = np.linspace(np.pi / 2 - h, -np.pi / 2 + h, n_lat)
-
-            # Create meshgrid
-            lon_grid, lat_grid = np.meshgrid(lon_centers, lat_centers)
-
-            # Precompute x, y, z coordinates
-            # x = cos(lat) * sin(lon)
-            # y = cos(lat) * cos(lon)
-            # z = sin(lat)
-            x_grid = np.cos(lat_grid) * np.sin(lon_grid)
-            y_grid = np.cos(lat_grid) * np.cos(lon_grid)
-            z_grid = np.sin(lat_grid)
-
-            # Store grids for this resolution
-            self.spatial_grids[res_idx] = {
-                'lat_centers': lat_centers,
-                'lon_centers': lon_centers,
-                'x_grid': x_grid,
-                'y_grid': y_grid,
-                'z_grid': z_grid,
-                'n_lat': n_lat,
-                'n_lon': n_lon,
-            }
-
-    def _compute_temporal_features(self, timestamp):
-        """Compute temporal features from timestamp.
+    def _generate_positions(self, input_ids: np.ndarray, timestamp_0: datetime) -> Dict[str, np.ndarray]:
+        """Generate position arrays on-the-fly using WeavedTokensPositionVisitor.
 
         Args:
-            timestamp: datetime or unix timestamp
+            input_ids: Token sequence from indexed dataset
+            timestamp_0: Initial timestamp for the document
 
         Returns:
-            (cos_hour_of_day, sin_hour_of_day, cos_day_of_year, sin_day_of_year)
+            Dict with var_idx, res_idx, leadtime_idx, spatial_temporal_features
         """
-        # Extract hour of day and day of year
-        # Normalize to [0, 2π]
-        hour_angle = (timestamp.hour + timestamp.minute / 60.0) / 24.0 * 2 * np.pi
-        day_angle = timestamp.timetuple().tm_yday / 365.0 * 2 * np.pi
+        # Parse token sequence
+        tree = self.parser.parse(input_ids.tolist())
 
-        return (
-            np.cos(hour_angle),
-            np.sin(hour_angle),
-            np.cos(day_angle),
-            np.sin(day_angle),
+        # Get positions for all tokens
+        leaves = get_leaf_positions(
+            tree,
+            self.resolution_shapes,
+            self.special_tokens,
+            timestamp_0
         )
 
-    def _parse_special_tokens(self, input_ids: np.ndarray) -> tuple:
-        """Parse special tokens to extract position metadata.
+        # Convert to arrays
+        n_tokens = len(leaves)
+        var_idx = np.zeros(n_tokens, dtype=np.int64)
+        res_idx = np.zeros(n_tokens, dtype=np.int64)
+        leadtime_idx = np.zeros(n_tokens, dtype=np.int64)
+        spatial_temporal_features = np.zeros((n_tokens, 7), dtype=np.float32)
 
-        Args:
-            input_ids: Token sequence with special tokens from TokenWeaver
+        for i, (token, pos) in enumerate(leaves):
+            var_idx[i] = pos["variable"] or 0
+            res_idx[i] = pos["resolution"] or 0
+            leadtime_idx[i] = pos["leadtime"] or 0
 
-        Returns:
-            Tuple of (var_idx, res_idx, spatial_features):
-                - var_idx: (seq_len,) int64 array of variable indices
-                - res_idx: (seq_len,) int64 array of resolution level indices
-                - spatial_features: (seq_len, 3) float32 array of (x, y, z) coordinates
-        """
-        seq_len = len(input_ids)
-        var_idx = np.zeros(seq_len, dtype=np.int64)
-        res_idx = np.zeros(seq_len, dtype=np.int64)
-        spatial_features = np.zeros((seq_len, 3), dtype=np.float32)
+            # Spatial features (x, y, z)
+            spatial_temporal_features[i, 0] = pos["grid_x"] or 0.0
+            spatial_temporal_features[i, 1] = pos["grid_y"] or 0.0
+            spatial_temporal_features[i, 2] = pos["grid_z"] or 0.0
 
-        # Special token IDs (must match TokenWeaver config)
-        VAR_TOKEN_START = 32800
-        RES_TOKEN_START = 32787
-        EOR_TOKEN = 32785
-
-        current_var = 0
-        current_res = 0
-        token_position = 0  # Position within current resolution level
-        output_idx = 0
-
-        for tok in input_ids:
-            if tok >= VAR_TOKEN_START and tok < VAR_TOKEN_START + 256:
-                # Variable marker: extract variable index
-                current_var = tok - VAR_TOKEN_START
-                # Don't increment output_idx; special tokens not in output
-
-            elif tok >= RES_TOKEN_START and tok < RES_TOKEN_START + 13:
-                # Resolution marker: extract resolution level
-                current_res = tok - RES_TOKEN_START
-                token_position = 0  # Reset position counter for new resolution
-                # Don't increment output_idx
-
-            elif tok == EOR_TOKEN:
-                # End of resolution marker
-                # Don't increment output_idx
-                pass
-
-            else:
-                # Regular codebook token: assign metadata
-                if output_idx < seq_len:
-                    var_idx[output_idx] = current_var
-                    res_idx[output_idx] = current_res
-
-                    # Compute spatial coordinates from token position
-                    n_lat, n_lon = self.resolutions[current_res]
-                    lat_idx = token_position // n_lon
-                    lon_idx = token_position % n_lon
-
-                    # Lookup spatial coordinates from precomputed grids
-                    grid = self.spatial_grids[current_res]
-                    spatial_features[output_idx, 0] = grid['x_grid'][lat_idx, lon_idx]
-                    spatial_features[output_idx, 1] = grid['y_grid'][lat_idx, lon_idx]
-                    spatial_features[output_idx, 2] = grid['z_grid'][lat_idx, lon_idx]
-
-                    token_position += 1
-                    output_idx += 1
-
-        # If special tokens are stripped before this point, return full arrays
-        # Otherwise, return only filled portion
-        return var_idx[:output_idx], res_idx[:output_idx], spatial_features[:output_idx]
-
-    def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
-        """Return item with climate-specific position information."""
-
-        # Get base item from GPTDataset
-        base_item = super().__getitem__(idx)
-
-        # Note: input_ids may contain special tokens from TokenWeaver
-        # Or special tokens may already be stripped by GPTDataset
-        # This implementation assumes special tokens are present
-
-        # Parse special tokens to extract position metadata
-        var_idx, res_idx, spatial_features = self._parse_special_tokens(
-            base_item["input_ids"]
-        )
-
-        seq_len = len(var_idx)  # Length after special token filtering
-
-        # Get document index and timestamp
-        # (Simplified: assumes one document per sample)
-        doc_idx = self._get_document_index_for_sample(idx)
-        timestamp = self._get_document_timestamp(doc_idx)
-
-        # Compute temporal features (same for all tokens)
-        temporal_features = self._compute_temporal_features(timestamp)
-
-        # Combine spatial and temporal features
-        spatial_temporal_features = np.zeros((seq_len, 7), dtype=np.float32)
-        spatial_temporal_features[:, 0:3] = spatial_features  # x, y, z
-        spatial_temporal_features[:, 3] = temporal_features[0]  # cos_hour_of_day
-        spatial_temporal_features[:, 4] = temporal_features[1]  # sin_hour_of_day
-        spatial_temporal_features[:, 5] = temporal_features[2]  # cos_day_of_year
-        spatial_temporal_features[:, 6] = temporal_features[3]  # sin_day_of_year
-
-        # Lead time: for now, assume analysis data (lead time = 0)
-        # TODO: Extract lead time from metadata if using forecast data
-        leadtime_idx = np.zeros(seq_len, dtype=np.int64)
+            # Temporal features (cos_hour, sin_hour, cos_day, sin_day)
+            spatial_temporal_features[i, 3] = pos["cos_hour_of_day"]
+            spatial_temporal_features[i, 4] = pos["sin_hour_of_day"]
+            spatial_temporal_features[i, 5] = pos["cos_day_of_year"]
+            spatial_temporal_features[i, 6] = pos["sin_day_of_year"]
 
         return {
-            "input_ids": base_item["input_ids"],
             "var_idx": var_idx,
             "res_idx": res_idx,
             "leadtime_idx": leadtime_idx,
             "spatial_temporal_features": spatial_temporal_features,
         }
 
-    def _get_document_index_for_sample(self, sample_idx: int) -> int:
-        """Get document index for a given sample index.
+    def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
+        """Return item with position information generated on-the-fly."""
 
-        This is a simplified implementation assuming one sample = one document.
-        For more complex sampling strategies (e.g., samples spanning multiple documents),
-        this needs to be more sophisticated.
-        """
-        # TODO: Implement proper document index tracking
-        # For now, assume 1:1 mapping
+        # Get base item from GPTDataset
+        base_item = super().__getitem__(idx)
+
+        # Get document index and timestamp
+        doc_idx = self._get_document_index_for_sample(idx)
+        timestamp_0 = self._get_document_timestamp(doc_idx)
+
+        # Generate positions on-the-fly
+        positions = self._generate_positions(base_item["input_ids"], timestamp_0)
+
+        return {
+            "input_ids": base_item["input_ids"],
+            "var_idx": positions["var_idx"],
+            "res_idx": positions["res_idx"],
+            "leadtime_idx": positions["leadtime_idx"],
+            "spatial_temporal_features": positions["spatial_temporal_features"],
+        }
+
+    def _get_document_index_for_sample(self, sample_idx: int) -> int:
+        """Get document index for a given sample index."""
+        # Implementation depends on sampling strategy
+        # For simple 1:1 mapping:
         return sample_idx
 
-    def _get_document_timestamp(self, doc_idx: int) -> np.datetime64:
+    def _get_document_timestamp(self, doc_idx: int) -> datetime:
         """Get timestamp for a document.
 
         Args:
             doc_idx: Document index in the indexed dataset
 
         Returns:
-            Timestamp as numpy datetime64[s]
+            datetime object for the document's initial timestamp
         """
         if self.timestamps is not None and doc_idx < len(self.timestamps):
-            return self.timestamps[doc_idx]
+            # Convert numpy datetime64 or unix timestamp to datetime
+            ts = self.timestamps[doc_idx]
+            if isinstance(ts, np.datetime64):
+                return ts.astype('datetime64[s]').astype(datetime)
+            else:
+                return datetime.fromtimestamp(ts)
         else:
             # Fallback: return epoch
-            return np.datetime64('1970-01-01T00:00:00')
-
-    def _compute_temporal_features(self, timestamp: np.datetime64) -> np.ndarray:
-        """Compute temporal features from timestamp.
-
-        Args:
-            timestamp: numpy datetime64[s] object
-
-        Returns:
-            np.ndarray: (4,) array with [cos_hour, sin_hour, cos_day, sin_day]
-        """
-        import datetime
-
-        # Convert to Python datetime for easier manipulation
-        dt = timestamp.astype('datetime64[s]').astype(datetime.datetime)
-
-        # Hour of day (0-23) + fractional minutes
-        hour_of_day = dt.hour + dt.minute / 60.0
-        hour_angle = hour_of_day / 24.0 * 2 * np.pi
-
-        # Day of year (1-365 or 366)
-        day_of_year = dt.timetuple().tm_yday
-        days_in_year = 366 if self._is_leap_year(dt.year) else 365
-        day_angle = (day_of_year - 1) / days_in_year * 2 * np.pi
-
-        return np.array([
-            np.cos(hour_angle),
-            np.sin(hour_angle),
-            np.cos(day_angle),
-            np.sin(day_angle),
-        ], dtype=np.float32)
-
-    @staticmethod
-    def _is_leap_year(year: int) -> bool:
-        """Check if year is a leap year."""
-        return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+            return datetime(1970, 1, 1, 0, 0, 0)
 ```
 
 **Key Features**:
-- Inherits from `GPTDataset` for base functionality
-- Loads resolution hierarchy from dataset's `metadata.json` file
-- Loads global timestamp array from `{data_prefix}_timestamps.npy`
-- Precomputes spatial grids for all resolution levels
-- Parses special tokens from TokenWeaver to extract var_idx, res_idx
-- Computes spatial positions (x, y, z) from resolution grids
-- Computes temporal features from timestamps with proper normalization to [0, 2π]
-- Returns 7D spatial-temporal features + discrete indices
+- Uses `WeavedTokensPositionVisitor` from atmtokenizer for on-the-fly position generation
+- No precomputation required - positions generated during `__getitem__`
+- Consistent with tokenizer's Lark grammar and special token definitions
+- Single source of truth in `weaved_tokens_position.py`
 
-**Important Notes**:
-- Special token IDs (32768+) must be coordinated with TokenWeaver configuration
-- See [TODO_weavedtokens_timestamp.md](TODO_weavedtokens_timestamp.md) for timestamp format
-- Input tokens may contain special tokens; parser filters them out
-- Spatial coordinates computed on-the-fly from flattened token positions
+**Advantages of On-the-fly Generation**:
+- No additional preprocessing step required
+- No extra storage for position arrays
+- Simpler data pipeline
+- Positions always in sync with token sequences
 
-#### 2.2 Resolution Data Source
-The resolution hierarchy is stored in the dataset's `metadata.json` file:
-```json
-{
-  "model_config": {
-    "resolutions": [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32],
-    ...
-  }
-}
-```
+**Trade-offs**:
+- Slightly higher CPU overhead during training (Lark parsing per sample)
+- Can be mitigated with DataLoader workers
 
-These values are expanded to (n_lat, n_lon) tuples: `[(1, 2), (2, 4), (3, 6), ..., (32, 64)]`
+#### 2.3 Position Metadata Fields
 
-This ensures that the spatial grids match exactly the resolution levels used during tokenizer training.
+The position arrays contain the following fields per token:
 
-#### 2.3 Position Metadata Extraction Strategy
-
-**Selected Approach: Option C - Hybrid (Special Token Parsing + Spatial Grid Lookup)**
-
-The dataset extracts position metadata using a combination of:
-
-1. **Special Token Parsing**: Parse weaved token sequences from TokenWeaver to extract discrete indices
-   - Variable index (`var_idx`): Extracted from `<VAR:...>` special tokens
-   - Resolution index (`res_idx`): Extracted from `<RES_N>` special tokens
-   - Spatial position within resolution level: Track token position between `<RES_N>` and `<EOR>` markers
-
-2. **Spatial Grid Precomputation**: Convert flattened positions to (lat, lon) coordinates
-   - Precompute lat/lon grids for each resolution level (done in `_precompute_spatial_grids()`)
-   - Map flattened token position to 2D grid coordinates
-   - Compute (x, y, z) from (lat, lon) using spherical projection
-
-3. **Global Timestamp Array**: Load timestamps from separate file
-   - See [TODO_weavedtokens_timestamp.md](TODO_weavedtokens_timestamp.md) for detailed specification
-   - One timestamp per document in indexed dataset
-   - Compute temporal features (cos_hour, sin_hour, cos_day, sin_day) from timestamp
-
-**Advantages**:
-- Minimal changes to TokenWeaver (only needs special tokens, no extra metadata)
-- Spatial information computed on-the-fly (no storage overhead)
-- Temporal information efficiently stored in separate array
-- Clear separation of concerns between tokenizer and model
+| Field | Type | Description |
+|-------|------|-------------|
+| var_idx | int | Variable index (0=unknown, 1=z, 2=t, ...) |
+| res_idx | int | Resolution level (0=coarsest, N=finest) |
+| leadtime_idx | int | Lead time in hours from timestamp_0 |
+| spatial_temporal_features[:, 0] | float | grid_x = cos(lat)sin(lon), range [-1, 1] |
+| spatial_temporal_features[:, 1] | float | grid_y = cos(lat)cos(lon), range [-1, 1] |
+| spatial_temporal_features[:, 2] | float | grid_z = sin(lat), range [-1, 1] |
+| spatial_temporal_features[:, 3] | float | cos_hour_of_day, range [-1, 1] |
+| spatial_temporal_features[:, 4] | float | sin_hour_of_day, range [-1, 1] |
+| spatial_temporal_features[:, 5] | float | cos_day_of_year, range [-1, 1] |
+| spatial_temporal_features[:, 6] | float | sin_day_of_year, range [-1, 1] |
 
 ---
 
