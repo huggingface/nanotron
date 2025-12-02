@@ -14,10 +14,14 @@
 
 CXXFLAGS += -O3 -Wall -shared -std=c++11 -fPIC -fdiagnostics-color
 CPPFLAGS += $(shell python -m pybind11 --includes)
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    LDFLAGS += -undefined dynamic_lookup
+endif
 LIBNAME = helpers
 LIBEXT = $(shell python -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')
 
 default: $(LIBNAME)$(LIBEXT)
 
 %$(LIBEXT): %.cpp
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $< -o $@
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) $< -o $@
