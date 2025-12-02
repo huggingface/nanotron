@@ -1,8 +1,8 @@
 """ClimLlama dataset with on-the-fly position generation.
 
-This module implements the ClimLlamaDataset which extends GPTDataset to generate
-positional metadata on-the-fly during training using the WeavedTokensPositionVisitor
-from atmtokenizer.
+This module implements the ClimLlamaDataset which returns whole documents as samples
+and generates positional metadata on-the-fly during training using the
+WeavedTokensPositionVisitor from atmtokenizer.
 """
 
 import json
@@ -19,16 +19,16 @@ from nanotron import logging
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 
-from .nemo_dataset import GPTDataset
 from .nemo_dataset.indexed_dataset import MMapIndexedDataset
 
 logger = logging.get_logger(__name__)
 
 
-class ClimLlamaDataset(GPTDataset):
-    """Dataset for ClimLlama that generates position arrays on-the-fly.
+class ClimLlamaDataset(Dataset):
+    """Dataset for ClimLlama that returns whole documents with position arrays.
 
-    This dataset extends GPTDataset with climate-specific positional metadata:
+    This dataset returns entire documents as samples (not fixed-length chunks).
+    Each sample contains:
     - var_idx: Variable index (z, t, q, u, v, etc.)
     - res_idx: Resolution level index
     - leadtime_idx: Lead time index in hours
@@ -54,21 +54,18 @@ class ClimLlamaDataset(GPTDataset):
         drop_last: bool = True,
         codebook_size: int = 32768,
     ):
-        super().__init__(
-            cfg,
-            tokenizer,
-            name,
-            data_prefix,
-            documents,
-            indexed_dataset,
-            num_samples,
-            seq_length,
-            seed,
-            parallel_context,
-            drop_last,
-        )
-
+        super().__init__()
+        self.name = name
+        self.folder_path = data_prefix  # For BlendableDataset compatibility
+        self.indexed_dataset = indexed_dataset
+        self.seq_length = seq_length
+        self.documents = documents
+        self.num_samples = num_samples
         self.codebook_size = codebook_size
+
+        # Build shuffled document indices
+        np_rng = np.random.RandomState(seed=seed)
+        self.shuffle_idx = self._build_document_shuffle_idx(documents, num_samples, np_rng)
 
         # Lazy import atmtokenizer modules
         self._parser = None
@@ -79,6 +76,37 @@ class ClimLlamaDataset(GPTDataset):
 
         # Load global timestamp array
         self.timestamps = self._load_timestamps(data_prefix)
+
+    def _build_document_shuffle_idx(
+        self, documents: np.ndarray, num_samples: int, np_rng: np.random.RandomState
+    ) -> np.ndarray:
+        """Build shuffled index mapping for whole documents.
+
+        Args:
+            documents: Array of document indices to use
+            num_samples: Number of samples to generate
+            np_rng: Random state for shuffling
+
+        Returns:
+            Shuffled array of document indices
+        """
+        num_docs = len(documents)
+        # Calculate how many epochs we need
+        num_epochs = (num_samples + num_docs - 1) // num_docs
+
+        # Build document index with multiple epochs if needed
+        doc_indices = []
+        for _ in range(num_epochs):
+            epoch_docs = documents.copy()
+            np_rng.shuffle(epoch_docs)
+            doc_indices.append(epoch_docs)
+
+        # Concatenate and truncate to num_samples
+        all_docs = np.concatenate(doc_indices)[:num_samples]
+        return all_docs
+
+    def __len__(self) -> int:
+        return len(self.shuffle_idx)
 
     def _load_resolution_shapes_from_metadata(self, data_prefix: str) -> Dict[int, Tuple[int, int]]:
         """Load resolution shapes from dataset metadata.json.
@@ -295,27 +323,32 @@ class ClimLlamaDataset(GPTDataset):
             "spatial_temporal_features": spatial_temporal_features,
         }
 
-    def _get_document_index_for_sample(self, sample_idx: int) -> int:
-        """Get the starting document index for a given sample.
+    def _get_document_tokens(self, doc_idx: int) -> np.ndarray:
+        """Get all tokens for a document by concatenating its sequences.
 
-        This method determines which document a sample starts in by looking
-        at the sample_idx mapping created during dataset initialization.
+        The indexed dataset stores multiple sequences per document. The doc_idx
+        array maps document indices to sequence index ranges.
 
         Args:
-            sample_idx: The sample index (0 to len(dataset)-1)
+            doc_idx: Document index
 
         Returns:
-            Document index in the original dataset
+            Concatenated token array for the entire document
         """
-        # Get the shuffled index
-        shuffled_idx = self.shuffle_idx[sample_idx]
-        # Get the document index from sample_idx mapping
-        doc_index_f, _ = self.sample_idx[shuffled_idx]
-        # Map through doc_idx to get the actual document index
-        return self.doc_idx[doc_index_f]
+        doc_indices = self.indexed_dataset.doc_idx
+        doc_start = doc_indices[doc_idx]
+        doc_end = doc_indices[doc_idx + 1]
+
+        # Collect all tokens for this document
+        tokens = []
+        for seq_idx in range(doc_start, doc_end):
+            seq = self.indexed_dataset.get(seq_idx)
+            tokens.extend(seq.tolist())
+
+        return np.array(tokens, dtype=np.int64)
 
     def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
-        """Return item with position information generated on-the-fly.
+        """Return a whole document with position information generated on-the-fly.
 
         Args:
             idx: Sample index
@@ -324,21 +357,19 @@ class ClimLlamaDataset(GPTDataset):
             Dict with input_ids, positions, var_idx, res_idx, leadtime_idx,
             and spatial_temporal_features
         """
-        # Get base item from GPTDataset (contains input_ids)
-        base_item = super().__getitem__(idx)
-        input_ids = base_item["input_ids"]
+        # Get document index from shuffled mapping
+        doc_idx = self.shuffle_idx[idx]
 
-        # Get document index and timestamp
-        doc_idx = self._get_document_index_for_sample(idx)
+        # Get the entire document from indexed dataset
+        input_ids = self._get_document_tokens(doc_idx)
+
+        # Get timestamp for this document
         timestamp_0 = self._get_document_timestamp(doc_idx)
 
         # Generate positions on-the-fly
         positions = self._generate_positions(input_ids, timestamp_0)
 
-        # Create position_ids for document masking (sequential within each document)
-        # For simplicity, we use sequential positions here
-        # More sophisticated document boundary tracking would require
-        # tracking document boundaries within the sample
+        # Create position_ids (sequential within the document)
         position_ids = np.arange(len(input_ids), dtype=np.int64)
 
         return {
@@ -386,7 +417,8 @@ def build_climllama_dataset(
 
     # Get indexed dataset
     indexed_dataset = get_indexed_dataset(data_prefix, skip_warmup=False)
-    total_num_of_documents = indexed_dataset.sizes.shape[0]
+    # doc_idx has length (num_documents + 1), so num_documents = len(doc_idx) - 1
+    total_num_of_documents = len(indexed_dataset.doc_idx) - 1
 
     log_rank(
         f"Building ClimLlamaDataset '{name}' with {total_num_of_documents} documents",
