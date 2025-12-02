@@ -852,6 +852,8 @@ def _test_full_model_forward_pass(parallel_context: ParallelContext):
     res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
     leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
     spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda")
+    label_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device="cuda")
+    label_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device="cuda")
 
     # Forward pass
     output = model(
@@ -861,10 +863,12 @@ def _test_full_model_forward_pass(parallel_context: ParallelContext):
         res_idx=res_idx,
         leadtime_idx=leadtime_idx,
         spatial_temporal_features=spatial_temporal_features,
+        label_ids=label_ids,
+        label_mask=label_mask,
     )
 
     # Verify output structure and shapes
-    assert "logits" in output or hasattr(output, "logits") or isinstance(output, dict)
+    assert "loss" in output
 
     parallel_context.destroy()
 
@@ -909,6 +913,8 @@ def _test_full_model_forward_pass_parallel(parallel_context: ParallelContext):
     res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
     leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
     spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda")
+    label_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device="cuda")
+    label_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device="cuda")
 
     output = model(
         input_ids=input_ids,
@@ -917,10 +923,12 @@ def _test_full_model_forward_pass_parallel(parallel_context: ParallelContext):
         res_idx=res_idx,
         leadtime_idx=leadtime_idx,
         spatial_temporal_features=spatial_temporal_features,
+        label_ids=label_ids,
+        label_mask=label_mask,
     )
 
     # Verify forward pass completes without error
-    assert output is not None
+    assert "loss" in output
 
     parallel_context.destroy()
 
