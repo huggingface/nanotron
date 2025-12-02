@@ -177,15 +177,13 @@ class ClimLlamaDataset(GPTDataset):
 
     @property
     def parser(self):
-        """Lazy initialization of Lark parser."""
+        """Lazy initialization of Lark parser with custom TokenIDLexer."""
         if self._parser is None:
             import atmtokenizer
-            from lark import Lark
+            from atmtokenizer.eval.special_tokens import create_parser
 
-            # Load grammar from atmtokenizer's grammar file
-            with open(atmtokenizer.GRAMMAR_PATH, "r") as f:
-                grammar = f.read()
-            self._parser = Lark(grammar, parser="lalr")
+            # Create parser with custom TokenIDLexer for token classification
+            self._parser = create_parser(atmtokenizer.GRAMMAR_PATH, self.special_tokens)
         return self._parser
 
     @property
@@ -239,10 +237,9 @@ class ClimLlamaDataset(GPTDataset):
         n_tokens = len(input_ids)
 
         try:
-            # Convert token IDs to string for parsing
-            # The parser expects a string representation of the token sequence
-            token_str = " ".join(str(t) for t in input_ids)
-            tree = self.parser.parse(token_str)
+            # Parse the token sequence using the custom lexer
+            # The parser's custom lexer accepts an array of integer token IDs
+            tree = self.parser.parse(input_ids)
 
             # Get positions for all tokens
             leaves = get_leaf_positions(
