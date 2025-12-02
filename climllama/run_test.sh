@@ -2,7 +2,7 @@
 
 # Run failed ClimLlama tests
 
-pytest tests/test_climllama.py::test_spatial_temporal_projection_dimensions[2-1-2] \
+pytest -n 0 tests/test_climllama.py::test_spatial_temporal_projection_dimensions[2-1-2] \
        tests/test_climllama.py::test_different_position_ids_per_batch[2-2-1] \
        tests/test_climllama.py::test_embedding_without_discrete_positions[2-2-1] \
        tests/test_climllama.py::test_embedding_forward_backward[4-1-1] \
