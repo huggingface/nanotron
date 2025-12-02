@@ -313,7 +313,7 @@ class ClimLlamaModel(nn.Module):
 
         decoder_states = {
             "hidden_states": output["input_embeds"],
-            "position_ids": output["position_ids"],
+            "position_ids": output["position_ids"].contiguous(),
             "cu_seqlens": cu_seqlens,
         }
 
