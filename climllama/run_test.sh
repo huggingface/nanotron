@@ -35,4 +35,4 @@ pytest -n 0 tests/test_climllama.py::test_spatial_temporal_projection_dimensions
        tests/test_climllama.py::test_collator_position_ids_shape[2-2-1] \
        tests/test_climllama.py::test_collator_position_ids_shape[2-1-2] \
        tests/test_climllama.py::test_collator_without_doc_masking[2-1-2] \
-       -v
+       -v | tee test_output.log

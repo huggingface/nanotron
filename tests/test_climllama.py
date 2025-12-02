@@ -199,6 +199,7 @@ PARALLEL_CONFIGS_4GPU = [(2, 2, 1), (2, 1, 2), (1, 2, 2), (4, 1, 1)]
 
 def get_small_climllama_config():
     """Create a small ClimLlama config for testing."""
+    # Note: vocab sizes must be divisible by max TP (4) for TensorParallelEmbedding
     return ClimLlamaConfig(
         hidden_size=64,
         intermediate_size=128,
@@ -207,10 +208,10 @@ def get_small_climllama_config():
         num_key_value_heads=2,
         vocab_size=100,
         max_position_embeddings=128,
-        var_vocab_size=5,
-        variables=("unk", "t", "q", "u", "v"),
+        var_vocab_size=8,
+        variables=("unk", "t", "q", "u", "v", "w", "z", "sp"),
         res_vocab_size=4,
-        leadtime_vocab_size=6,
+        leadtime_vocab_size=8,
         spatial_temporal_encoding_dim=32,
         use_absolute_position_embeddings=True,
         use_spatial_temporal_encoding=True,
