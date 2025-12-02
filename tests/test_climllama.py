@@ -822,8 +822,10 @@ def test_full_model_forward_pass(tp: int, dp: int, pp: int):
 
 def _test_full_model_forward_pass(parallel_context: ParallelContext):
     """Test full model forward pass with all positional embedding components."""
+    from math import ceil
     from nanotron.models.climllama import ClimLlamaForTraining
     from nanotron.config import ParallelismArgs
+    from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 
     config = get_small_climllama_config()
 
@@ -840,7 +842,16 @@ def _test_full_model_forward_pass(parallel_context: ParallelContext):
         parallel_context=parallel_context,
         parallel_config=parallel_config,
         random_states=None,
-    ).to("cuda")
+    )
+
+    # Build and set rank for all pipeline blocks
+    pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
+    contiguous_size = ceil(len(pipeline_blocks) / parallel_context.pp_pg.size())
+    for i, block in enumerate(pipeline_blocks):
+        rank = i // contiguous_size
+        block.build_and_set_rank(rank)
+
+    model = model.to("cuda")
 
     batch_size = 2
     seq_len = 16
@@ -882,9 +893,11 @@ def test_full_model_forward_pass_parallel(tp: int, dp: int, pp: int):
 
 def _test_full_model_forward_pass_parallel(parallel_context: ParallelContext):
     """Test full model forward pass with tensor/data parallelism."""
+    from math import ceil
     from nanotron.models.climllama import ClimLlamaForTraining
     from nanotron.config import ParallelismArgs
     from nanotron import distributed as dist
+    from nanotron.parallel.pipeline_parallel.block import PipelineBlock
 
     config = get_small_climllama_config()
 
@@ -902,7 +915,16 @@ def _test_full_model_forward_pass_parallel(parallel_context: ParallelContext):
         parallel_context=parallel_context,
         parallel_config=parallel_config,
         random_states=None,
-    ).to("cuda")
+    )
+
+    # Build and set rank for all pipeline blocks
+    pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
+    contiguous_size = ceil(len(pipeline_blocks) / parallel_context.pp_pg.size())
+    for i, block in enumerate(pipeline_blocks):
+        rank = i // contiguous_size
+        block.build_and_set_rank(rank)
+
+    model = model.to("cuda")
 
     batch_size = 2
     seq_len = 16
