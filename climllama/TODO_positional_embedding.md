@@ -802,9 +802,9 @@ model:
 - [x] Update `prepare_training_config.py` to support ClimLlama
 
 ### Testing
-- [ ] Unit tests for embedding layer
-- [ ] Unit tests for dataset
-- [ ] Unit tests for collator
+- [x] Unit tests for embedding layer
+- [x] Unit tests for dataset
+- [x] Unit tests for collator
 - [ ] Integration test for full forward pass
 - [ ] Verify hybrid PE (absolute + RoPE) working together
 

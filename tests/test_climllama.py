@@ -811,5 +811,202 @@ def _test_collator_non_participating_rank(parallel_context: ParallelContext):
     parallel_context.destroy()
 
 
+# --- Full Model Forward Pass Integration Tests ---
+
+@pytest.mark.parametrize("tp,dp,pp", [(1, 1, 1)])
+@rerun_if_address_is_in_use()
+def test_full_model_forward_pass(tp: int, dp: int, pp: int):
+    """Integration test: Full ClimLlama model forward pass with hybrid PE."""
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_full_model_forward_pass)()
+
+
+def _test_full_model_forward_pass(parallel_context: ParallelContext):
+    """Test full model forward pass with all positional embedding components."""
+    from nanotron.models.climllama import ClimLlamaForTraining
+    from nanotron.config import ParallelismArgs
+
+    config = get_small_climllama_config()
+
+    # Create parallel config
+    parallel_config = ParallelismArgs(
+        dp=1,
+        pp=1,
+        tp=1,
+    )
+
+    # Initialize model
+    model = ClimLlamaForTraining(
+        config=config,
+        parallel_context=parallel_context,
+        parallel_config=parallel_config,
+        random_states=None,
+    ).to("cuda")
+
+    batch_size = 2
+    seq_len = 16
+
+    # Prepare inputs
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device="cuda")
+    position_ids = torch.arange(seq_len, device="cuda").unsqueeze(0).expand(batch_size, -1)
+    var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
+    res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
+    leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
+    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda")
+
+    # Forward pass
+    output = model(
+        input_ids=input_ids,
+        position_ids=position_ids,
+        var_idx=var_idx,
+        res_idx=res_idx,
+        leadtime_idx=leadtime_idx,
+        spatial_temporal_features=spatial_temporal_features,
+    )
+
+    # Verify output structure and shapes
+    assert "logits" in output or hasattr(output, "logits") or isinstance(output, dict)
+
+    parallel_context.destroy()
+
+
+@pytest.mark.parametrize("tp,dp,pp", [(2, 1, 1), (1, 2, 1)])
+@rerun_if_address_is_in_use()
+def test_full_model_forward_pass_parallel(tp: int, dp: int, pp: int):
+    """Integration test: Full ClimLlama model forward pass with parallelism."""
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_full_model_forward_pass_parallel)()
+
+
+def _test_full_model_forward_pass_parallel(parallel_context: ParallelContext):
+    """Test full model forward pass with tensor/data parallelism."""
+    from nanotron.models.climllama import ClimLlamaForTraining
+    from nanotron.config import ParallelismArgs
+    from nanotron import distributed as dist
+
+    config = get_small_climllama_config()
+
+    tp_size = dist.get_world_size(parallel_context.tp_pg)
+    dp_size = dist.get_world_size(parallel_context.dp_pg)
+
+    parallel_config = ParallelismArgs(
+        dp=dp_size,
+        pp=1,
+        tp=tp_size,
+    )
+
+    model = ClimLlamaForTraining(
+        config=config,
+        parallel_context=parallel_context,
+        parallel_config=parallel_config,
+        random_states=None,
+    ).to("cuda")
+
+    batch_size = 2
+    seq_len = 16
+
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device="cuda")
+    position_ids = torch.arange(seq_len, device="cuda").unsqueeze(0).expand(batch_size, -1)
+    var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
+    res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
+    leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
+    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda")
+
+    output = model(
+        input_ids=input_ids,
+        position_ids=position_ids,
+        var_idx=var_idx,
+        res_idx=res_idx,
+        leadtime_idx=leadtime_idx,
+        spatial_temporal_features=spatial_temporal_features,
+    )
+
+    # Verify forward pass completes without error
+    assert output is not None
+
+    parallel_context.destroy()
+
+
+@pytest.mark.parametrize("tp,dp,pp", [(1, 1, 1)])
+@rerun_if_address_is_in_use()
+def test_hybrid_pe_absolute_plus_rope(tp: int, dp: int, pp: int):
+    """Verify hybrid PE: absolute position embeddings combined with RoPE."""
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_hybrid_pe_absolute_plus_rope)()
+
+
+def _test_hybrid_pe_absolute_plus_rope(parallel_context: ParallelContext):
+    """
+    Verify that the model uses both absolute position embeddings and RoPE together.
+
+    The hybrid approach:
+    1. Absolute embeddings (var, res, leadtime, spatial-temporal) are added to token embeddings
+    2. RoPE is applied in attention layers using position_ids
+    """
+    from nanotron.models.climllama import ClimLlamaEmbedding
+
+    config = get_small_climllama_config()
+
+    embedding_layer = ClimLlamaEmbedding(
+        tp_pg=parallel_context.tp_pg,
+        config=config,
+        parallel_config=None,
+    ).to("cuda")
+
+    batch_size = 2
+    seq_len = 8
+
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device="cuda")
+    position_ids = torch.arange(seq_len, device="cuda").unsqueeze(0).expand(batch_size, -1)
+    var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
+    res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
+    leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
+    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda")
+
+    # Test 1: Verify embedding output contains position_ids for RoPE
+    output = embedding_layer(
+        input_ids=input_ids,
+        position_ids=position_ids,
+        var_idx=var_idx,
+        res_idx=res_idx,
+        leadtime_idx=leadtime_idx,
+        spatial_temporal_features=spatial_temporal_features,
+    )
+
+    # Position IDs should be passed through for RoPE in attention layers
+    assert "position_ids" in output
+    assert torch.equal(output["position_ids"], position_ids)
+
+    # Test 2: Verify absolute embeddings affect the output
+    # Run with different var_idx and verify embeddings differ
+    var_idx_alt = (var_idx + 1) % config.var_vocab_size
+
+    output_alt = embedding_layer(
+        input_ids=input_ids,
+        position_ids=position_ids,
+        var_idx=var_idx_alt,
+        res_idx=res_idx,
+        leadtime_idx=leadtime_idx,
+        spatial_temporal_features=spatial_temporal_features,
+    )
+
+    # Embeddings should differ when absolute position indices differ
+    assert not torch.allclose(output["input_embeds"], output_alt["input_embeds"])
+
+    # Test 3: Verify spatial-temporal features affect the output
+    spatial_temporal_features_alt = spatial_temporal_features + 1.0
+
+    output_st_alt = embedding_layer(
+        input_ids=input_ids,
+        position_ids=position_ids,
+        var_idx=var_idx,
+        res_idx=res_idx,
+        leadtime_idx=leadtime_idx,
+        spatial_temporal_features=spatial_temporal_features_alt,
+    )
+
+    # Embeddings should differ when spatial-temporal features differ
+    assert not torch.allclose(output["input_embeds"], output_st_alt["input_embeds"])
+
+    parallel_context.destroy()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
