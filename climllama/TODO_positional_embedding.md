@@ -768,12 +768,12 @@ model:
 ```
 
 #### 4.3 Testing Checklist
-- [ ] Test ClimLlamaEmbedding forward pass with all position types
+- [x] Test ClimLlamaEmbedding forward pass with all position types
 - [ ] Test ClimLlamaDataset returns correct shapes
 - [ ] Test DataCollatorForClimLlama batching
-- [ ] Test end-to-end training with small model
-- [ ] Verify RoPE still works in attention layers
-- [ ] Check tensor parallelism compatibility
+- [x] Test end-to-end training with small model
+- [x] Verify RoPE still works in attention layers
+- [x] Check tensor parallelism compatibility
 - [ ] Validate position encoding values (x, y, z in [-1, 1], temporal in [-1, 1])
 
 ---
@@ -805,8 +805,8 @@ model:
 - [x] Unit tests for embedding layer
 - [x] Unit tests for dataset
 - [x] Unit tests for collator
-- [ ] Integration test for full forward pass
-- [ ] Verify hybrid PE (absolute + RoPE) working together
+- [x] Integration test for full forward pass
+- [x] Verify hybrid PE (absolute + RoPE) working together
 
 ---
 
