@@ -851,7 +851,7 @@ def _test_full_model_forward_pass(parallel_context: ParallelContext):
         rank = i // contiguous_size
         block.build_and_set_rank(rank)
 
-    model = model.to("cuda")
+    model = model.to("cuda").to(torch.bfloat16)
 
     batch_size = 2
     seq_len = 16
@@ -862,7 +862,7 @@ def _test_full_model_forward_pass(parallel_context: ParallelContext):
     var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
     res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
     leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
-    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda")
+    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda", dtype=torch.bfloat16)
     label_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device="cuda")
     label_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device="cuda")
 
@@ -924,7 +924,7 @@ def _test_full_model_forward_pass_parallel(parallel_context: ParallelContext):
         rank = i // contiguous_size
         block.build_and_set_rank(rank)
 
-    model = model.to("cuda")
+    model = model.to("cuda").to(torch.bfloat16)
 
     batch_size = 2
     seq_len = 16
@@ -934,7 +934,7 @@ def _test_full_model_forward_pass_parallel(parallel_context: ParallelContext):
     var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
     res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
     leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
-    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda")
+    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda", dtype=torch.bfloat16)
     label_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device="cuda")
     label_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device="cuda")
 
