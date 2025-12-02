@@ -621,7 +621,7 @@ def _test_collator_position_ids_shape(parallel_context: ParallelContext):
     result = collator(examples)
 
     assert result["input_ids"].shape == (batch_size, seq_len)
-    assert result["position_ids"].shape == (batch_size, seq_len + 1)
+    assert result["position_ids"].shape == (batch_size, seq_len)
 
     parallel_context.destroy()
 
@@ -679,8 +679,11 @@ def test_collator_without_doc_masking(tp: int, dp: int, pp: int):
 
 def _test_collator_without_doc_masking(parallel_context: ParallelContext):
     from nanotron.data.clm_collator import DataCollatorForCLMWithPositionIds
+    from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+    from nanotron import distributed as dist
 
     seq_len = 16
+    current_pp_rank = dist.get_rank(parallel_context.pp_pg)
 
     collator = DataCollatorForCLMWithPositionIds(
         sequence_length=seq_len,
@@ -690,17 +693,25 @@ def _test_collator_without_doc_masking(parallel_context: ParallelContext):
         use_doc_masking=False,
     )
 
-    examples = [
-        {
-            "input_ids": np.arange(seq_len + 1),
-            "positions": np.arange(seq_len + 1),
-        }
-    ]
+    if current_pp_rank == 0:
+        examples = [
+            {
+                "input_ids": np.arange(seq_len + 1),
+                "positions": np.arange(seq_len + 1),
+            }
+        ]
 
-    result = collator(examples)
+        result = collator(examples)
 
-    # Without doc masking, all labels should be used
-    assert np.all(result["label_mask"])
+        # Without doc masking, all labels should be used
+        assert np.all(result["label_mask"])
+    else:
+        # Non-participating ranks should provide empty examples
+        examples = [{}]
+        result = collator(examples)
+
+        # Should return TensorPointers for non-participating ranks
+        assert isinstance(result["label_mask"], TensorPointer)
 
     parallel_context.destroy()
 
