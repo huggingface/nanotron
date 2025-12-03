@@ -470,7 +470,7 @@
         }
 
         function formatTokenInfo(token) {
-            if (!token || !token.pos) return '';
+            if (!token || token.pos == null) return '';
 
             const varName = configData.variables[Math.floor(token.var_idx)] || 'unknown';
             const leadtime = configData.leadtimes[Math.floor(token.leadtime_idx)] || 0;

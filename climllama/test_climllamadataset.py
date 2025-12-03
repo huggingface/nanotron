@@ -211,7 +211,7 @@ def test_climllama_dataset():
     # Test __getitem__
     print("\n4. Testing __getitem__ with whole documents...")
     item = dataset[0]
-    dump_sample(item, cfg=cfg, var_level_names=dataset.var_level_names, parser=dataset.parser, filename="sample_0.json")
+    dump_sample(item, cfg=cfg, var_level_names=dataset.var_level_names, parser=dataset.parser, filename="visualization/sample_0.json")
     print(f"   Item keys: {item.keys()}")
     print(f"   input_ids shape: {item['input_ids'].shape}")
     print(f"   var_idx shape: {item['var_idx'].shape}")
