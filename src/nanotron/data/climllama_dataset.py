@@ -199,8 +199,8 @@ class ClimLlamaDataset(Dataset):
     def _load_timestamps(self, data_prefix: str) -> Optional[np.ndarray]:
         """Load global timestamp array from file.
 
-        The timestamp file is expected at {data_prefix}_timestamps.npy and contains
-        one timestamp (datetime64[s]) per document in the indexed dataset.
+        The timestamp file is expected at {data_prefix}.npy (e.g., data/combined_interleave_256/1.npy)
+        and contains one timestamp (datetime64[s]) per document in the indexed dataset.
 
         Args:
             data_prefix: Path prefix for the dataset files
@@ -208,7 +208,7 @@ class ClimLlamaDataset(Dataset):
         Returns:
             numpy array of timestamps, or None if file not found
         """
-        timestamp_path = f"{data_prefix}_timestamps.npy"
+        timestamp_path = f"{data_prefix}.npy"
         if os.path.exists(timestamp_path):
             timestamps = np.load(timestamp_path)
             log_rank(
