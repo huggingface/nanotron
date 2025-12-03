@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TokenWeaver Parse Tree Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: #1a1a2e;
+            color: #eee;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        .tree-panel {
+            width: 70%;
+            overflow: auto;
+            padding: 20px;
+            border-right: 2px solid #333;
+        }
+
+        .info-panel {
+            width: 30%;
+            padding: 20px;
+            background: #16213e;
+            overflow: auto;
+        }
+
+        .info-panel h2 {
+            color: #e94560;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #e94560;
+            padding-bottom: 10px;
+        }
+
+        .info-section {
+            margin-bottom: 20px;
+        }
+
+        .info-section h3 {
+            color: #0f3460;
+            background: #e94560;
+            padding: 5px 10px;
+            margin-bottom: 10px;
+            border-radius: 3px;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #333;
+        }
+
+        .info-key {
+            color: #7ec8e3;
+        }
+
+        .info-value {
+            color: #fff;
+            font-weight: bold;
+        }
+
+        /* Tree structure styling */
+        .tree-node {
+            position: relative;
+            margin-left: 20px;
+        }
+
+        .tree-node::before {
+            content: '';
+            position: absolute;
+            left: -15px;
+            top: 0;
+            height: 100%;
+            border-left: 2px solid #444;
+        }
+
+        .tree-node::after {
+            content: '';
+            position: absolute;
+            left: -15px;
+            top: 12px;
+            width: 15px;
+            border-top: 2px solid #444;
+        }
+
+        .tree-node:last-child::before {
+            height: 14px;
+        }
+
+        .node-label {
+            display: inline-block;
+            padding: 4px 12px;
+            margin: 4px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .node-label:hover {
+            filter: brightness(1.2);
+            transform: translateX(3px);
+        }
+
+        /* Node type colors */
+        .node-start {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+
+        .node-sequence {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: #000;
+        }
+
+        .node-next-timestep {
+            background: linear-gradient(135deg, #fc4a1a 0%, #f7b733 100%);
+            color: #000;
+        }
+
+        .node-resolution-block {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: #000;
+        }
+
+        .node-variable-block {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            color: #000;
+        }
+
+        .node-terminal {
+            background: #333;
+            border: 1px solid #555;
+            font-size: 0.9em;
+        }
+
+        .node-eor, .node-eot, .node-eod {
+            background: linear-gradient(135deg, #e94560 0%, #ff6b6b 100%);
+            font-weight: bold;
+        }
+
+        .node-resolution-id, .node-variable-id, .node-leadtime-id {
+            background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+            color: #000;
+        }
+
+        .node-codebook-token {
+            background: #2d3436;
+            border: 1px solid #636e72;
+            font-size: 0.85em;
+        }
+
+        /* Expandable nodes */
+        .expandable {
+            cursor: pointer;
+        }
+
+        .expandable::before {
+            content: '▶ ';
+            font-size: 0.8em;
+        }
+
+        .expandable.expanded::before {
+            content: '▼ ';
+        }
+
+        .children-container {
+            display: none;
+        }
+
+        .children-container.visible {
+            display: block;
+        }
+
+        /* Codebook grid */
+        .codebook-grid {
+            display: grid;
+            gap: 3px;
+            margin: 10px 0 10px 20px;
+            padding: 10px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 5px;
+        }
+
+        .codebook-cell {
+            padding: 4px 6px;
+            background: #2d3436;
+            border: 1px solid #636e72;
+            border-radius: 3px;
+            font-size: 0.75em;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .codebook-cell:hover {
+            background: #4facfe;
+            color: #000;
+            transform: scale(1.1);
+            z-index: 10;
+        }
+
+        /* Connector lines */
+        .connector {
+            color: #444;
+            margin-left: 5px;
+        }
+
+        /* Hover tooltip */
+        .tooltip {
+            position: fixed;
+            background: #16213e;
+            border: 2px solid #e94560;
+            border-radius: 8px;
+            padding: 15px;
+            max-width: 600px;
+            z-index: 1000;
+            pointer-events: none;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+            display: none;
+        }
+
+        .tooltip.visible {
+            display: block;
+        }
+
+        .tooltip h4 {
+            color: #e94560;
+            margin-bottom: 10px;
+        }
+
+        .tooltip-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .tooltip-grid .info-section {
+            margin-bottom: 0;
+        }
+
+        /* Header */
+        .header {
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin-bottom: 20px;
+            border-radius: 8px;
+        }
+
+        .header h1 {
+            font-size: 1.3em;
+        }
+
+        .header p {
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 10px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 5px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.8em;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 1.2em;
+            color: #7ec8e3;
+        }
+
+        .loading::after {
+            content: '';
+            animation: dots 1.5s infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        /* Config panel */
+        .config-section {
+            background: rgba(0,0,0,0.2);
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+
+        .config-section h4 {
+            color: #38ef7d;
+            margin-bottom: 8px;
+        }
+
+        .var-list, .leadtime-list, .level-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+
+        .var-tag, .leadtime-tag, .level-tag {
+            background: #333;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 0.8em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="tree-panel">
+            <div class="header">
+                <h1>🌲 TokenWeaver Parse Tree Viewer</h1>
+                <p>Interactive visualization of weaved token sequences</p>
+            </div>
+            <div class="legend">
+                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"></div> Start</div>
+                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);"></div> Sequence</div>
+                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #fc4a1a 0%, #f7b733 100%);"></div> Next Timestep</div>
+                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div> Resolution Block</div>
+                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);"></div> Variable Block</div>
+                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);"></div> IDs</div>
+                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #e94560 0%, #ff6b6b 100%);"></div> Markers (EOR/EOT/EOD)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #2d3436; border: 1px solid #636e72;"></div> Codebook Token</div>
+            </div>
+            <div id="tree-container">
+                <div class="loading">Loading parse tree</div>
+            </div>
+        </div>
+        <div class="info-panel">
+            <h2>📊 Token Information</h2>
+            <div id="config-info"></div>
+            <div id="token-info">
+                <p style="color: #666; font-style: italic;">Hover over or click a token to see details</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="tooltip" class="tooltip"></div>
+
+    <script>
+        let treeData = null;
+        let configData = null;
+        let var_level_names = null;
+        let levels = null;
+
+        // Load the JSON data
+        async function loadData() {
+            try {
+                const response = await fetch('sample_0.json');
+                const data = await response.json();
+                treeData = data.parsed_tree;
+                configData = data.cfg;
+                var_level_names = data.var_level_name;
+                const uniqueLevels = Array.from(new Set(var_level_names.map(name => {
+                    const parts = name.split('_');
+                    return parts.length === 2 ? parts[1] : 'sfc';
+                })));
+
+                const levelValue = (level) => {
+                    const str = String(level).toLowerCase();
+                    if (str === 'sfc') return 1100;
+                    const num = parseInt(str, 10);
+                    return Number.isNaN(num) ? Number.MAX_SAFE_INTEGER : num;
+                };
+
+                levels = uniqueLevels.sort((a, b) => levelValue(a) - levelValue(b));
+                renderConfig();
+                renderTree();
+            } catch (error) {
+                document.getElementById('tree-container').innerHTML =
+                    `<div class="loading" style="color: #e94560;">Error loading data: ${error.message}</div>`;
+            }
+        }
+
+        function renderConfig() {
+            const container = document.getElementById('config-info');
+            container.innerHTML = `
+                <div class="config-section">
+                    <h4>Variables (${configData.variables.length})</h4>
+                    <div class="var-list">
+                        ${configData.variables.map((v, i) => `<span class="var-tag">${i}: ${v}</span>`).join('')}
+                    </div>
+                </div>
+                <div class="config-section">
+                    <h4>Levels</h4>
+                    <div class="level-list">
+                        ${levels.map((level, i) => `<span class="level-tag">${level}</span>`).join('')}
+                    </div>
+                </div>
+                <div class="config-section">
+                    <h4>Leadtimes (hours)</h4>
+                    <div class="leadtime-list">
+                        ${configData.leadtimes.map((lt, i) => `<span class="leadtime-tag">${i}: ${lt}h</span>`).join('')}
+                    </div>
+                </div>
+                <div class="config-section">
+                    <h4>Codebook Size</h4>
+                    <span class="var-tag">${configData.codebook_size}</span>
+                </div>
+                <hr style="border-color: #333; margin: 15px 0;">
+            `;
+        }
+
+        function getNodeClass(type) {
+            const typeMap = {
+                'start': 'node-start',
+                'sequence': 'node-sequence',
+                'next_timestep_sequence': 'node-next-timestep',
+                'resolution_block': 'node-resolution-block',
+                'variable_block': 'node-variable-block',
+                'resolution_id': 'node-resolution-id',
+                'variable_id': 'node-variable-id',
+                'leadtime_id': 'node-leadtime-id',
+                'EOR': 'node-eor',
+                'EOT': 'node-eot',
+                'EOD': 'node-eod',
+                'CODEBOOK_TOKEN': 'node-codebook-token',
+                'ENCODED_NUMBER': 'node-terminal'
+            };
+            return typeMap[type] || 'node-terminal';
+        }
+
+        function log10LevelToHPa(log10_level_hPa) {
+            if (log10_level_hPa == null) return 'N/A';
+            if (log10_level_hPa >= 5) return 'sfc';
+            return Math.pow(10, log10_level_hPa - 1).toFixed(0);
+        }
+
+        function formatTokenInfo(token) {
+            if (!token || !token.pos) return '';
+
+            const varName = configData.variables[Math.floor(token.var_idx)] || 'unknown';
+            const leadtime = configData.leadtimes[Math.floor(token.leadtime_idx)] || 0;
+            const level_hPa = log10LevelToHPa(token.spatial_temporal_features_log10_level_hPa);
+
+
+            return `
+                <div class="tooltip-grid">
+                    <div class="info-section">
+                        <h3>Token Details</h3>
+                        <div class="info-row"><span class="info-key">Type</span><span class="info-value">${token.type}</span></div>
+                        <div class="info-row"><span class="info-key">Token ID</span><span class="info-value">${token.token}</span></div>
+                        <div class="info-row"><span class="info-key">Position</span><span class="info-value">${token.pos}</span></div>
+                    </div>
+                    <div class="info-section">
+                        <h3>Semantic Context</h3>
+                        <div class="info-row"><span class="info-key">Variable</span><span class="info-value">${varName} (idx: ${token.var_idx})</span></div>
+                        <div class="info-row"><span class="info-key">Resolution</span><span class="info-value">${token.res_idx}</span></div>
+                        <div class="info-row"><span class="info-key">Leadtime</span><span class="info-value">${leadtime}h (idx: ${token.leadtime_idx})</span></div>
+                    </div>
+                    <div class="info-section">
+                        <h3>Spatial Features</h3>
+                        <div class="info-row"><span class="info-key">X</span><span class="info-value">${token.spatial_temporal_features_x?.toFixed(4) || 'N/A'}</span></div>
+                        <div class="info-row"><span class="info-key">Y</span><span class="info-value">${token.spatial_temporal_features_y?.toFixed(4) || 'N/A'}</span></div>
+                        <div class="info-row"><span class="info-key">Z</span><span class="info-value">${token.spatial_temporal_features_z?.toFixed(4) || 'N/A'}</span></div>
+                        <div class="info-row"><span class="info-key">log10(level hPa)</span><span class="info-value">${token.spatial_temporal_features_log10_level_hPa?.toFixed(4) || 'N/A'}</span></div>
+                        <div class="info-row"><span class="info-key">Level</span><span class="info-value">${level_hPa} hPa</span></div>
+                    </div>
+                    <div class="info-section">
+                        <h3>Temporal Features</h3>
+                        <div class="info-row"><span class="info-key">cos(hour)</span><span class="info-value">${token.spatial_temporal_features_cos_hour?.toFixed(4) || 'N/A'}</span></div>
+                        <div class="info-row"><span class="info-key">sin(hour)</span><span class="info-value">${token.spatial_temporal_features_sin_hour?.toFixed(4) || 'N/A'}</span></div>
+                        <div class="info-row"><span class="info-key">cos(day)</span><span class="info-value">${token.spatial_temporal_features_cos_day?.toFixed(4) || 'N/A'}</span></div>
+                        <div class="info-row"><span class="info-key">sin(day)</span><span class="info-value">${token.spatial_temporal_features_sin_day?.toFixed(4) || 'N/A'}</span></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function showTooltip(e, token) {
+            const tooltip = document.getElementById('tooltip');
+            const info = formatTokenInfo(token);
+            if (!info) return;
+
+            tooltip.innerHTML = `<h4>${token.type}</h4>${info}`;
+            tooltip.classList.add('visible');
+
+            const x = Math.min(e.clientX + 15, window.innerWidth - 620);
+            const y = Math.min(e.clientY + 15, window.innerHeight - 300);
+            tooltip.style.left = x + 'px';
+            tooltip.style.top = y + 'px';
+        }
+
+        function hideTooltip() {
+            document.getElementById('tooltip').classList.remove('visible');
+        }
+
+        function showInfoPanel(token) {
+            const container = document.getElementById('token-info');
+            const info = formatTokenInfo(token);
+            if (info) {
+                container.innerHTML = info;
+            }
+        }
+
+        function createCodebookGrid(tokens) {
+            const n = tokens.length;
+            // Shape: (sqrt(N//2) x 2*sqrt(N//2))
+            const cols = Math.ceil(Math.sqrt(n / 2) * 2);
+            const rows = Math.ceil(n / cols);
+
+            const grid = document.createElement('div');
+            grid.className = 'codebook-grid';
+            grid.style.gridTemplateColumns = `repeat(${cols}, minmax(40px, 1fr))`;
+
+            tokens.forEach((token, idx) => {
+                const cell = document.createElement('div');
+                cell.className = 'codebook-cell';
+                cell.textContent = token.token;
+                cell.title = `pos: ${token.pos}`;
+
+                cell.addEventListener('mouseenter', (e) => showTooltip(e, token));
+                cell.addEventListener('mouseleave', hideTooltip);
+                cell.addEventListener('click', () => showInfoPanel(token));
+
+                grid.appendChild(cell);
+            });
+
+            return grid;
+        }
+
+        function renderVariableBlock(block, container) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tree-node';
+
+            // Variable ID
+            const varIdNode = block.children[0];
+            const varIdToken = varIdNode.children[0];
+            const varIdx = Math.floor(varIdToken.var_idx);
+            const varName = configData.variables[varIdx] || 'unknown';
+            const level_hPa = log10LevelToHPa(varIdToken.spatial_temporal_features_log10_level_hPa);
+
+            const label = document.createElement('span');
+            label.className = 'node-label node-variable-block expandable';
+            label.textContent = `variable_block [${varName} @ ${level_hPa}]`;
+
+            const childrenContainer = document.createElement('div');
+            childrenContainer.className = 'children-container';
+
+            // Add variable_id
+            const varIdWrapper = document.createElement('div');
+            varIdWrapper.className = 'tree-node';
+            const varIdLabel = document.createElement('span');
+            varIdLabel.className = 'node-label node-variable-id';
+            varIdLabel.textContent = `variable_id: ${varIdToken.token} → ${varName}`;
+            varIdLabel.addEventListener('mouseenter', (e) => showTooltip(e, varIdToken));
+            varIdLabel.addEventListener('mouseleave', hideTooltip);
+            varIdLabel.addEventListener('click', () => showInfoPanel(varIdToken));
+            varIdWrapper.appendChild(varIdLabel);
+            childrenContainer.appendChild(varIdWrapper);
+
+            // Collect codebook tokens
+            const codebookTokens = block.children.slice(1).filter(c => c.type === 'CODEBOOK_TOKEN');
+            if (codebookTokens.length > 0) {
+                const gridWrapper = document.createElement('div');
+                gridWrapper.className = 'tree-node';
+
+                const gridLabel = document.createElement('span');
+                gridLabel.className = 'node-label node-codebook-token';
+
+                const n = codebookTokens.length;
+                // Shape: (sqrt(N//2) x 2*sqrt(N//2))
+                const cols = Math.ceil(Math.sqrt(n / 2) * 2);
+                const rows = Math.ceil(n / cols);
+
+                gridLabel.textContent = `CODEBOOK_TOKENS (${codebookTokens.length} tokens, ${rows}x${cols} grid)`;
+                gridWrapper.appendChild(gridLabel);
+
+                const grid = createCodebookGrid(codebookTokens);
+                gridWrapper.appendChild(grid);
+                childrenContainer.appendChild(gridWrapper);
+            }
+
+            label.addEventListener('click', () => {
+                label.classList.toggle('expanded');
+                childrenContainer.classList.toggle('visible');
+            });
+
+            wrapper.appendChild(label);
+            wrapper.appendChild(childrenContainer);
+            container.appendChild(wrapper);
+        }
+
+        function renderResolutionBlock(block, container) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tree-node';
+
+            // Get resolution ID
+            const resIdNode = block.children[0];
+            const resIdToken = resIdNode.children[0];
+            const resIdx = Math.floor(resIdToken.res_idx);
+
+            // Count variable blocks
+            const varBlocks = block.children.filter(c => c.type === 'variable_block');
+
+            const label = document.createElement('span');
+            label.className = 'node-label node-resolution-block expandable';
+            label.textContent = `resolution_block [res=${resIdx}] (${varBlocks.length} variables)`;
+
+            const childrenContainer = document.createElement('div');
+            childrenContainer.className = 'children-container';
+
+            // Add resolution_id
+            const resIdWrapper = document.createElement('div');
+            resIdWrapper.className = 'tree-node';
+            const resIdLabel = document.createElement('span');
+            resIdLabel.className = 'node-label node-resolution-id';
+            resIdLabel.textContent = `resolution_id: ${resIdToken.token} → res ${resIdx}`;
+            resIdLabel.addEventListener('mouseenter', (e) => showTooltip(e, resIdToken));
+            resIdLabel.addEventListener('mouseleave', hideTooltip);
+            resIdLabel.addEventListener('click', () => showInfoPanel(resIdToken));
+            resIdWrapper.appendChild(resIdLabel);
+            childrenContainer.appendChild(resIdWrapper);
+
+            // Add variable blocks
+            block.children.forEach(child => {
+                if (child.type === 'variable_block') {
+                    renderVariableBlock(child, childrenContainer);
+                }
+            });
+
+            // Add EOR if present
+            const eor = block.children.find(c => c.type === 'EOR');
+            if (eor) {
+                const eorWrapper = document.createElement('div');
+                eorWrapper.className = 'tree-node';
+                const eorLabel = document.createElement('span');
+                eorLabel.className = 'node-label node-eor';
+                eorLabel.textContent = `<EOR> (${eor.token})`;
+                eorLabel.addEventListener('mouseenter', (e) => showTooltip(e, eor));
+                eorLabel.addEventListener('mouseleave', hideTooltip);
+                eorLabel.addEventListener('click', () => showInfoPanel(eor));
+                eorWrapper.appendChild(eorLabel);
+                childrenContainer.appendChild(eorWrapper);
+            }
+
+            label.addEventListener('click', () => {
+                label.classList.toggle('expanded');
+                childrenContainer.classList.toggle('visible');
+            });
+
+            wrapper.appendChild(label);
+            wrapper.appendChild(childrenContainer);
+            container.appendChild(wrapper);
+        }
+
+        function renderSequence(seq, container, label = 'sequence') {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tree-node';
+
+            const resBlocks = seq.children.filter(c => c.type === 'resolution_block');
+
+            const seqLabel = document.createElement('span');
+            seqLabel.className = 'node-label node-sequence expandable expanded';
+            seqLabel.textContent = `${label} (${resBlocks.length} resolution blocks)`;
+
+            const childrenContainer = document.createElement('div');
+            childrenContainer.className = 'children-container visible';
+
+            seq.children.forEach(child => {
+                if (child.type === 'resolution_block') {
+                    renderResolutionBlock(child, childrenContainer);
+                }
+            });
+
+            seqLabel.addEventListener('click', () => {
+                seqLabel.classList.toggle('expanded');
+                childrenContainer.classList.toggle('visible');
+            });
+
+            wrapper.appendChild(seqLabel);
+            wrapper.appendChild(childrenContainer);
+            container.appendChild(wrapper);
+        }
+
+        function renderNextTimestep(node, container) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tree-node';
+
+            const eotToken = node.children.find(c => c.type === 'EOT');
+            const leadtimeNode = node.children.find(c => c.type === 'leadtime_id');
+            const seqNode = node.children.find(c => c.type === 'sequence');
+
+            const leadtimeToken = leadtimeNode?.children[0];
+            const leadtimeIdx = leadtimeToken ? Math.floor(leadtimeToken.leadtime_idx) : 0;
+            const leadtimeHours = configData.leadtimes[leadtimeIdx] || 0;
+
+            const label = document.createElement('span');
+            label.className = 'node-label node-next-timestep expandable expanded';
+            label.textContent = `next_timestep_sequence (t+${leadtimeHours}h)`;
+
+            const childrenContainer = document.createElement('div');
+            childrenContainer.className = 'children-container visible';
+
+            // EOT
+            if (eotToken) {
+                const eotWrapper = document.createElement('div');
+                eotWrapper.className = 'tree-node';
+                const eotLabel = document.createElement('span');
+                eotLabel.className = 'node-label node-eot';
+                eotLabel.textContent = `<EOT> (${eotToken.token})`;
+                eotLabel.addEventListener('mouseenter', (e) => showTooltip(e, eotToken));
+                eotLabel.addEventListener('mouseleave', hideTooltip);
+                eotLabel.addEventListener('click', () => showInfoPanel(eotToken));
+                eotWrapper.appendChild(eotLabel);
+                childrenContainer.appendChild(eotWrapper);
+            }
+
+            // Leadtime ID
+            if (leadtimeToken) {
+                const ltWrapper = document.createElement('div');
+                ltWrapper.className = 'tree-node';
+                const ltLabel = document.createElement('span');
+                ltLabel.className = 'node-label node-leadtime-id';
+                ltLabel.textContent = `leadtime_id: ${leadtimeToken.token} → ${leadtimeHours}h`;
+                ltLabel.addEventListener('mouseenter', (e) => showTooltip(e, leadtimeToken));
+                ltLabel.addEventListener('mouseleave', hideTooltip);
+                ltLabel.addEventListener('click', () => showInfoPanel(leadtimeToken));
+                ltWrapper.appendChild(ltLabel);
+                childrenContainer.appendChild(ltWrapper);
+            }
+
+            // Sequence
+            if (seqNode) {
+                renderSequence(seqNode, childrenContainer, 'sequence (t+1)');
+            }
+
+            label.addEventListener('click', () => {
+                label.classList.toggle('expanded');
+                childrenContainer.classList.toggle('visible');
+            });
+
+            wrapper.appendChild(label);
+            wrapper.appendChild(childrenContainer);
+            container.appendChild(wrapper);
+        }
+
+        function renderTree() {
+            const container = document.getElementById('tree-container');
+            container.innerHTML = '';
+
+            // Start node
+            const startWrapper = document.createElement('div');
+            startWrapper.className = 'tree-node';
+            startWrapper.style.marginLeft = '0';
+
+            const startLabel = document.createElement('span');
+            startLabel.className = 'node-label node-start expandable expanded';
+            startLabel.textContent = `start (TokenWeaver Sequence)`;
+
+            const childrenContainer = document.createElement('div');
+            childrenContainer.className = 'children-container visible';
+
+            treeData.children.forEach(child => {
+                if (child.type === 'sequence') {
+                    renderSequence(child, childrenContainer, 'sequence (t=0)');
+                } else if (child.type === 'next_timestep_sequence') {
+                    renderNextTimestep(child, childrenContainer);
+                } else if (child.type === 'EOD') {
+                    const eodWrapper = document.createElement('div');
+                    eodWrapper.className = 'tree-node';
+                    const eodLabel = document.createElement('span');
+                    eodLabel.className = 'node-label node-eod';
+                    eodLabel.textContent = `<EOD> (${child.token})`;
+                    eodLabel.addEventListener('mouseenter', (e) => showTooltip(e, child));
+                    eodLabel.addEventListener('mouseleave', hideTooltip);
+                    eodLabel.addEventListener('click', () => showInfoPanel(child));
+                    eodWrapper.appendChild(eodLabel);
+                    childrenContainer.appendChild(eodWrapper);
+                }
+            });
+
+            startLabel.addEventListener('click', () => {
+                startLabel.classList.toggle('expanded');
+                childrenContainer.classList.toggle('visible');
+            });
+
+            startWrapper.appendChild(startLabel);
+            startWrapper.appendChild(childrenContainer);
+            container.appendChild(startWrapper);
+        }
+
+        // Initialize
+        loadData();
+    </script>
+</body>
+</html>
