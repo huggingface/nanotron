@@ -214,6 +214,12 @@
             z-index: 10;
         }
 
+        .codebook-cell.highlight {
+            background: #f39c12;
+            color: #000;
+            box-shadow: 0 0 5px #f39c12;
+        }
+
         /* Connector lines */
         .connector {
             color: #444;
@@ -232,6 +238,7 @@
             pointer-events: none;
             box-shadow: 0 5px 20px rgba(0,0,0,0.5);
             display: none;
+            opacity: 0.85;
         }
 
         .tooltip.visible {
@@ -535,18 +542,47 @@
             const cols = Math.ceil(Math.sqrt(n / 2) * 2);
             const rows = Math.ceil(n / cols);
 
+            // Calculate frequency within this variable_block
+            const freqMap = {};
+            tokens.forEach(t => {
+                freqMap[t.token] = (freqMap[t.token] || 0) + 1;
+            });
+            const maxLogFreq = Math.log(Math.max(...Object.values(freqMap)) + 1);
+
             const grid = document.createElement('div');
             grid.className = 'codebook-grid';
             grid.style.gridTemplateColumns = `repeat(${cols}, minmax(40px, 1fr))`;
+
+            // Map token values to their cells for highlighting
+            const cellsByToken = {};
 
             tokens.forEach((token, idx) => {
                 const cell = document.createElement('div');
                 cell.className = 'codebook-cell';
                 cell.textContent = token.token;
-                cell.title = `pos: ${token.pos}`;
 
-                cell.addEventListener('mouseenter', (e) => showTooltip(e, token));
-                cell.addEventListener('mouseleave', hideTooltip);
+                const freq = freqMap[token.token] || 0;
+                const maxBrightness = 90; // Max brightness increase
+                const brightness = (Math.log(freq + 1) / maxLogFreq) * maxBrightness;
+                cell.style.filter = `brightness(${100 + brightness}%)`;
+                cell.title = `pos: ${token.pos}, freq: ${freq}`;
+
+                // Track cells by token value
+                if (!cellsByToken[token.token]) {
+                    cellsByToken[token.token] = [];
+                }
+                cellsByToken[token.token].push(cell);
+
+                cell.addEventListener('mouseenter', (e) => {
+                    showTooltip(e, token);
+                    // Highlight all cells with the same token value
+                    cellsByToken[token.token].forEach(c => c.classList.add('highlight'));
+                });
+                cell.addEventListener('mouseleave', () => {
+                    hideTooltip();
+                    // Remove highlight from all cells with the same token value
+                    cellsByToken[token.token].forEach(c => c.classList.remove('highlight'));
+                });
                 cell.addEventListener('click', () => showInfoPanel(token));
 
                 grid.appendChild(cell);
