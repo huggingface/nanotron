@@ -14,11 +14,12 @@ from typing import Optional
 from unittest.mock import MagicMock
 
 
-def dump_sample(item, filename="sample_0.json"):
+def dump_sample(item, cfg=None, filename="sample_0.json"):
     """Dump dataset sample contents to a JSON file.
 
     Args:
         item: A dataset sample (e.g., dataset[0])
+        cfg: Optional dataset configuration to include in the dump
         filename: Output JSON filename (default: sample_0.json)
     """
     # Convert numpy arrays and tensors to lists for JSON serialization
@@ -30,6 +31,17 @@ def dump_sample(item, filename="sample_0.json"):
             serializable_item[key] = value.cpu().numpy().tolist()
         else:
             serializable_item[key] = value
+
+    # Include cfg if provided
+    if cfg is not None:
+        from dataclasses import asdict, is_dataclass
+
+        if is_dataclass(cfg):
+            serializable_item["cfg"] = asdict(cfg)
+        elif hasattr(cfg, "__dict__"):
+            serializable_item["cfg"] = cfg.__dict__
+        else:
+            serializable_item["cfg"] = str(cfg)
 
     with open(filename, "w") as f:
         json.dump(serializable_item, f, indent=None)
@@ -151,7 +163,7 @@ def test_climllama_dataset():
     # Test __getitem__
     print("\n4. Testing __getitem__ with whole documents...")
     item = dataset[0]
-    dump_sample(item, "sample_0.json")
+    dump_sample(item, cfg=cfg, filename="sample_0.json")
     print(f"   Item keys: {item.keys()}")
     print(f"   input_ids shape: {item['input_ids'].shape}")
     print(f"   var_idx shape: {item['var_idx'].shape}")
