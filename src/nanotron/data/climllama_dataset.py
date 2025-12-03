@@ -10,13 +10,14 @@ import os
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
 
 from nanotron import logging
+from nanotron.config.config import ClimLlamaDatasetsArgs
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 
@@ -55,7 +56,7 @@ class ClimLlamaDataset(Dataset):
 
     def __init__(
         self,
-        cfg: Any,
+        cfg: ClimLlamaDatasetsArgs,
         tokenizer: PreTrainedTokenizerBase,
         name: str,
         data_prefix: str,
@@ -76,6 +77,7 @@ class ClimLlamaDataset(Dataset):
         self.documents = documents
         self.num_samples = num_samples
         self.codebook_size = codebook_size
+        self.cfg = cfg
 
         # Build shuffled document indices
         np_rng = np.random.RandomState(seed=seed)
@@ -85,8 +87,13 @@ class ClimLlamaDataset(Dataset):
         self._parser = None
         self._special_tokens = None
 
-        # Load resolution shapes from metadata
-        self.resolution_shapes = self._load_resolution_shapes_from_metadata(data_prefix)
+        # Load metadata (resolution shapes and variable names)
+        metadata = self._load_metadata(data_prefix)
+        self.resolution_shapes = metadata["resolution_shapes"]
+        self.var_level_names = metadata["variable_names"]
+
+        # Build var_level to var_idx mapping
+        self.var_level_to_var_idx = self._build_var_level_mapping()
 
         # Load global timestamp array
         self.timestamps = self._load_timestamps(data_prefix)
@@ -131,8 +138,8 @@ class ClimLlamaDataset(Dataset):
     def __len__(self) -> int:
         return len(self.shuffle_idx)
 
-    def _load_resolution_shapes_from_metadata(self, data_prefix: str) -> Dict[int, Tuple[int, int]]:
-        """Load resolution shapes from dataset metadata.
+    def _load_metadata(self, data_prefix: str) -> Dict[str, Any]:
+        """Load resolution shapes and variable names from dataset metadata.
 
         Searches for metadata in the following locations (in order):
         1. {data_path}/metadata.json
@@ -146,8 +153,10 @@ class ClimLlamaDataset(Dataset):
            -> parsed directly to {0: (1, 2), 1: (2, 4), ...}
 
         Returns:
-            Dict mapping resolution ID to (height, width) tuple
-            E.g., {0: (1, 2), 1: (2, 4), 2: (3, 6), ...}
+            Dict with:
+            - "resolution_shapes": Dict mapping resolution ID to (height, width) tuple
+              E.g., {0: (1, 2), 1: (2, 4), 2: (3, 6), ...}
+            - "variable_names": List of variable names from metadata (e.g., ["z_500", "t_750", ...])
         """
         data_path = Path(data_prefix)
         if data_path.is_file():
@@ -175,26 +184,39 @@ class ClimLlamaDataset(Dataset):
                 break
 
         if metadata is None:
-            log_rank(
-                "Warning: metadata.json not found, using default resolutions",
-                logger=logger,
-                level=logging.WARNING,
-                rank=0,
+            raise ValueError(
+                f"Metadata file not found for data_prefix '{data_prefix}'. "
+                f"Searched locations: {[str(p) for p in metadata_paths]}"
             )
-            default_res = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32]
-            return {i: (n, 2 * n) for i, n in enumerate(default_res)}
+
+        # Extract variable names from metadata (required)
+        var_level_names = metadata.get("variable_names", [])
+        if not var_level_names:
+            raise ValueError(
+                f"variable_names not found in metadata for data_prefix '{data_prefix}'. "
+                "Metadata must contain a 'variable_names' field with the list of variable+level names."
+            )
+        log_rank(
+            f"Loaded {len(var_level_names)} variable names from metadata",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
 
         # Try model_config.resolutions (list of integers)
         resolution_values = metadata.get("model_config", {}).get("resolutions", [])
         if resolution_values:
             # Map resolution ID to (height, width) tuple
             # Grid dimensions: height = n, width = 2n (for equirectangular projection)
-            return {i: (n, 2 * n) for i, n in enumerate(resolution_values)}
+            return {
+                "resolution_shapes": {i: (n, 2 * n) for i, n in enumerate(resolution_values)},
+                "variable_names": var_level_names,
+            }
 
         # Try weaver_config.resolutions (list of strings like "1×2", "2×4")
         weaver_resolutions = metadata.get("weaver_config", {}).get("resolutions", [])
         if weaver_resolutions:
-            result = {}
+            resolution_shapes = {}
             for i, res_str in enumerate(weaver_resolutions):
                 # Parse "height×width" format (× is Unicode multiplication sign)
                 # Also handle "heightxwidth" with lowercase x
@@ -206,18 +228,68 @@ class ClimLlamaDataset(Dataset):
                     continue
                 if len(parts) == 2:
                     height, width = int(parts[0]), int(parts[1])
-                    result[i] = (height, width)
-            if result:
-                return result
+                    resolution_shapes[i] = (height, width)
+            if resolution_shapes:
+                return {
+                    "resolution_shapes": resolution_shapes,
+                    "variable_names": var_level_names,
+                }
 
-        default_res = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32]
-        log_rank(
-            f"Warning: No resolutions found in metadata, using defaults: {default_res}",
-            logger=logger,
-            level=logging.WARNING,
-            rank=0,
+        raise ValueError(
+            f"No resolutions found in metadata for data_prefix '{data_prefix}'. "
+            "Metadata must contain either 'model_config.resolutions' or 'weaver_config.resolutions'."
         )
-        return {i: (n, 2 * n) for i, n in enumerate(default_res)}
+
+    def _build_var_level_mapping(self) -> np.ndarray:
+        """Build mapping from var_level index to var index.
+
+        The metadata contains variable names like "z_500", "t_750", "msl", etc.
+        The dataset config contains base variable names like "unk", "z", "t", "q", etc.
+        This method creates a mapping from the var_level index (used in the parser output)
+        to the var index (used in the model's position embeddings).
+
+        Returns:
+            numpy array where arr[var_level_idx] = var_idx
+        """
+        # Get the variable names from dataset config (ClimLlamaDatasetsArgs)
+        model_variables = getattr(self.cfg, "variables", None)
+        assert model_variables is not None, (
+            "cfg.variables not found. The dataset config must contain a 'variables' field "
+            "with the list of base variable names (e.g., 'unk', 'z', 't', 'q', ...)."
+        )
+
+        # Build a mapping from base variable name to its index in model_variables
+        var_name_to_idx = {var: idx for idx, var in enumerate(model_variables)}
+
+        # Create the mapping array
+        mapping = np.zeros(len(self.var_level_names), dtype=np.int64)
+
+        for var_level_idx, var_level_name in enumerate(self.var_level_names):
+            # Extract base variable name from var_level_name (e.g., "z_500" -> "z", "msl" -> "msl")
+            # Split on underscore, but handle cases like "tp" or "tp_6h"
+            parts = var_level_name.rsplit("_", 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                # Pressure level variable like "z_500", "t_750"
+                base_var = parts[0]
+            else:
+                # Surface variable like "msl", "t2m", "tp", "tp_6h"
+                base_var = var_level_name
+
+            # Look up the index in model_variables
+            if base_var in var_name_to_idx:
+                mapping[var_level_idx] = var_name_to_idx[base_var]
+            else:
+                # Unknown variable, map to index 0 ("unk")
+                mapping[var_level_idx] = 0
+                log_rank(
+                    f"Warning: Variable '{base_var}' (from '{var_level_name}') not found in model variables, "
+                    f"mapping to index 0 ('{model_variables[0]}')",
+                    logger=logger,
+                    level=logging.WARNING,
+                    rank=0,
+                )
+
+        return mapping
 
     def _load_timestamps(self, data_prefix: str) -> Optional[np.ndarray]:
         """Load global timestamp array from file.
@@ -336,7 +408,13 @@ class ClimLlamaDataset(Dataset):
                 if i >= n_tokens:
                     break
 
-                var_idx[i] = pos.get("variable", 0) or 0
+                # Get var_level index from parser and remap to var index
+                var_level_idx = pos.get("variable", 0) or 0
+                if var_level_idx < len(self.var_level_to_var_idx):
+                    var_idx[i] = self.var_level_to_var_idx[var_level_idx]
+                else:
+                    var_idx[i] = 0  # Unknown variable, map to index 0 ("unk")
+
                 res_idx[i] = pos.get("resolution", 0) or 0
                 leadtime_idx[i] = pos.get("leadtime", 0) or 0
 
@@ -431,7 +509,7 @@ class ClimLlamaDataset(Dataset):
 
 
 def _build_single_climllama_dataset(
-    cfg: Any,
+    cfg: ClimLlamaDatasetsArgs,
     tokenizer: PreTrainedTokenizerBase,
     data_prefix: str,
     num_samples: int,
@@ -497,7 +575,7 @@ def _build_single_climllama_dataset(
 
 
 def build_climllama_dataset(
-    cfg: Any,
+    cfg: ClimLlamaDatasetsArgs,
     tokenizer: PreTrainedTokenizerBase,
     data_prefix: Union[str, List[str]],
     num_samples: int,

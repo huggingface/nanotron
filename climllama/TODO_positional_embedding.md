@@ -47,7 +47,7 @@ class ClimLlamaConfig(Qwen2Config):
     # Always allocate one extra size for position embedding, index 0 for unknown
     # Embedding dimensions for different position types
     var_vocab_size: int = 13  # Number of pressure-level and surface-level atmosphere/climate variables
-    variables: List[str] = ["unk", "z", "t", "q", "u", "v", "w", "t2m", "msl", "u10", "v10", "tp_1h", "tp_6h"]
+    variables: List[str] = ["unk", "z", "t", "q", "u", "v", "w", "t2m", "msl", "u10", "v10", "tp", "tp_6h"]
 
     res_vocab_size: int = 12   # Number of resolution levels
     leadtime_vocab_size: int = 13  # Embed 12 possible lead times, e.g., 0h, 6h, ..., 72h

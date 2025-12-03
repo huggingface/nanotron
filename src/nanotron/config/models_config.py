@@ -326,7 +326,7 @@ class ClimLlamaConfig(Qwen2Config):
         "msl",
         "u10",
         "v10",
-        "tp_1h",
+        "tp",
         "tp_6h",
     )
 

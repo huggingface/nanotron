@@ -45,9 +45,24 @@ class SimpleParallelContext:
 
 @dataclass
 class MockDatasetConfig:
-    """Mock dataset configuration."""
+    """Mock dataset configuration matching ClimLlamaDatasetsArgs."""
 
-    index_mapping_dir: Optional[str] = None
+    # Variable names for position embeddings (must match model config)
+    variables: tuple = (
+        "unk",
+        "z",
+        "t",
+        "q",
+        "u",
+        "v",
+        "w",
+        "t2m",
+        "msl",
+        "u10",
+        "v10",
+        "tp",
+        "tp_6h",
+    )
 
 
 def test_climllama_dataset():

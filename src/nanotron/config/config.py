@@ -226,11 +226,48 @@ class IndexedDatasetsArgs:
 
 
 @dataclass
+class ClimLlamaDatasetsArgs:
+    """Arguments for ClimLlama indexed datasets with climate-specific position encoding.
+
+    ClimLlama datasets use Megatron/NeMo indexed format (.bin + .idx files) with
+    additional metadata (.json) containing variable names and resolution info.
+    Position arrays (var_idx, res_idx, leadtime_idx, spatial_temporal_features)
+    are generated on-the-fly during training.
+    """
+    data_prefix: Union[List[str], Dict[str, List[str]]]
+    # Variable names for position embeddings (must match model config)
+    # These are base variable names like "z", "t", "q", etc. (not "z_500", "t_750")
+    variables: tuple = (
+        "unk",
+        "z",
+        "t",
+        "q",
+        "u",
+        "v",
+        "w",
+        "t2m",
+        "msl",
+        "u10",
+        "v10",
+        "tp",
+        "tp_6h",
+    )
+    splits_string: str = "969,30,1"
+    validation_drop_last: bool = True
+    skip_warmup: bool = False
+    # ClimLlama-specific configuration
+    codebook_size: int = 32768  # Size of the VQ-VAE codebook for special token generation
+    # Megatron sampler configuration
+    sampler_type: str = "sequential"  # Options: "sequential", "random", "cyclic"
+    pad_samples_to_global_batch_size: bool = True
+
+
+@dataclass
 class DataArgs:
     """Arguments related to the data and data files processing"""
 
     dataset: Optional[
-        Union[PretrainDatasetsArgs, NanosetDatasetsArgs, SFTDatasetsArgs, IndexedDatasetsArgs]
+        Union[PretrainDatasetsArgs, NanosetDatasetsArgs, SFTDatasetsArgs, IndexedDatasetsArgs, ClimLlamaDatasetsArgs]
     ]  # If None we use dummy_infinite_data_generator
     seed: Optional[int]
     num_loading_workers: Optional[int] = 1

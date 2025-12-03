@@ -106,7 +106,7 @@ model:
     - msl    # Mean sea level pressure
     - u10    # 10m U-wind
     - v10    # 10m V-wind
-    - tp_1h  # Total precipitation 1h
+    - tp  # Total precipitation 1h
     - tp_6h  # Total precipitation 6h
 
     # res_vocab_size: Number of resolution levels (loaded from dataset metadata.json)
