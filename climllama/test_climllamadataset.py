@@ -86,6 +86,7 @@ class MockDatasetConfig:
         "tp",
         "tp_6h",
     )
+    leadtimes: tuple[int, ...] = (0, 1, 3, 6, 12, 24, 48, 72, 120, 168, 336, 720)  # in hours
     # Size of the VQ-VAE codebook for special token generation
     codebook_size: int = 32768
 

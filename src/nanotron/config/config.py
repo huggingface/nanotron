@@ -237,7 +237,7 @@ class ClimLlamaDatasetsArgs:
     data_prefix: Union[List[str], Dict[str, List[str]]]
     # Variable names for position embeddings (must match model config)
     # These are base variable names like "z", "t", "q", etc. (not "z_500", "t_750")
-    variables: tuple = (
+    variables: tuple[str, ...] = (
         "unk",
         "z",
         "t",
@@ -252,6 +252,7 @@ class ClimLlamaDatasetsArgs:
         "tp",
         "tp_6h",
     )
+    leadtimes: tuple[int, ...] = (0, 1, 3, 6, 12, 24, 48, 72, 120, 168, 336, 720)  # in hours
     splits_string: str = "969,30,1"
     validation_drop_last: bool = True
     skip_warmup: bool = False

@@ -331,8 +331,8 @@ class ClimLlamaConfig(Qwen2Config):
     )
 
     res_vocab_size: int = 12  # Number of resolution levels
-    leadtime_vocab_size: int = 13  # Embed 12 possible lead times, e.g., 0h, 6h, ..., 72h
-    leadtime_step: str = "6h"
+    leadtime_vocab_size: int = 12  # Embed 12 possible lead times, e.g., 0h, 1h, 3h, 6h, 12h, 1d, 2d, 3d, 5d, 1w, 2w, 1m
+    leadtimes: Tuple[int, ...] = (0, 1, 3, 6, 12, 24, 48, 72, 120, 168, 336, 720)  # in hours
 
     # Spatial-temporal continuous position encoding
     use_spatial_temporal_encoding: bool = True

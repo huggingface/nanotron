@@ -178,3 +178,5 @@ data/*/*.idx
 data/*/*.json
 data/*/*.npy
 data/*/*.bin
+
+climllama/sample_0.json
