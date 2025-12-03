@@ -109,15 +109,18 @@ class ClimLlamaDataset(Dataset):
         return len(self.shuffle_idx)
 
     def _load_resolution_shapes_from_metadata(self, data_prefix: str) -> Dict[int, Tuple[int, int]]:
-        """Load resolution shapes from dataset metadata.json.
+        """Load resolution shapes from dataset metadata.
 
-        The dataset folder contains metadata.json with structure:
-        {
-            "model_config": {
-                "resolutions": [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32],
-                ...
-            }
-        }
+        Searches for metadata in the following locations (in order):
+        1. {data_path}/metadata.json
+        2. {data_path.parent}/metadata.json
+        3. {data_prefix}.json (e.g., data/combined_interleave_256/1.json)
+
+        Supports two metadata formats:
+        1. model_config.resolutions: list of integers [1, 2, 3, ...]
+           -> converted to {0: (1, 2), 1: (2, 4), ...} assuming width = 2 * height
+        2. weaver_config.resolutions: list of strings ["1×2", "2×4", ...]
+           -> parsed directly to {0: (1, 2), 1: (2, 4), ...}
 
         Returns:
             Dict mapping resolution ID to (height, width) tuple
@@ -128,9 +131,11 @@ class ClimLlamaDataset(Dataset):
             data_path = data_path.parent
 
         # Try different locations for metadata.json
+        # Also check {data_prefix}.json (e.g., data/combined_interleave_256/1.json)
         metadata_paths = [
             data_path / "metadata.json",
             data_path.parent / "metadata.json",
+            Path(f"{data_prefix}.json"),
         ]
 
         metadata = None
@@ -156,20 +161,40 @@ class ClimLlamaDataset(Dataset):
             default_res = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32]
             return {i: (n, 2 * n) for i, n in enumerate(default_res)}
 
+        # Try model_config.resolutions (list of integers)
         resolution_values = metadata.get("model_config", {}).get("resolutions", [])
-        if not resolution_values:
-            log_rank(
-                "Warning: No resolutions found in metadata, using defaults",
-                logger=logger,
-                level=logging.WARNING,
-                rank=0,
-            )
-            default_res = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32]
-            return {i: (n, 2 * n) for i, n in enumerate(default_res)}
+        if resolution_values:
+            # Map resolution ID to (height, width) tuple
+            # Grid dimensions: height = n, width = 2n (for equirectangular projection)
+            return {i: (n, 2 * n) for i, n in enumerate(resolution_values)}
 
-        # Map resolution ID to (height, width) tuple
-        # Grid dimensions: height = n, width = 2n (for equirectangular projection)
-        return {i: (n, 2 * n) for i, n in enumerate(resolution_values)}
+        # Try weaver_config.resolutions (list of strings like "1×2", "2×4")
+        weaver_resolutions = metadata.get("weaver_config", {}).get("resolutions", [])
+        if weaver_resolutions:
+            result = {}
+            for i, res_str in enumerate(weaver_resolutions):
+                # Parse "height×width" format (× is Unicode multiplication sign)
+                # Also handle "heightxwidth" with lowercase x
+                if "×" in res_str:
+                    parts = res_str.split("×")
+                elif "x" in res_str:
+                    parts = res_str.split("x")
+                else:
+                    continue
+                if len(parts) == 2:
+                    height, width = int(parts[0]), int(parts[1])
+                    result[i] = (height, width)
+            if result:
+                return result
+
+        default_res = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 32]
+        log_rank(
+            f"Warning: No resolutions found in metadata, using defaults: {default_res}",
+            logger=logger,
+            level=logging.WARNING,
+            rank=0,
+        )
+        return {i: (n, 2 * n) for i, n in enumerate(default_res)}
 
     def _load_timestamps(self, data_prefix: str) -> Optional[np.ndarray]:
         """Load global timestamp array from file.
