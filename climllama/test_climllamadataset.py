@@ -14,14 +14,26 @@ from typing import Optional
 from unittest.mock import MagicMock
 
 
-def dump_sample(item, cfg=None, filename="sample_0.json"):
+def dump_sample(item, cfg=None, parser=None, filename="sample_0.json"):
     """Dump dataset sample contents to a JSON file.
 
     Args:
         item: A dataset sample (e.g., dataset[0])
         cfg: Optional dataset configuration to include in the dump
+        parser: Optional Lark parser to parse tokens into a tree
         filename: Output JSON filename (default: sample_0.json)
     """
+    from lark.tree import Tree
+
+    def tree_to_dict(node):
+        if isinstance(node, Tree):
+            return {
+                "type": node.data,
+                "children": [tree_to_dict(child) for child in node.children]
+            }
+        else:   # token
+            return {"token": node.value, "type": node.type}
+
     # Convert numpy arrays and tensors to lists for JSON serialization
     serializable_item = {}
     for key, value in item.items():
@@ -42,6 +54,12 @@ def dump_sample(item, cfg=None, filename="sample_0.json"):
             serializable_item["cfg"] = cfg.__dict__
         else:
             serializable_item["cfg"] = str(cfg)
+
+    if parser is not None:
+        input_ids = serializable_item.get("input_ids")
+        assert input_ids is not None, "input_ids not found in item for parsing"
+        tree = parser.parse(input_ids)
+        serializable_item["parsed_tree"] = tree_to_dict(tree)
 
     with open(filename, "w") as f:
         json.dump(serializable_item, f, indent=None)
@@ -163,7 +181,7 @@ def test_climllama_dataset():
     # Test __getitem__
     print("\n4. Testing __getitem__ with whole documents...")
     item = dataset[0]
-    dump_sample(item, cfg=cfg, filename="sample_0.json")
+    dump_sample(item, cfg=cfg, parser=dataset.parser, filename="sample_0.json")
     print(f"   Item keys: {item.keys()}")
     print(f"   input_ids shape: {item['input_ids'].shape}")
     print(f"   var_idx shape: {item['var_idx'].shape}")
