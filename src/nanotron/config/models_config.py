@@ -313,21 +313,15 @@ class ClimLlamaConfig(Qwen2Config):
 
     # Discrete position embedding vocab sizes
     # Always allocate one extra size for position embedding, index 0 for unknown
-    var_vocab_size: int = 13  # Number of pressure-level and surface-level atmosphere/climate variables
+    # embeding vocab sizes have to be devided by max_tp
+    var_vocab_size: int = 16  # Number of pressure-level and surface-level atmosphere/climate variables
     variables: Tuple[str, ...] = (
-        "unk",
-        "z",
-        "t",
-        "q",
-        "u",
-        "v",
-        "w",
-        "t2m",
-        "msl",
-        "u10",
-        "v10",
-        "tp",
-        "tp_6h",
+        "unk", # index 0 for unknown variable
+        "z", "t", "q", # pressure-level variables
+        "u", "v", "w",
+        "t2m", "msl", "u10", "v10", # surface-level variables
+        "tp", "tp_6h", # 1h and 6h accumulated precipitation
+        "pad0", "pad1", "pad2" # Padding variables if needed
     )
 
     res_vocab_size: int = 12  # Number of resolution levels
@@ -347,6 +341,22 @@ class ClimLlamaConfig(Qwen2Config):
         if len(self.variables) != self.var_vocab_size:
             raise ValueError(
                 f"Number of variables ({len(self.variables)}) must match var_vocab_size ({self.var_vocab_size})"
+            )
+        if len(self.leadtimes) != self.leadtime_vocab_size:
+            raise ValueError(
+                f"Number of leadtimes ({len(self.leadtimes)}) must match leadtime_vocab_size ({self.leadtime_vocab_size})"
+            )
+        if self.var_vocab_size % self.max_tp != 0:
+            raise ValueError(
+                f"var_vocab_size ({self.var_vocab_size}) must be divisible by max_tp ({self.max_tp})"
+            )
+        if self.res_vocab_size % self.max_tp != 0:
+            raise ValueError(
+                f"res_vocab_size ({self.res_vocab_size}) must be divisible by max_tp ({self.max_tp})"
+            )
+        if self.leadtime_vocab_size % self.max_tp != 0:
+            raise ValueError(
+                f"leadtime_vocab_size ({self.leadtime_vocab_size}) must be divisible by max_tp ({self.max_tp})"
             )
 
 
