@@ -472,8 +472,8 @@ class ClimLlamaDataset(Dataset):
                     break
 
                 # Get var_level index from parser and remap to var index
-                var_level_idx = pos.get("variable", 0) or 0
-                if var_level_idx < len(self.var_level_to_var_idx):
+                var_level_idx = pos.get("variable", -1)
+                if var_level_idx >= 0 and var_level_idx < len(self.var_level_to_var_idx):
                     var_idx[i] = self.var_level_to_var_idx[var_level_idx]
                 else:
                     var_idx[i] = 0  # Unknown variable, map to index 0 ("unk")
