@@ -3,6 +3,7 @@
 This script tests the ClimLlamaDataset on the data/combined_interleave_256 dataset.
 """
 
+import json
 import numpy as np
 import os
 import sys
@@ -11,6 +12,28 @@ import torch.distributed as dist
 from dataclasses import dataclass
 from typing import Optional
 from unittest.mock import MagicMock
+
+
+def dump_sample(item, filename="sample_0.json"):
+    """Dump dataset sample contents to a JSON file.
+
+    Args:
+        item: A dataset sample (e.g., dataset[0])
+        filename: Output JSON filename (default: sample_0.json)
+    """
+    # Convert numpy arrays and tensors to lists for JSON serialization
+    serializable_item = {}
+    for key, value in item.items():
+        if isinstance(value, np.ndarray):
+            serializable_item[key] = value.tolist()
+        elif isinstance(value, torch.Tensor):
+            serializable_item[key] = value.cpu().numpy().tolist()
+        else:
+            serializable_item[key] = value
+
+    with open(filename, "w") as f:
+        json.dump(serializable_item, f, indent=None)
+    print(f"   Sample dumped to {filename}")
 
 
 def init_distributed():
@@ -63,6 +86,8 @@ class MockDatasetConfig:
         "tp",
         "tp_6h",
     )
+    # Size of the VQ-VAE codebook for special token generation
+    codebook_size: int = 32768
 
 
 def test_climllama_dataset():
@@ -118,7 +143,6 @@ def test_climllama_dataset():
         seed=42,
         parallel_context=parallel_context,
         drop_last=True,
-        codebook_size=32768,
     )
     print(f"   Dataset created successfully!")
     print(f"   Dataset length: {len(dataset)}")
@@ -126,6 +150,7 @@ def test_climllama_dataset():
     # Test __getitem__
     print("\n4. Testing __getitem__ with whole documents...")
     item = dataset[0]
+    dump_sample(item, "sample_0.json")
     print(f"   Item keys: {item.keys()}")
     print(f"   input_ids shape: {item['input_ids'].shape}")
     print(f"   var_idx shape: {item['var_idx'].shape}")
@@ -226,7 +251,6 @@ def test_blendable_climllama_dataset():
         parallel_context=parallel_context,
         name="test",
         drop_last=True,
-        codebook_size=32768,
     )
     print(f"   Dataset type: {type(dataset).__name__}")
     assert isinstance(dataset, BlendableDataset), "Expected BlendableDataset for multiple prefixes"
@@ -269,7 +293,6 @@ def test_blendable_climllama_dataset():
         parallel_context=parallel_context,
         name="test",
         drop_last=True,
-        codebook_size=32768,
     )
     print(f"   Dataset type: {type(dataset_weighted).__name__}")
     assert isinstance(dataset_weighted, BlendableDataset), "Expected BlendableDataset for weighted prefixes"
@@ -298,7 +321,6 @@ def test_blendable_climllama_dataset():
         parallel_context=parallel_context,
         name="test",
         drop_last=True,
-        codebook_size=32768,
     )
     print(f"   Dataset type: {type(dataset_single).__name__}")
     assert isinstance(dataset_single, ClimLlamaDataset), "Expected ClimLlamaDataset for single prefix"
@@ -316,7 +338,6 @@ def test_blendable_climllama_dataset():
         parallel_context=parallel_context,
         name="test",
         drop_last=True,
-        codebook_size=32768,
     )
     print(f"   Dataset type: {type(dataset_single_list).__name__}")
     assert isinstance(dataset_single_list, ClimLlamaDataset), "Expected ClimLlamaDataset for single-item list"

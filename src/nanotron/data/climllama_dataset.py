@@ -67,7 +67,6 @@ class ClimLlamaDataset(Dataset):
         seed: int,
         parallel_context: ParallelContext,
         drop_last: bool = True,
-        codebook_size: int = 32768,
     ):
         super().__init__()
         self.name = name
@@ -76,7 +75,6 @@ class ClimLlamaDataset(Dataset):
         self.seq_length = seq_length
         self.documents = documents
         self.num_samples = num_samples
-        self.codebook_size = codebook_size
         self.cfg = cfg
 
         # Build shuffled document indices
@@ -187,6 +185,18 @@ class ClimLlamaDataset(Dataset):
             raise ValueError(
                 f"Metadata file not found for data_prefix '{data_prefix}'. "
                 f"Searched locations: {[str(p) for p in metadata_paths]}"
+            )
+
+        # Check codebook_size consistency
+        metadata_codebook_size = metadata.get("codebook_size") or metadata.get("weaver_config", {}).get(
+            "codebook_size"
+        )
+        if metadata_codebook_size is not None and metadata_codebook_size != self.cfg.codebook_size:
+            raise ValueError(
+                f"Codebook size mismatch for data_prefix '{data_prefix}': "
+                f"metadata has codebook_size={metadata_codebook_size}, "
+                f"but config has codebook_size={self.cfg.codebook_size}. "
+                "Please ensure the dataset was created with the same codebook size as the model config."
             )
 
         # Extract variable names from metadata (required)
@@ -334,13 +344,14 @@ class ClimLlamaDataset(Dataset):
             self._parser = create_parser(atmtokenizer.GRAMMAR_PATH, self.special_tokens)
         return self._parser
 
+    # TODO: Create special tokens based on the metadata
     @property
     def special_tokens(self):
         """Lazy initialization of special tokens."""
         if self._special_tokens is None:
             from atmtokenizer.eval.special_tokens import create_special_tokens
 
-            self._special_tokens = create_special_tokens(codebook_size=self.codebook_size)
+            self._special_tokens = create_special_tokens(codebook_size=self.cfg.codebook_size)
         return self._special_tokens
 
     def _get_document_timestamp(self, doc_idx: int) -> datetime:
@@ -518,7 +529,6 @@ def _build_single_climllama_dataset(
     parallel_context: ParallelContext,
     name: str = "train",
     drop_last: bool = True,
-    codebook_size: int = 32768,
 ) -> ClimLlamaDataset:
     """Build a single ClimLlamaDataset from the given parameters.
 
@@ -534,7 +544,6 @@ def _build_single_climllama_dataset(
         parallel_context: Parallel context for distributed training
         name: Dataset name ("train", "valid", "test")
         drop_last: Whether to drop the last incomplete batch
-        codebook_size: Size of the codebook for special token generation
 
     Returns:
         ClimLlamaDataset instance
@@ -568,7 +577,6 @@ def _build_single_climllama_dataset(
         seed=seed,
         parallel_context=parallel_context,
         drop_last=drop_last,
-        codebook_size=codebook_size,
     )
 
     return dataset
@@ -584,7 +592,6 @@ def build_climllama_dataset(
     parallel_context: ParallelContext,
     name: str = "train",
     drop_last: bool = True,
-    codebook_size: int = 32768,
 ) -> Union[ClimLlamaDataset, BlendableDataset]:
     """Build a ClimLlamaDataset or BlendableDataset from the given parameters.
 
@@ -606,7 +613,6 @@ def build_climllama_dataset(
         parallel_context: Parallel context for distributed training
         name: Dataset name ("train", "valid", "test")
         drop_last: Whether to drop the last incomplete batch
-        codebook_size: Size of the codebook for special token generation
 
     Returns:
         ClimLlamaDataset instance for single prefix, or BlendableDataset for multiple prefixes
@@ -623,7 +629,6 @@ def build_climllama_dataset(
             parallel_context=parallel_context,
             name=name,
             drop_last=drop_last,
-            codebook_size=codebook_size,
         )
 
     # Handle list with single prefix
@@ -638,7 +643,6 @@ def build_climllama_dataset(
             parallel_context=parallel_context,
             name=name,
             drop_last=drop_last,
-            codebook_size=codebook_size,
         )
 
     # Handle multiple prefixes - check if blended format [weight1, path1, weight2, path2, ...]
@@ -694,7 +698,6 @@ def build_climllama_dataset(
             parallel_context=parallel_context,
             name=name,
             drop_last=drop_last,
-            codebook_size=codebook_size,
         )
         datasets.append(dataset)
 
