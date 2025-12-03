@@ -9,7 +9,8 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from torch.utils.data import Dataset
@@ -19,9 +20,22 @@ from nanotron import logging
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 
+from .nemo_dataset.blendable_dataset import BlendableDataset
+from .nemo_dataset.dataset_utils import get_datasets_weights_and_num_samples
 from .nemo_dataset.indexed_dataset import MMapIndexedDataset
 
 logger = logging.get_logger(__name__)
+
+
+@dataclass
+class ClimLlamaSubsetSplitLog:
+    """Log information for a ClimLlamaDataset subset."""
+
+    name: str
+    data_prefix: str
+    num_documents: int
+    num_samples: int
+    seq_length: int
 
 
 class ClimLlamaDataset(Dataset):
@@ -76,6 +90,15 @@ class ClimLlamaDataset(Dataset):
 
         # Load global timestamp array
         self.timestamps = self._load_timestamps(data_prefix)
+
+        # Create subset log for BlendableDataset compatibility
+        self.subset_log = ClimLlamaSubsetSplitLog(
+            name=name,
+            data_prefix=data_prefix,
+            num_documents=len(documents),
+            num_samples=num_samples,
+            seq_length=seq_length,
+        )
 
     def _build_document_shuffle_idx(
         self, documents: np.ndarray, num_samples: int, np_rng: np.random.RandomState
@@ -407,7 +430,7 @@ class ClimLlamaDataset(Dataset):
         }
 
 
-def build_climllama_dataset(
+def _build_single_climllama_dataset(
     cfg: Any,
     tokenizer: PreTrainedTokenizerBase,
     data_prefix: str,
@@ -419,9 +442,9 @@ def build_climllama_dataset(
     drop_last: bool = True,
     codebook_size: int = 32768,
 ) -> ClimLlamaDataset:
-    """Build a ClimLlamaDataset from the given parameters.
+    """Build a single ClimLlamaDataset from the given parameters.
 
-    This is a convenience function for creating ClimLlamaDataset instances.
+    This is an internal function for creating individual ClimLlamaDataset instances.
 
     Args:
         cfg: Dataset configuration
@@ -446,7 +469,7 @@ def build_climllama_dataset(
     total_num_of_documents = len(indexed_dataset.doc_idx) - 1
 
     log_rank(
-        f"Building ClimLlamaDataset '{name}' with {total_num_of_documents} documents",
+        f"Building ClimLlamaDataset '{name}' with {total_num_of_documents} documents from {data_prefix}",
         logger=logger,
         level=logging.INFO,
         rank=0,
@@ -471,3 +494,137 @@ def build_climllama_dataset(
     )
 
     return dataset
+
+
+def build_climllama_dataset(
+    cfg: Any,
+    tokenizer: PreTrainedTokenizerBase,
+    data_prefix: Union[str, List[str]],
+    num_samples: int,
+    seq_length: int,
+    seed: int,
+    parallel_context: ParallelContext,
+    name: str = "train",
+    drop_last: bool = True,
+    codebook_size: int = 32768,
+) -> Union[ClimLlamaDataset, BlendableDataset]:
+    """Build a ClimLlamaDataset or BlendableDataset from the given parameters.
+
+    This function supports both single and multiple data prefixes. When multiple
+    prefixes are provided, it creates a BlendableDataset that blends samples from
+    multiple ClimLlamaDataset instances.
+
+    Args:
+        cfg: Dataset configuration
+        tokenizer: Tokenizer
+        data_prefix: Path prefix for indexed dataset files. Can be:
+            - A single string path (e.g., "data/train")
+            - A list with a single path (e.g., ["data/train"])
+            - A list of paths with equal weights (e.g., ["data/train1", "data/train2"])
+            - A blended format list (e.g., [0.7, "data/train1", 0.3, "data/train2"])
+        num_samples: Number of samples to generate
+        seq_length: Sequence length
+        seed: Random seed
+        parallel_context: Parallel context for distributed training
+        name: Dataset name ("train", "valid", "test")
+        drop_last: Whether to drop the last incomplete batch
+        codebook_size: Size of the codebook for special token generation
+
+    Returns:
+        ClimLlamaDataset instance for single prefix, or BlendableDataset for multiple prefixes
+    """
+    # Handle single string prefix
+    if isinstance(data_prefix, str):
+        return _build_single_climllama_dataset(
+            cfg=cfg,
+            tokenizer=tokenizer,
+            data_prefix=data_prefix,
+            num_samples=num_samples,
+            seq_length=seq_length,
+            seed=seed,
+            parallel_context=parallel_context,
+            name=name,
+            drop_last=drop_last,
+            codebook_size=codebook_size,
+        )
+
+    # Handle list with single prefix
+    if len(data_prefix) == 1:
+        return _build_single_climllama_dataset(
+            cfg=cfg,
+            tokenizer=tokenizer,
+            data_prefix=data_prefix[0],
+            num_samples=num_samples,
+            seq_length=seq_length,
+            seed=seed,
+            parallel_context=parallel_context,
+            name=name,
+            drop_last=drop_last,
+            codebook_size=codebook_size,
+        )
+
+    # Handle multiple prefixes - check if blended format [weight1, path1, weight2, path2, ...]
+    is_blended = len(data_prefix) % 2 == 0
+    if is_blended:
+        try:
+            float(data_prefix[0])  # Check if first element can be converted to float (weight)
+        except (ValueError, TypeError):
+            is_blended = False
+
+    if not is_blended:
+        # Not blended format - treat as multiple paths with equal weights
+        # Convert to blended format: [1.0, path1, 1.0, path2, ...]
+        log_rank(
+            f"data_prefix has {len(data_prefix)} paths without weights. "
+            f"Treating as {len(data_prefix)} datasets with equal weights.",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        blended_data_prefix = []
+        for path in data_prefix:
+            blended_data_prefix.extend([1.0, path])
+        data_prefix = blended_data_prefix
+
+    # Parse weights and prefixes
+    output = get_datasets_weights_and_num_samples(data_prefix, num_samples)
+    prefixes, weights, datasets_num_samples = output
+
+    log_rank(
+        f"Building BlendableDataset with {len(prefixes)} ClimLlamaDatasets",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
+
+    # Build individual datasets
+    datasets = []
+    for i, (prefix, ds_num_samples) in enumerate(zip(prefixes, datasets_num_samples)):
+        log_rank(
+            f"  Dataset {i}: {prefix} with weight {weights[i]:.4f}, {ds_num_samples} samples",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        dataset = _build_single_climllama_dataset(
+            cfg=cfg,
+            tokenizer=tokenizer,
+            data_prefix=prefix,
+            num_samples=ds_num_samples,
+            seq_length=seq_length,
+            seed=seed,
+            parallel_context=parallel_context,
+            name=name,
+            drop_last=drop_last,
+            codebook_size=codebook_size,
+        )
+        datasets.append(dataset)
+
+    # Create and return BlendableDataset
+    return BlendableDataset(
+        datasets=datasets,
+        weights=weights,
+        size=num_samples,
+        parallel_context=parallel_context,
+        seed=seed,
+    )

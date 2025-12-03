@@ -168,11 +168,155 @@ def test_climllama_dataset():
     return True
 
 
+def test_blendable_climllama_dataset():
+    """Test ClimLlamaDataset with multiple .bin files using BlendableDataset."""
+    # Set up paths - using the same file twice to test blending logic
+    data_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "data/combined_interleave_256",
+    )
+    data_prefix_1 = os.path.join(data_path, "1")
+    data_prefix_2 = os.path.join(data_path, "2")  # Using same file for testing
+
+    print(f"\nTesting BlendableDataset with ClimLlamaDataset")
+    print(f"  data_prefix_1: {data_prefix_1}")
+    print(f"  data_prefix_2: {data_prefix_2}")
+
+    # Check if data exists
+    if not os.path.exists(f"{data_prefix_1}.bin"):
+        print(f"ERROR: Data file not found at {data_prefix_1}.bin")
+        print("Please ensure the test data is available.")
+        return False
+
+    from nanotron.data.climllama_dataset import build_climllama_dataset
+    from nanotron.data.nemo_dataset.blendable_dataset import BlendableDataset
+
+    # Create parallel context
+    print("\n1. Creating ParallelContext...")
+    world_pg = dist.distributed_c10d._get_default_group()
+    parallel_context = SimpleParallelContext(world_pg)
+    tokenizer = MagicMock()
+    cfg = MockDatasetConfig()
+
+    # Test 1: Multiple paths without weights (equal weights)
+    print("\n2. Testing with list of paths (equal weights)...")
+    data_prefix_list = [data_prefix_1, data_prefix_2]
+    dataset = build_climllama_dataset(
+        cfg=cfg,
+        tokenizer=tokenizer,
+        data_prefix=data_prefix_list,
+        num_samples=100,
+        seq_length=256,
+        seed=42,
+        parallel_context=parallel_context,
+        name="test",
+        drop_last=True,
+        codebook_size=32768,
+    )
+    print(f"   Dataset type: {type(dataset).__name__}")
+    assert isinstance(dataset, BlendableDataset), "Expected BlendableDataset for multiple prefixes"
+    print(f"   Dataset length: {len(dataset)}")
+    print(f"   Number of sub-datasets: {len(dataset.datasets)}")
+
+    # Test __getitem__
+    print("\n3. Testing __getitem__ on BlendableDataset...")
+    item = dataset[0]
+    print(f"   Item keys: {item.keys()}")
+    print(f"   input_ids shape: {item['input_ids'].shape}")
+    print(f"   var_idx shape: {item['var_idx'].shape}")
+    print(f"   spatial_temporal_features shape: {item['spatial_temporal_features'].shape}")
+
+    # Test multiple items from blended dataset
+    print("\n4. Testing multiple items from BlendableDataset...")
+    dataset_indices_used = {0: 0, 1: 0}
+    for i in range(min(20, len(dataset))):
+        item = dataset[i]
+        ds_idx = dataset.dataset_index[i]
+        sample_idx = dataset.dataset_sample_index[i]
+        dataset_indices_used[ds_idx] += 1
+        if i < 10:
+            print(
+                f"   Item {i:2d}: dataset_idx={ds_idx}, sample_idx={sample_idx:3d}, "
+                f"len={len(item['input_ids']):5d}"
+            )
+    print(f"\n   Dataset usage: {dict(dataset_indices_used)}")
+
+    # Test 2: Blended format with weights [weight1, path1, weight2, path2]
+    print("\n5. Testing with blended format (70/30 weights)...")
+    data_prefix_weighted = [0.7, data_prefix_1, 0.3, data_prefix_2]
+    dataset_weighted = build_climllama_dataset(
+        cfg=cfg,
+        tokenizer=tokenizer,
+        data_prefix=data_prefix_weighted,
+        num_samples=100,
+        seq_length=256,
+        seed=42,
+        parallel_context=parallel_context,
+        name="test",
+        drop_last=True,
+        codebook_size=32768,
+    )
+    print(f"   Dataset type: {type(dataset_weighted).__name__}")
+    assert isinstance(dataset_weighted, BlendableDataset), "Expected BlendableDataset for weighted prefixes"
+    print(f"   Dataset length: {len(dataset_weighted)}")
+
+    # Verify weights are being used
+    dataset_indices_weighted = {0: 0, 1: 0}
+    for i in range(len(dataset_weighted)):
+        ds_idx = dataset_weighted.dataset_index[i]
+        dataset_indices_weighted[ds_idx] += 1
+    print(f"   Dataset usage with weights: {dict(dataset_indices_weighted)}")
+    ratio = dataset_indices_weighted[0] / (dataset_indices_weighted[0] + dataset_indices_weighted[1])
+    print(f"   Actual ratio for dataset 0: {ratio:.2f} (expected ~0.70)")
+
+    # Test 3: Single prefix (should return ClimLlamaDataset, not BlendableDataset)
+    print("\n6. Testing with single prefix (should NOT be BlendableDataset)...")
+    from nanotron.data.climllama_dataset import ClimLlamaDataset
+
+    dataset_single = build_climllama_dataset(
+        cfg=cfg,
+        tokenizer=tokenizer,
+        data_prefix=data_prefix_1,
+        num_samples=100,
+        seq_length=256,
+        seed=42,
+        parallel_context=parallel_context,
+        name="test",
+        drop_last=True,
+        codebook_size=32768,
+    )
+    print(f"   Dataset type: {type(dataset_single).__name__}")
+    assert isinstance(dataset_single, ClimLlamaDataset), "Expected ClimLlamaDataset for single prefix"
+    print(f"   Dataset length: {len(dataset_single)}")
+
+    # Test 4: List with single prefix (should also return ClimLlamaDataset)
+    print("\n7. Testing with list containing single prefix...")
+    dataset_single_list = build_climllama_dataset(
+        cfg=cfg,
+        tokenizer=tokenizer,
+        data_prefix=[data_prefix_1],
+        num_samples=100,
+        seq_length=256,
+        seed=42,
+        parallel_context=parallel_context,
+        name="test",
+        drop_last=True,
+        codebook_size=32768,
+    )
+    print(f"   Dataset type: {type(dataset_single_list).__name__}")
+    assert isinstance(dataset_single_list, ClimLlamaDataset), "Expected ClimLlamaDataset for single-item list"
+
+    print("\n✓ BlendableDataset tests completed!")
+    return True
+
+
 def main():
     """Main entry point."""
     init_distributed()
     try:
         success = test_climllama_dataset()
+        if success:
+            success = test_blendable_climllama_dataset()
         sys.exit(0 if success else 1)
     finally:
         cleanup_distributed()
