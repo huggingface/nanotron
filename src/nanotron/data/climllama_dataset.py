@@ -93,6 +93,9 @@ class ClimLlamaDataset(Dataset):
         # Build var_level to var_idx mapping
         self.var_level_to_var_idx = self._build_var_level_mapping()
 
+        # Build leadtime (hours) to leadtime_idx mapping
+        self.leadtime_to_idx = self._build_leadtime_mapping()
+
         # Load global timestamp array
         self.timestamps = self._load_timestamps(data_prefix)
 
@@ -301,6 +304,32 @@ class ClimLlamaDataset(Dataset):
 
         return mapping
 
+    def _build_leadtime_mapping(self) -> Dict[int, int]:
+        """Build mapping from leadtime hours to leadtime index.
+
+        The parser returns leadtime in hours (e.g., 0, 6, 12, 24, ...).
+        The model expects a leadtime index into cfg.leadtimes for position embeddings.
+        This method creates a mapping from leadtime hours to the corresponding index.
+
+        Returns:
+            Dict mapping leadtime hours to leadtime index
+        """
+        leadtimes = getattr(self.cfg, "leadtimes", None)
+        assert leadtimes is not None, (
+            "cfg.leadtimes not found. The dataset config must contain a 'leadtimes' field "
+            "with the list of leadtime hours (e.g., (0, 1, 3, 6, 12, 24, 48, 72, 120, 168, 336, 720))."
+        )
+
+        # Build mapping: leadtime_hours -> index
+        mapping = {lt: idx for idx, lt in enumerate(leadtimes)}
+        log_rank(
+            f"Built leadtime mapping for {len(leadtimes)} leadtimes: {leadtimes}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+        return mapping
+
     def _load_timestamps(self, data_prefix: str) -> Optional[np.ndarray]:
         """Load global timestamp array from file.
 
@@ -427,7 +456,10 @@ class ClimLlamaDataset(Dataset):
                     var_idx[i] = 0  # Unknown variable, map to index 0 ("unk")
 
                 res_idx[i] = pos.get("resolution", 0) or 0
-                leadtime_idx[i] = pos.get("leadtime", 0) or 0
+
+                # Get leadtime in hours from parser and remap to leadtime index
+                leadtime_hours = pos.get("leadtime", 0) or 0
+                leadtime_idx[i] = self.leadtime_to_idx.get(leadtime_hours, 0)
 
                 # Spatial features (x, y, z) - unit sphere coordinates
                 spatial_temporal_features[i, 0] = pos.get("grid_x", 0.0) or 0.0
