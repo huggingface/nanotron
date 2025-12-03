@@ -14,35 +14,69 @@ from typing import Optional
 from unittest.mock import MagicMock
 
 
-def dump_sample(item, cfg=None, parser=None, filename="sample_0.json"):
+def dump_sample(item, parser, cfg=None, filename="sample_0.json"):
     """Dump dataset sample contents to a JSON file.
 
     Args:
         item: A dataset sample (e.g., dataset[0])
+        parser: Lark parser to parse tokens into a tree
         cfg: Optional dataset configuration to include in the dump
-        parser: Optional Lark parser to parse tokens into a tree
         filename: Output JSON filename (default: sample_0.json)
     """
-    from lark.tree import Tree
+    from lark.tree import Tree, Token
+    import pandas as pd
 
-    def tree_to_dict(node):
+    """
+    item schema:
+    {
+            "input_ids": input_ids,
+            "positions": position_ids,
+            "var_idx": positions["var_idx"],
+            "res_idx": positions["res_idx"],
+            "leadtime_idx": positions["leadtime_idx"],
+            "spatial_temporal_features": List[Tuple[grid_x, grid_y, grid_z, cos_hour, sin_hour, cos_day, sin_day]],
+    }
+    """
+
+    def tree_to_dict(node, df):
         if isinstance(node, Tree):
             return {
                 "type": node.data,
-                "children": [tree_to_dict(child) for child in node.children]
+                "children": [tree_to_dict(child, df) for child in node.children]
             }
         else:   # token
-            return {"token": node.value, "type": node.type}
+            assert isinstance(node, Token), f"Expected Token node, got {type(node)}"
+            idx = node.start_pos
+            row_dict = df.iloc[idx].to_dict() if idx < len(df) else {}
+            return {"pos": idx, "token": node.value, "type": node.type, **row_dict}
 
-    # Convert numpy arrays and tensors to lists for JSON serialization
-    serializable_item = {}
+    # Convert item to DataFrame
+    data = {}
     for key, value in item.items():
+        if isinstance(value, torch.Tensor):
+            value = value.cpu().numpy()
         if isinstance(value, np.ndarray):
-            serializable_item[key] = value.tolist()
-        elif isinstance(value, torch.Tensor):
-            serializable_item[key] = value.cpu().numpy().tolist()
-        else:
-            serializable_item[key] = value
+            if value.ndim == 1:
+                data[key] = value
+            elif value.ndim == 2:
+                # Expand 2D arrays into separate columns
+                for i in range(value.shape[1]):
+                    if key == "spatial_temporal_features":
+                        col_names = ["x", "y", "z", "cos_hour", "sin_hour", "cos_day", "sin_day"]
+                        col_name = f"{key}_{col_names[i]}" if i < len(col_names) else f"{key}_{i}"
+                    else:
+                        col_name = f"{key}_{i}"
+                    data[col_name] = value[:, i]
+    df = pd.DataFrame(data)
+
+    # Convert DataFrame to dict for JSON serialization
+    serializable_item = {} #df.to_dict(orient="list")
+
+    assert parser is not None, "Parser is required for parsing input_ids"
+    input_ids = item.get("input_ids")
+    assert input_ids is not None, "input_ids not found in item for parsing"
+    tree = parser.parse(input_ids)
+    serializable_item["parsed_tree"] = tree_to_dict(tree, df)
 
     # Include cfg if provided
     if cfg is not None:
@@ -54,12 +88,6 @@ def dump_sample(item, cfg=None, parser=None, filename="sample_0.json"):
             serializable_item["cfg"] = cfg.__dict__
         else:
             serializable_item["cfg"] = str(cfg)
-
-    if parser is not None:
-        input_ids = serializable_item.get("input_ids")
-        assert input_ids is not None, "input_ids not found in item for parsing"
-        tree = parser.parse(input_ids)
-        serializable_item["parsed_tree"] = tree_to_dict(tree)
 
     with open(filename, "w") as f:
         json.dump(serializable_item, f, indent=None)
