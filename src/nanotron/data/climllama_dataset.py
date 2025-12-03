@@ -21,6 +21,8 @@ from nanotron.config.config import ClimLlamaDatasetsArgs
 from nanotron.logging import log_rank
 from nanotron.parallel import ParallelContext
 
+from nanotron.models.climllama import CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES
+
 from .nemo_dataset.blendable_dataset import BlendableDataset
 from .nemo_dataset.dataset_utils import get_datasets_weights_and_num_samples
 from .nemo_dataset.indexed_dataset import MMapIndexedDataset
@@ -47,7 +49,7 @@ class ClimLlamaDataset(Dataset):
     - var_idx: Variable index (z, t, q, u, v, etc.)
     - res_idx: Resolution level index
     - leadtime_idx: Lead time index in hours
-    - spatial_temporal_features: 7D features [x, y, z, cos_hour, sin_hour, cos_day, sin_day]
+    - spatial_temporal_features: CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES-D features [x, y, z, cos_hour, sin_hour, cos_day, sin_day, log10_level_hPa]
 
     The positional metadata is generated on-the-fly using the WeavedTokensPositionVisitor
     from atmtokenizer, which parses the token sequence using a Lark grammar and extracts
@@ -304,6 +306,27 @@ class ClimLlamaDataset(Dataset):
 
         return mapping
 
+    def _get_log10_level_hPa(self, var_level_name: str) -> float:
+        """Calculate log10(10*level) for a variable name.
+
+        For pressure level variables like "z_500", extracts level (500) and returns log10(10*500).
+        For surface variables like "msl" or "t2m", returns 5.0 (representing surface).
+
+        Args:
+            var_level_name: Variable name with optional level suffix (e.g., "z_500", "msl")
+
+        Returns:
+            log10(10*level) for pressure level variables, or 5.0 for surface variables
+        """
+        parts = var_level_name.rsplit("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            # Pressure level variable like "z_500", "t_750"
+            level = int(parts[1])
+            return np.log10(10.0 * level)
+        else:
+            # Surface variable like "msl", "t2m", "tp"
+            return 5.0
+
     def _build_leadtime_mapping(self) -> Dict[int, int]:
         """Build mapping from leadtime hours to leadtime index.
 
@@ -441,7 +464,7 @@ class ClimLlamaDataset(Dataset):
             var_idx = np.zeros(n_tokens, dtype=np.int64)
             res_idx = np.zeros(n_tokens, dtype=np.int64)
             leadtime_idx = np.zeros(n_tokens, dtype=np.int64)
-            spatial_temporal_features = np.zeros((n_tokens, 7), dtype=np.float32)
+            spatial_temporal_features = np.zeros((n_tokens, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES), dtype=np.float32)
 
             # Fill arrays from parsed positions
             for i, (token, pos) in enumerate(leaves):
@@ -472,6 +495,13 @@ class ClimLlamaDataset(Dataset):
                 spatial_temporal_features[i, 5] = pos.get("cos_day_of_year", 0.0)
                 spatial_temporal_features[i, 6] = pos.get("sin_day_of_year", 0.0)
 
+                # Pressure level feature: log10(10*level) in hPa
+                if var_level_idx < len(self.var_level_names):
+                    var_level_name = self.var_level_names[var_level_idx]
+                    spatial_temporal_features[i, 7] = self._get_log10_level_hPa(var_level_name)
+                else:
+                    spatial_temporal_features[i, 7] = 5.0  # Default to surface level
+
         except Exception as e:
             # If parsing fails, return default zero arrays
             log_rank(
@@ -483,7 +513,7 @@ class ClimLlamaDataset(Dataset):
             var_idx = np.zeros(n_tokens, dtype=np.int64)
             res_idx = np.zeros(n_tokens, dtype=np.int64)
             leadtime_idx = np.zeros(n_tokens, dtype=np.int64)
-            spatial_temporal_features = np.zeros((n_tokens, 7), dtype=np.float32)
+            spatial_temporal_features = np.zeros((n_tokens, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES), dtype=np.float32)
 
         return {
             "var_idx": var_idx,

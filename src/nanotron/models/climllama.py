@@ -40,6 +40,9 @@ from nanotron.scaling.parametrization import SpectralMupParametrizator, Standard
 
 logger = logging.get_logger(__name__)
 
+# Number of spatial-temporal features: [x, y, z, cos_hour, sin_hour, cos_day, sin_day, log10_level_hPa]
+CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES = 8
+
 
 class ClimLlamaEmbedding(nn.Module):
     """Custom embedding layer for ClimLlama that combines multiple position encodings.
@@ -106,10 +109,9 @@ class ClimLlamaEmbedding(nn.Module):
 
         # Continuous spatial-temporal encoding
         if config.use_spatial_temporal_encoding:
-            # MLP to project 7D spatial-temporal features to hidden_size
-            # Input: [x, y, z, cos_hour, sin_hour, cos_day, sin_day]
+            # MLP to project spatial-temporal features to hidden_size
             self.spatial_temporal_proj = nn.Linear(
-                in_features=7,
+                in_features=CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES,
                 out_features=config.spatial_temporal_encoding_dim,
                 bias=True,
             )
@@ -127,7 +129,7 @@ class ClimLlamaEmbedding(nn.Module):
         var_idx: Optional[torch.Tensor] = None,  # [batch, seq_len]
         res_idx: Optional[torch.Tensor] = None,  # [batch, seq_len]
         leadtime_idx: Optional[torch.Tensor] = None,  # [batch, seq_len]
-        spatial_temporal_features: Optional[torch.Tensor] = None,  # [batch, seq_len, 7]
+        spatial_temporal_features: Optional[torch.Tensor] = None,  # [batch, seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES]
     ) -> Dict[str, torch.Tensor]:
         # Flatten input_ids for embedding lookup
         input_ids_flat = input_ids.view(-1)  # [batch*seq_len]
@@ -152,7 +154,7 @@ class ClimLlamaEmbedding(nn.Module):
 
         # Add continuous spatial-temporal encoding
         if self.config.use_spatial_temporal_encoding and spatial_temporal_features is not None:
-            spatial_temporal_flat = spatial_temporal_features.view(-1, 7)  # [batch*seq_len, 7]
+            spatial_temporal_flat = spatial_temporal_features.view(-1, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES)
             spatial_embeds = self.activation(self.spatial_temporal_proj(spatial_temporal_flat))
             spatial_embeds = self.spatial_temporal_proj2(spatial_embeds)  # [batch*seq_len, hidden]
             token_embeds = token_embeds + spatial_embeds
@@ -259,7 +261,7 @@ class ClimLlamaModel(nn.Module):
         var_idx: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         res_idx: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
         leadtime_idx: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length]
-        spatial_temporal_features: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length, 7]
+        spatial_temporal_features: Union[torch.Tensor, TensorPointer],  # [batch_size, seq_length, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES]
     ):
         # Get embeddings with climate-specific position encodings
         output = self.token_position_embeddings(

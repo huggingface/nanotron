@@ -34,7 +34,7 @@ def dump_sample(item, parser, cfg=None, filename="sample_0.json"):
             "var_idx": positions["var_idx"],
             "res_idx": positions["res_idx"],
             "leadtime_idx": positions["leadtime_idx"],
-            "spatial_temporal_features": List[Tuple[grid_x, grid_y, grid_z, cos_hour, sin_hour, cos_day, sin_day]],
+            "spatial_temporal_features": List[Tuple[grid_x, grid_y, grid_z, cos_hour, sin_hour, cos_day, sin_day, log10_level_hPa]],
     }
     """
 
@@ -62,7 +62,7 @@ def dump_sample(item, parser, cfg=None, filename="sample_0.json"):
                 # Expand 2D arrays into separate columns
                 for i in range(value.shape[1]):
                     if key == "spatial_temporal_features":
-                        col_names = ["x", "y", "z", "cos_hour", "sin_hour", "cos_day", "sin_day"]
+                        col_names = ["x", "y", "z", "cos_hour", "sin_hour", "cos_day", "sin_day", "log10_level_hPa"]
                         col_name = f"{key}_{col_names[i]}" if i < len(col_names) else f"{key}_{i}"
                     else:
                         col_name = f"{key}_{i}"

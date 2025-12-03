@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from nanotron import distributed as dist
+from nanotron.models.climllama import CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
 
@@ -23,7 +24,7 @@ class DataCollatorForClimLlama:
     - Variable index (var_idx)
     - Resolution index (res_idx)
     - Lead time index (leadtime_idx)
-    - Spatial-temporal features (7D continuous features)
+    - Spatial-temporal features (CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES-D continuous features)
 
     The collator handles pipeline parallelism by returning TensorPointers for
     ranks that don't need the data.
@@ -56,7 +57,7 @@ class DataCollatorForClimLlama:
                 - var_idx: Variable indices [seq_len + 1]
                 - res_idx: Resolution indices [seq_len + 1]
                 - leadtime_idx: Lead time indices [seq_len + 1]
-                - spatial_temporal_features: 7D features [seq_len + 1, 7]
+                - spatial_temporal_features: [seq_len + 1, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES]
 
         Returns:
             Dict with batched tensors or TensorPointers:
@@ -65,7 +66,7 @@ class DataCollatorForClimLlama:
                 - var_idx: [batch, seq_len]
                 - res_idx: [batch, seq_len]
                 - leadtime_idx: [batch, seq_len]
-                - spatial_temporal_features: [batch, seq_len, 7]
+                - spatial_temporal_features: [batch, seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES]
                 - label_ids: [batch, seq_len]
                 - label_mask: [batch, seq_len]
         """
