@@ -12,14 +12,16 @@ import torch.distributed as dist
 from dataclasses import dataclass
 from typing import Optional
 from unittest.mock import MagicMock
+import nanotron.mock_flash_attn  # Ensure flash_attn is available
 
 
-def dump_sample(item, parser, cfg=None, filename="sample_0.json"):
+def dump_sample(item, parser, var_level_names, cfg=None, filename="sample_0.json"):
     """Dump dataset sample contents to a JSON file.
 
     Args:
         item: A dataset sample (e.g., dataset[0])
         parser: Lark parser to parse tokens into a tree
+        var_level_names: List of variable level names for interpretation
         cfg: Optional dataset configuration to include in the dump
         filename: Output JSON filename (default: sample_0.json)
     """
@@ -70,7 +72,7 @@ def dump_sample(item, parser, cfg=None, filename="sample_0.json"):
     df = pd.DataFrame(data)
 
     # Convert DataFrame to dict for JSON serialization
-    serializable_item = {} #df.to_dict(orient="list")
+    serializable_item = {"var_level_name": var_level_names} #df.to_dict(orient="list")
 
     assert parser is not None, "Parser is required for parsing input_ids"
     input_ids = item.get("input_ids")
@@ -209,7 +211,7 @@ def test_climllama_dataset():
     # Test __getitem__
     print("\n4. Testing __getitem__ with whole documents...")
     item = dataset[0]
-    dump_sample(item, cfg=cfg, parser=dataset.parser, filename="sample_0.json")
+    dump_sample(item, cfg=cfg, var_level_names=dataset.var_level_names, parser=dataset.parser, filename="sample_0.json")
     print(f"   Item keys: {item.keys()}")
     print(f"   input_ids shape: {item['input_ids'].shape}")
     print(f"   var_idx shape: {item['var_idx'].shape}")

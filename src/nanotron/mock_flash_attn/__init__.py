@@ -22,6 +22,9 @@ from nanotron.mock_flash_attn import flash_attn_interface
 from nanotron.mock_flash_attn import layers
 from nanotron.mock_flash_attn import ops
 from nanotron.mock_flash_attn import modules
+from nanotron.mock_flash_attn import ring_attention
+from nanotron.mock_flash_attn import llama3_ring_attention
+from nanotron.mock_flash_attn import grouped_gemm
 
 __all__ = [
     "bert_padding",
@@ -29,6 +32,9 @@ __all__ = [
     "layers",
     "ops",
     "modules",
+    "ring_attention",
+    "llama3_ring_attention",
+    "grouped_gemm",
     "__version__",
     "install_mock_flash_attn",
     "is_mock_enabled",
@@ -84,6 +90,10 @@ def install_mock_flash_attn(force: bool = False) -> bool:
     sys.modules["flash_attn.ops.triton.layer_norm"] = mock_pkg.ops.triton.layer_norm
     sys.modules["flash_attn.modules"] = mock_pkg.modules
     sys.modules["flash_attn.modules.mha"] = mock_pkg.modules.mha
+    sys.modules["nanotron.nn.ring_attention"] = mock_pkg.ring_attention
+    sys.modules["nanotron.nn.llama3_ring_attention"] = mock_pkg.llama3_ring_attention
+    sys.modules["grouped_gemm"] = mock_pkg.grouped_gemm
+    sys.modules["grouped_gemm.ops"] = mock_pkg.grouped_gemm.ops
 
     _mock_installed = True
     print(f"[nanotron] Mock flash_attn installed (CUDA available: {is_cuda_available()})")

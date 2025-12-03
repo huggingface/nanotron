@@ -310,3 +310,175 @@ def flash_attn_qkvpacked_func(
         deterministic=deterministic,
         return_attn_probs=return_attn_probs,
     )
+
+
+def _flash_attn_varlen_forward(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    max_seqlen_q: int,
+    max_seqlen_k: int,
+    dropout_p: float = 0.0,
+    softmax_scale: Optional[float] = None,
+    causal: bool = False,
+    window_size: Optional[Tuple[int, int]] = None,
+    window_size_left: int = -1,
+    window_size_right: int = -1,
+    softcap: float = 0.0,
+    alibi_slopes: Optional[torch.Tensor] = None,
+    return_softmax: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Mock implementation of _flash_attn_varlen_forward (internal forward function).
+
+    Returns:
+        out: Output tensor
+        softmax_lse: Log-sum-exp of attention weights
+        S_dmask: Dropout mask (None in mock)
+        rng_state: RNG state (None in mock)
+    """
+    # Use the public varlen function
+    ws = window_size if window_size is not None else (window_size_left, window_size_right)
+    out = flash_attn_varlen_func(
+        q, k, v,
+        cu_seqlens_q, cu_seqlens_k,
+        max_seqlen_q, max_seqlen_k,
+        dropout_p=dropout_p,
+        softmax_scale=softmax_scale,
+        causal=causal,
+        window_size=ws,
+        alibi_slopes=alibi_slopes,
+        deterministic=False,
+        return_attn_probs=False,
+    )
+
+    # Compute softmax_lse (log-sum-exp) - simplified mock
+    # Shape should be (batch_size, num_heads, max_seqlen_q) or (num_heads, total_seqlen)
+    num_heads = q.shape[1]
+    total_q = q.shape[0]
+    batch_size = len(cu_seqlens_q) - 1
+    head_dim = q.shape[2]
+
+    scale = softmax_scale if softmax_scale is not None else (1.0 / math.sqrt(head_dim))
+
+    # Create a dummy softmax_lse - in real flash attention this tracks the log-sum-exp
+    # for numerically stable softmax computation across blocks
+    # Shape: (num_heads, total_seqlen)
+    softmax_lse = torch.zeros((num_heads, total_q), dtype=torch.float32, device=q.device)
+
+    # Return format: (out, softmax_lse, S_dmask, rng_state) - 4 outputs
+    return out, softmax_lse, None, None
+
+
+def _flash_attn_varlen_backward(
+    dout: torch.Tensor,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    out: torch.Tensor,
+    softmax_lse: torch.Tensor,
+    dq: torch.Tensor,
+    dk: torch.Tensor,
+    dv: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    max_seqlen_q: int,
+    max_seqlen_k: int,
+    dropout_p: float = 0.0,
+    softmax_scale: Optional[float] = None,
+    causal: bool = False,
+    window_size: Optional[Tuple[int, int]] = None,
+    window_size_left: int = -1,
+    window_size_right: int = -1,
+    softcap: float = 0.0,
+    alibi_slopes: Optional[torch.Tensor] = None,
+    deterministic: bool = False,
+    rng_state: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Mock implementation of _flash_attn_varlen_backward (internal backward function).
+
+    This is a simplified mock that computes gradients using standard attention.
+    In production, the real flash attention backward pass is highly optimized.
+
+    The gradients are written in-place to dq, dk, dv.
+    """
+    device = q.device
+    dtype = q.dtype
+    num_heads = q.shape[1]
+    head_dim = q.shape[2]
+    num_kv_heads = k.shape[1]
+    batch_size = len(cu_seqlens_q) - 1
+
+    scale = softmax_scale if softmax_scale is not None else (1.0 / math.sqrt(head_dim))
+    ws = window_size if window_size is not None else (window_size_left, window_size_right)
+
+    # Process each sequence in the batch
+    for i in range(batch_size):
+        q_start, q_end = cu_seqlens_q[i].item(), cu_seqlens_q[i + 1].item()
+        k_start, k_end = cu_seqlens_k[i].item(), cu_seqlens_k[i + 1].item()
+        q_len = q_end - q_start
+        k_len = k_end - k_start
+
+        # Extract sequence
+        q_seq = q[q_start:q_end]  # [q_len, num_heads, head_dim]
+        k_seq = k[k_start:k_end]  # [k_len, num_kv_heads, head_dim]
+        v_seq = v[k_start:k_end]  # [k_len, num_kv_heads, head_dim]
+        dout_seq = dout[q_start:q_end]  # [q_len, num_heads, head_dim]
+        out_seq = out[q_start:q_end]  # [q_len, num_heads, head_dim]
+
+        # Transpose for matmul: [num_heads, seq_len, head_dim]
+        q_t = q_seq.transpose(0, 1).float()
+        k_t = k_seq.transpose(0, 1).float()
+        v_t = v_seq.transpose(0, 1).float()
+        dout_t = dout_seq.transpose(0, 1).float()
+        out_t = out_seq.transpose(0, 1).float()
+
+        # Handle GQA
+        if num_kv_heads != num_heads:
+            num_groups = num_heads // num_kv_heads
+            k_t = k_t.repeat_interleave(num_groups, dim=0)
+            v_t = v_t.repeat_interleave(num_groups, dim=0)
+
+        # Compute attention scores
+        scores = torch.matmul(q_t, k_t.transpose(-2, -1)) * scale  # [num_heads, q_len, k_len]
+
+        # Apply causal mask if needed
+        if causal:
+            mask = torch.triu(torch.ones(q_len, k_len, device=device), diagonal=1).bool()
+            scores = scores.masked_fill(mask, float('-inf'))
+
+        # Softmax
+        attn_weights = F.softmax(scores, dim=-1)  # [num_heads, q_len, k_len]
+
+        # Gradient of output w.r.t. attention weights and values
+        # dL/dV = attn_weights^T @ dout
+        dv_t = torch.matmul(attn_weights.transpose(-2, -1), dout_t)  # [num_heads, k_len, head_dim]
+
+        # dL/d(attn_weights) = dout @ V^T
+        d_attn = torch.matmul(dout_t, v_t.transpose(-2, -1))  # [num_heads, q_len, k_len]
+
+        # Gradient through softmax: d_scores = attn * (d_attn - sum(attn * d_attn, dim=-1, keepdim=True))
+        d_scores = attn_weights * (d_attn - (attn_weights * d_attn).sum(dim=-1, keepdim=True))
+        d_scores = d_scores * scale
+
+        # dL/dQ = d_scores @ K
+        dq_t = torch.matmul(d_scores, k_t)  # [num_heads, q_len, head_dim]
+
+        # dL/dK = d_scores^T @ Q
+        dk_t = torch.matmul(d_scores.transpose(-2, -1), q_t)  # [num_heads, k_len, head_dim]
+
+        # Handle GQA for gradients - sum over groups
+        if num_kv_heads != num_heads:
+            num_groups = num_heads // num_kv_heads
+            dk_t = dk_t.view(num_kv_heads, num_groups, k_len, head_dim).sum(dim=1)
+            dv_t = dv_t.view(num_kv_heads, num_groups, k_len, head_dim).sum(dim=1)
+
+        # Transpose back and write to output buffers
+        dq[q_start:q_end] = dq_t.transpose(0, 1).to(dtype)
+        dk[k_start:k_end] = dk_t.transpose(0, 1).to(dtype)
+        dv[k_start:k_end] = dv_t.transpose(0, 1).to(dtype)
+
+    return dq, dk, dv
