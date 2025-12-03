@@ -3,8 +3,55 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TokenWeaver Parse Tree Viewer</title>
+    <title>WeavedTokens Parse Tree Viewer</title>
     <style>
+        :root {
+            --bg: #1a1a2e;
+            --text: #eee;
+            --panel-bg: #16213e;
+            --panel-border: #333;
+            --header-bg: #a9a2e2;
+            --header-text: #fff;
+            --header-subtext: rgba(255, 255, 255, 0.85);
+            --accent: #e94560;
+            --heading-contrast: #0f3460;
+            --legend-bg: rgba(0, 0, 0, 0.3);
+            --muted-bg: rgba(0, 0, 0, 0.2);
+            --input-bg: #0f1327;
+            --input-text: #eee;
+            --tooltip-bg: #16213e;
+            --codebook-bg: #2d3436;
+            --codebook-border: #636e72;
+            --codebook-text: #eee;
+            --connector: #444;
+            --info-value: #fff;
+            --muted-text: #666;
+            --config-heading: #38ef7d;
+        }
+
+        body.light-mode {
+            --bg: #f5f7fb;
+            --text: #1f2937;
+            --panel-bg: #ffffff;
+            --panel-border: #d1d5db;
+            --header-bg: #4f46e5;
+            --header-text: #fff;
+            --header-subtext: rgba(255, 255, 255, 0.85);
+            --accent: #e94560;
+            --heading-contrast: #fff;
+            --legend-bg: rgba(0, 0, 0, 0.05);
+            --muted-bg: rgba(0, 0, 0, 0.04);
+            --input-bg: #f3f4f6;
+            --input-text: #111827;
+            --tooltip-bg: #ffffff;
+            --codebook-bg: #4b5563;
+            --codebook-border: #9ca3af;
+            --codebook-text: #f9fafb;
+            --connector: #cbd5e1;
+            --info-value: #111827;
+            --muted-text: #6b7280;
+            --config-heading: #1d7a4e;
+        }
         * {
             margin: 0;
             padding: 0;
@@ -12,9 +59,10 @@
         }
 
         body {
-            font-family: 'Courier New', monospace;
-            background: #1a1a2e;
-            color: #eee;
+            font-family: "Lucida Grande","Segoe UI", "Noto Sans", sans-serif;
+            font-weight: 100;
+            background: var(--bg);
+            color: var(--text);
             height: 100vh;
             overflow: hidden;
         }
@@ -28,20 +76,20 @@
             width: 70%;
             overflow: auto;
             padding: 20px;
-            border-right: 2px solid #333;
+            border-right: 2px solid var(--panel-border);
         }
 
         .info-panel {
             width: 30%;
             padding: 20px;
-            background: #16213e;
+            background: var(--panel-bg);
             overflow: auto;
         }
 
         .info-panel h2 {
-            color: #e94560;
+            color: var(--accent);
             margin-bottom: 15px;
-            border-bottom: 1px solid #e94560;
+            border-bottom: 1px solid var(--accent);
             padding-bottom: 10px;
         }
 
@@ -50,8 +98,8 @@
         }
 
         .info-section h3 {
-            color: #0f3460;
-            background: #e94560;
+            color: var(--heading-contrast);
+            background: var(--accent);
             padding: 5px 10px;
             margin-bottom: 10px;
             border-radius: 3px;
@@ -61,16 +109,17 @@
             display: flex;
             justify-content: space-between;
             padding: 5px 0;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid var(--panel-border);
         }
 
         .info-key {
-            color: #7ec8e3;
+            color: #589fb9;
         }
 
         .info-value {
-            color: #fff;
+            color: var(--info-value);
             font-weight: bold;
+            font-family: "Monaco", monospace;
         }
 
         /* Tree structure styling */
@@ -85,7 +134,7 @@
             left: -15px;
             top: 0;
             height: 100%;
-            border-left: 2px solid #444;
+            border-left: 2px solid var(--connector);
         }
 
         .tree-node::after {
@@ -94,7 +143,7 @@
             left: -15px;
             top: 12px;
             width: 15px;
-            border-top: 2px solid #444;
+            border-top: 2px solid var(--connector);
         }
 
         .tree-node:last-child::before {
@@ -117,28 +166,28 @@
 
         /* Node type colors */
         .node-start {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #a9a2e2;
             font-size: 1.2em;
             font-weight: bold;
         }
 
         .node-sequence {
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            background: #24c486;
             color: #000;
         }
 
         .node-next-timestep {
-            background: linear-gradient(135deg, #fc4a1a 0%, #f7b733 100%);
+            background: #fa8026;
             color: #000;
         }
 
         .node-resolution-block {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            background: #28cffe;
             color: #000;
         }
 
         .node-variable-block {
-            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            background: #fca86d;
             color: #000;
         }
 
@@ -146,22 +195,27 @@
             background: #333;
             border: 1px solid #555;
             font-size: 0.9em;
+            color: #fff;
         }
 
         .node-eor, .node-eot, .node-eod {
-            background: linear-gradient(135deg, #e94560 0%, #ff6b6b 100%);
+            font-family: "Monaco", monospace;
+            background: #f45866;
             font-weight: bold;
         }
 
         .node-resolution-id, .node-variable-id, .node-leadtime-id {
-            background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+            font-family: "Monaco", monospace;
+            background: #cea7de;
             color: #000;
         }
 
         .node-codebook-token {
+            font-family: "Monaco", monospace;
             background: #2d3436;
             border: 1px solid #636e72;
             font-size: 0.85em;
+            color: #fff;
         }
 
         /* Expandable nodes */
@@ -189,19 +243,21 @@
         /* Codebook grid */
         .codebook-grid {
             display: grid;
-            gap: 3px;
+            gap: 2px;
             margin: 10px 0 10px 20px;
-            padding: 10px;
-            background: rgba(0,0,0,0.3);
+            padding: 2px;
+            background: var(--legend-bg);
             border-radius: 5px;
         }
 
         .codebook-cell {
-            padding: 4px 6px;
-            background: #2d3436;
-            border: 1px solid #636e72;
-            border-radius: 3px;
-            font-size: 0.75em;
+            font-family: "Monaco", monospace;
+            padding: 1px 1px;
+            background: var(--codebook-bg);
+            border: 1px solid var(--codebook-border);
+            border-radius: 2px;
+            font-size: 0.4em;
+            color: var(--codebook-text);
             text-align: center;
             cursor: pointer;
             transition: all 0.2s;
@@ -222,15 +278,15 @@
 
         /* Connector lines */
         .connector {
-            color: #444;
+            color: var(--connector);
             margin-left: 5px;
         }
 
         /* Hover tooltip */
         .tooltip {
             position: fixed;
-            background: #16213e;
-            border: 2px solid #e94560;
+            background: var(--tooltip-bg);
+            border: 2px solid var(--accent);
             border-radius: 8px;
             padding: 15px;
             max-width: 600px;
@@ -246,7 +302,7 @@
         }
 
         .tooltip h4 {
-            color: #e94560;
+            color: var(--accent);
             margin-bottom: 10px;
         }
 
@@ -263,18 +319,20 @@
         /* Header */
         .header {
             padding: 15px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--header-bg);
             margin-bottom: 20px;
             border-radius: 8px;
+            color: var(--header-text);
         }
 
         .header h1 {
             font-size: 1.3em;
+            color: inherit;
         }
 
         .header p {
             font-size: 0.9em;
-            opacity: 0.8;
+            color: var(--header-subtext);
             margin-top: 5px;
         }
 
@@ -285,7 +343,7 @@
             gap: 10px;
             margin-bottom: 20px;
             padding: 10px;
-            background: rgba(0,0,0,0.3);
+            background: var(--legend-bg);
             border-radius: 5px;
         }
 
@@ -323,14 +381,14 @@
 
         /* Config panel */
         .config-section {
-            background: rgba(0,0,0,0.2);
+            background: var(--muted-bg);
             padding: 10px;
             border-radius: 5px;
             margin-bottom: 15px;
         }
 
         .config-section h4 {
-            color: #38ef7d;
+            color: var(--config-heading);
             margin-bottom: 8px;
         }
 
@@ -341,14 +399,50 @@
         }
 
         .var-tag, .leadtime-tag, .level-tag {
-            background: #333;
+            background: var(--panel-border);
             padding: 2px 8px;
             border-radius: 3px;
             font-size: 0.8em;
+            color: var(--text);
+        }
+
+        .sort-select {
+            width: 100%;
+            padding: 6px;
+            border-radius: 4px;
+            border: 1px solid var(--panel-border);
+            background: var(--input-bg);
+            color: var(--input-text);
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+
+        .theme-toggle {
+            position: fixed;
+            top: 12px;
+            right: 12px;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            border: 1px solid var(--panel-border);
+            background: var(--panel-bg);
+            color: var(--text);
+            font-size: 1.2em;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+            display: grid;
+            place-items: center;
+            transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+        }
+
+        .theme-toggle:hover {
+            transform: translateY(-1px) scale(1.02);
+            box-shadow: 0 6px 18px rgba(0,0,0,0.3);
         }
     </style>
 </head>
 <body>
+    <button id="theme-toggle" class="theme-toggle" aria-label="Toggle light or dark mode">🌙</button>
     <div class="container">
         <div class="tree-panel">
             <div class="header">
@@ -356,13 +450,13 @@
                 <p>Interactive visualization of weaved token sequences</p>
             </div>
             <div class="legend">
-                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"></div> Start</div>
-                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);"></div> Sequence</div>
-                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #fc4a1a 0%, #f7b733 100%);"></div> Next Timestep</div>
-                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div> Resolution Block</div>
-                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);"></div> Variable Block</div>
-                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);"></div> IDs</div>
-                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(135deg, #e94560 0%, #ff6b6b 100%);"></div> Markers (EOR/EOT/EOD)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #a9a2e2;"></div> Start</div>
+                <div class="legend-item"><div class="legend-color" style="background: #24c486;"></div> Sequence</div>
+                <div class="legend-item"><div class="legend-color" style="background: #fa8026;"></div> Next Timestep</div>
+                <div class="legend-item"><div class="legend-color" style="background: #28cffe;"></div> Resolution Block</div>
+                <div class="legend-item"><div class="legend-color" style="background: #fca86d;"></div> Variable Block</div>
+                <div class="legend-item"><div class="legend-color" style="background: #cea7de;"></div> IDs</div>
+                <div class="legend-item"><div class="legend-color" style="background: #f45866;"></div> Markers (EOR/EOT/EOD)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #2d3436; border: 1px solid #636e72;"></div> Codebook Token</div>
             </div>
             <div id="tree-container">
@@ -373,7 +467,7 @@
             <h2>📊 Token Information</h2>
             <div id="config-info"></div>
             <div id="token-info">
-                <p style="color: #666; font-style: italic;">Hover over or click a token to see details</p>
+                <p style="color: var(--muted-text); font-style: italic;">Hover over or click a token to see details</p>
             </div>
         </div>
     </div>
@@ -385,6 +479,36 @@
         let configData = null;
         let var_level_names = null;
         let levels = null;
+        let variableBlockSort = 'original';
+        const THEME_KEY = 'parse-tree-viewer-theme';
+
+        function applyTheme(theme) {
+            const isLight = theme === 'light';
+            document.body.classList.toggle('light-mode', isLight);
+
+            const toggle = document.getElementById('theme-toggle');
+            if (toggle) {
+                toggle.textContent = isLight ? '🌙' : '☀️';
+                toggle.setAttribute('aria-label', isLight ? 'Switch to dark mode' : 'Switch to light mode');
+            }
+        }
+
+        function initThemeToggle() {
+            const storedTheme = localStorage.getItem(THEME_KEY);
+            const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+            const initialTheme = storedTheme || (prefersLight ? 'light' : 'dark');
+            applyTheme(initialTheme);
+
+            const toggle = document.getElementById('theme-toggle');
+            if (toggle) {
+                toggle.addEventListener('click', () => {
+                    const isLight = document.body.classList.contains('light-mode');
+                    const nextTheme = isLight ? 'dark' : 'light';
+                    applyTheme(nextTheme);
+                    localStorage.setItem(THEME_KEY, nextTheme);
+                });
+            }
+        }
 
         // Load the JSON data
         async function loadData() {
@@ -440,8 +564,24 @@
                     <h4>Codebook Size</h4>
                     <span class="var-tag">${configData.codebook_size}</span>
                 </div>
-                <hr style="border-color: #333; margin: 15px 0;">
+                <div class="config-section">
+                    <h4>Variable Block Sort</h4>
+                    <select id="var-sort-select" class="sort-select">
+                        <option value="original">Original order</option>
+                        <option value="variable">Variable name</option>
+                        <option value="pressure">Pressure level</option>
+                        <option value="entropy">Information entropy</option>
+                    </select>
+                </div>
+                <hr style="border-color: var(--panel-border); margin: 15px 0;">
             `;
+
+            const sortSelect = document.getElementById('var-sort-select');
+            sortSelect.value = variableBlockSort;
+            sortSelect.addEventListener('change', (e) => {
+                variableBlockSort = e.target.value;
+                renderTree();
+            });
         }
 
         function getNodeClass(type) {
@@ -467,6 +607,13 @@
             if (log10_level_hPa == null) return 'N/A';
             if (log10_level_hPa >= 5) return 'sfc';
             return Math.pow(10, log10_level_hPa - 1).toFixed(0);
+        }
+
+        function levelSortValue(levelLabel) {
+            const str = String(levelLabel).toLowerCase();
+            if (str === 'sfc') return 1100;
+            const num = parseFloat(str);
+            return Number.isNaN(num) ? Number.MAX_SAFE_INTEGER : num;
         }
 
         function formatTokenInfo(token) {
@@ -536,22 +683,59 @@
             }
         }
 
-        function createCodebookGrid(tokens) {
+        function computeEntropy(freqMap, total) {
+            if (!total) return 0;
+            let entropy = 0;
+            Object.values(freqMap).forEach(count => {
+                const p = count / total;
+                entropy -= p * Math.log2(p);
+            });
+            return entropy;
+        }
+
+        function getVariableBlockStats(block) {
+            const varIdNode = block.children[0];
+            const varIdToken = varIdNode.children[0];
+            const varIdx = Math.floor(varIdToken.var_idx);
+            const varName = configData.variables[varIdx] || 'unknown';
+            const levelLabel = log10LevelToHPa(varIdToken.spatial_temporal_features_log10_level_hPa);
+
+            const codebookTokens = block.children.slice(1).filter(c => c.type === 'CODEBOOK_TOKEN');
+            const freqMap = {};
+            codebookTokens.forEach(t => {
+                freqMap[t.token] = (freqMap[t.token] || 0) + 1;
+            });
+            const entropy = computeEntropy(freqMap, codebookTokens.length);
+
+            return {
+                varName,
+                levelLabel,
+                levelValue: levelSortValue(levelLabel),
+                entropy,
+                freqMap,
+                codebookTokens
+            };
+        }
+
+        function createCodebookGrid(tokens, freqMap) {
             const n = tokens.length;
             // Shape: (sqrt(N//2) x 2*sqrt(N//2))
             const cols = Math.ceil(Math.sqrt(n / 2) * 2);
             const rows = Math.ceil(n / cols);
 
             // Calculate frequency within this variable_block
-            const freqMap = {};
-            tokens.forEach(t => {
-                freqMap[t.token] = (freqMap[t.token] || 0) + 1;
-            });
-            const maxLogFreq = Math.log(Math.max(...Object.values(freqMap)) + 1);
+            if (!freqMap) {
+                freqMap = {};
+                tokens.forEach(t => {
+                    freqMap[t.token] = (freqMap[t.token] || 0) + 1;
+                });
+            }
+            const maxFreq = Math.max(...Object.values(freqMap), 0);
+            const maxLogFreq = Math.log(maxFreq + 1) || 1;
 
             const grid = document.createElement('div');
             grid.className = 'codebook-grid';
-            grid.style.gridTemplateColumns = `repeat(${cols}, minmax(40px, 1fr))`;
+            grid.style.gridTemplateColumns = `repeat(${cols}, 25px)`; //minmax(25px, 1fr)
 
             // Map token values to their cells for highlighting
             const cellsByToken = {};
@@ -591,20 +775,25 @@
             return grid;
         }
 
-        function renderVariableBlock(block, container) {
+        function renderVariableBlock(block, container, stats) {
             const wrapper = document.createElement('div');
             wrapper.className = 'tree-node';
 
             // Variable ID
             const varIdNode = block.children[0];
             const varIdToken = varIdNode.children[0];
+            const blockStats = stats || getVariableBlockStats(block);
             const varIdx = Math.floor(varIdToken.var_idx);
-            const varName = configData.variables[varIdx] || 'unknown';
-            const level_hPa = log10LevelToHPa(varIdToken.spatial_temporal_features_log10_level_hPa);
+            const varName = blockStats.varName;
+            const level_hPa = blockStats.levelLabel;
 
             const label = document.createElement('span');
             label.className = 'node-label node-variable-block expandable';
-            label.textContent = `variable_block [${varName} @ ${level_hPa}]`;
+            const codebookTokens = blockStats.codebookTokens;
+            const freqMap = blockStats.freqMap;
+
+            const entropy = blockStats.entropy;
+            label.textContent = `variable_block [${varName} @ ${level_hPa}, ent: ${entropy.toFixed(1)}]`;
 
             const childrenContainer = document.createElement('div');
             childrenContainer.className = 'children-container';
@@ -622,7 +811,6 @@
             childrenContainer.appendChild(varIdWrapper);
 
             // Collect codebook tokens
-            const codebookTokens = block.children.slice(1).filter(c => c.type === 'CODEBOOK_TOKEN');
             if (codebookTokens.length > 0) {
                 const gridWrapper = document.createElement('div');
                 gridWrapper.className = 'tree-node';
@@ -638,7 +826,7 @@
                 gridLabel.textContent = `CODEBOOK_TOKENS (${codebookTokens.length} tokens, ${rows}x${cols} grid)`;
                 gridWrapper.appendChild(gridLabel);
 
-                const grid = createCodebookGrid(codebookTokens);
+                const grid = createCodebookGrid(codebookTokens, freqMap);
                 gridWrapper.appendChild(grid);
                 childrenContainer.appendChild(gridWrapper);
             }
@@ -653,6 +841,33 @@
             container.appendChild(wrapper);
         }
 
+        function getVariableBlocksForResolution(block) {
+            const varBlocks = block.children
+                .map((child, idx) => ({ child, idx }))
+                .filter(({ child }) => child.type === 'variable_block')
+                .map(({ child, idx }) => ({
+                    block: child,
+                    idx,
+                    stats: getVariableBlockStats(child)
+                }));
+
+            const sorted = [...varBlocks];
+            switch (variableBlockSort) {
+                case 'variable':
+                    sorted.sort((a, b) => a.stats.varName.localeCompare(b.stats.varName));
+                    break;
+                case 'pressure':
+                    sorted.sort((a, b) => a.stats.levelValue - b.stats.levelValue);
+                    break;
+                case 'entropy':
+                    sorted.sort((a, b) => b.stats.entropy - a.stats.entropy);
+                    break;
+                default:
+                    sorted.sort((a, b) => a.idx - b.idx);
+            }
+            return sorted;
+        }
+
         function renderResolutionBlock(block, container) {
             const wrapper = document.createElement('div');
             wrapper.className = 'tree-node';
@@ -662,8 +877,7 @@
             const resIdToken = resIdNode.children[0];
             const resIdx = Math.floor(resIdToken.res_idx);
 
-            // Count variable blocks
-            const varBlocks = block.children.filter(c => c.type === 'variable_block');
+            const varBlocks = getVariableBlocksForResolution(block);
 
             const label = document.createElement('span');
             label.className = 'node-label node-resolution-block expandable';
@@ -685,10 +899,8 @@
             childrenContainer.appendChild(resIdWrapper);
 
             // Add variable blocks
-            block.children.forEach(child => {
-                if (child.type === 'variable_block') {
-                    renderVariableBlock(child, childrenContainer);
-                }
+            varBlocks.forEach(entry => {
+                renderVariableBlock(entry.block, childrenContainer, entry.stats);
             });
 
             // Add EOR if present
@@ -853,6 +1065,7 @@
         }
 
         // Initialize
+        initThemeToggle();
         loadData();
     </script>
 </body>
