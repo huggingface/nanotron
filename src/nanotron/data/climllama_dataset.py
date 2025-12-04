@@ -529,7 +529,7 @@ class ClimLlamaDataset(Dataset):
         """
         from atmtokenizer.eval.weaved_tokens_position import get_leaf_positions
 
-        n_tokens = min(len(input_ids), self.seq_length)
+        n_tokens = min(len(input_ids), self.seq_length + 1)
 
         try:
             # Parse the token sequence using the custom lexer
