@@ -187,9 +187,9 @@ class ClimLlamaDataset(Dataset):
         """Load resolution shapes, variable names, and statistics from dataset metadata.
 
         Searches for metadata in the following locations (in order):
-        1. {data_path}/metadata.json
-        2. {data_path.parent}/metadata.json
-        3. {data_prefix}.json (e.g., data/combined_interleave_256/1.json)
+        1. {data_prefix}.json (e.g., data/combined_interleave_256/1.json)
+        2. {data_path}/metadata.json
+        3. {data_path.parent}/metadata.json
 
         Supports two metadata formats:
         1. model_config.resolutions: list of integers [1, 2, 3, ...]
@@ -211,9 +211,9 @@ class ClimLlamaDataset(Dataset):
         # Try different locations for metadata.json
         # Also check {data_prefix}.json (e.g., data/combined_interleave_256/1.json)
         metadata_paths = [
+            Path(f"{data_prefix}.json"),
             data_path / "metadata.json",
             data_path.parent / "metadata.json",
-            Path(f"{data_prefix}.json"),
         ]
 
         metadata = None
