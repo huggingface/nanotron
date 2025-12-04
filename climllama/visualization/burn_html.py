@@ -22,13 +22,12 @@ DATA_URL_VAR = "__BURNED_JSON_DATA_URL__"
 
 def build_script_block(
     b64_payload: str,
-    raw_b64: str,
     source_name: str,
     raw_size: int,
     compressed_size: int,
 ) -> str:
-    """Return the script block that stores the compressed and raw payload on window."""
-    data_url = f"data:application/json;base64,{raw_b64}"
+    """Return the script block that stores the compressed payload on window."""
+    data_url = f"data:application/gzip;base64,{b64_payload}"
     return (
         f"\n<script id=\"{BURNED_SCRIPT_ID}\">\n"
         f"window.__BURNED_JSON_SOURCE__ = \"{source_name}\";\n"
@@ -57,23 +56,21 @@ def inject_script(html: str, script_block: str) -> str:
     return html + script_block
 
 
-def burn(html_path: Path, json_path: Path, output_path: Path) -> tuple[int, int, int]:
+def burn(html_path: Path, json_path: Path, output_path: Path) -> tuple[int, int]:
     raw_bytes = json_path.read_bytes()
-    raw_b64 = base64.b64encode(raw_bytes).decode("ascii")
     compressed = gzip.compress(raw_bytes, compresslevel=9)
     b64_payload = base64.b64encode(compressed).decode("ascii")
 
     html = html_path.read_text(encoding="utf-8")
     script_block = build_script_block(
         b64_payload=b64_payload,
-        raw_b64=raw_b64,
         source_name=json_path.name,
         raw_size=len(raw_bytes),
         compressed_size=len(compressed),
     )
     burned_html = inject_script(html, script_block)
     output_path.write_text(burned_html, encoding="utf-8")
-    return len(raw_bytes), len(compressed), len(raw_b64)
+    return len(raw_bytes), len(compressed)
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,10 +106,10 @@ def main() -> None:
     if not json_path.exists():
         raise SystemExit(f"JSON file not found: {json_path}")
 
-    raw_size, compressed_size, raw_b64_size = burn(html_path, json_path, output_path)
+    raw_size, compressed_size = burn(html_path, json_path, output_path)
     print(
         f"Embedded {json_path.name} into {output_path} "
-        f"(raw: {raw_size} bytes, gzip: {compressed_size} bytes, base64: {raw_b64_size} chars)."
+        f"(raw: {raw_size} bytes, gzip: {compressed_size} bytes)."
     )
 
 

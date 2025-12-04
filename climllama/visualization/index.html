@@ -512,26 +512,38 @@
             }
         }
 
+        async function decompressGzip(uint8Array) {
+            if (typeof DecompressionStream === 'undefined') {
+                throw new Error('DecompressionStream is not available');
+            }
+            const stream = new Blob([uint8Array])
+                .stream()
+                .pipeThrough(new DecompressionStream('gzip'));
+            const buf = await new Response(stream).arrayBuffer();
+            return new Uint8Array(buf);
+        }
+
         async function readBurnedJson() {
             const dataUrl = window[BURNED_DATA_URL_KEY];
             if (dataUrl) {
                 try {
                     const resp = await fetch(dataUrl);
-                    return await resp.json();
+                    const arr = new Uint8Array(await resp.arrayBuffer());
+                    const inflated = await decompressGzip(arr);
+                    const text = new TextDecoder().decode(inflated);
+                    return JSON.parse(text);
                 } catch (err) {
                     console.warn('Failed to read embedded data URL, trying gzip payload.', err);
                 }
             }
 
             const payload = window[BURNED_KEY];
-            if (payload && typeof DecompressionStream !== 'undefined') {
+            if (payload) {
                 try {
                     const clean = payload.replace(/\s+/g, '');
                     const binary = Uint8Array.from(atob(clean), c => c.charCodeAt(0));
-                    const decompressedStream = new Blob([binary])
-                        .stream()
-                        .pipeThrough(new DecompressionStream('gzip'));
-                    const text = await new Response(decompressedStream).text();
+                    const inflated = await decompressGzip(binary);
+                    const text = new TextDecoder().decode(inflated);
                     return JSON.parse(text);
                 } catch (err) {
                     console.warn('Failed to read embedded gzip payload, falling back to fetch.', err);
