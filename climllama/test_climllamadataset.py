@@ -15,87 +15,6 @@ from unittest.mock import MagicMock
 import nanotron.mock_flash_attn  # Ensure flash_attn is available
 
 
-def dump_sample(item, parser, var_level_names, cfg=None, filename="sample_0.json"):
-    """Dump dataset sample contents to a JSON file.
-
-    Args:
-        item: A dataset sample (e.g., dataset[0])
-        parser: Lark parser to parse tokens into a tree
-        var_level_names: List of variable level names for interpretation
-        cfg: Optional dataset configuration to include in the dump
-        filename: Output JSON filename (default: sample_0.json)
-    """
-    from lark.tree import Tree, Token
-    import pandas as pd
-
-    """
-    item schema:
-    {
-            "input_ids": input_ids,
-            "positions": position_ids,
-            "var_idx": positions["var_idx"],
-            "res_idx": positions["res_idx"],
-            "leadtime_idx": positions["leadtime_idx"],
-            "spatial_temporal_features": List[Tuple[grid_x, grid_y, grid_z, cos_hour, sin_hour, cos_day, sin_day, log10_level_hPa]],
-    }
-    """
-
-    def tree_to_dict(node, df):
-        if isinstance(node, Tree):
-            return {
-                "type": node.data,
-                "children": [tree_to_dict(child, df) for child in node.children]
-            }
-        else:   # token
-            assert isinstance(node, Token), f"Expected Token node, got {type(node)}"
-            idx = node.start_pos
-            row_dict = df.iloc[idx].to_dict() if idx < len(df) else {}
-            return {"pos": idx, "token": node.value, "type": node.type, **row_dict}
-
-    # Convert item to DataFrame
-    data = {}
-    for key, value in item.items():
-        if isinstance(value, torch.Tensor):
-            value = value.cpu().numpy()
-        if isinstance(value, np.ndarray):
-            if value.ndim == 1:
-                data[key] = value
-            elif value.ndim == 2:
-                # Expand 2D arrays into separate columns
-                for i in range(value.shape[1]):
-                    if key == "spatial_temporal_features":
-                        col_names = ["x", "y", "z", "cos_hour", "sin_hour", "cos_day", "sin_day", "log10_level_hPa"]
-                        col_name = f"{key}_{col_names[i]}" if i < len(col_names) else f"{key}_{i}"
-                    else:
-                        col_name = f"{key}_{i}"
-                    data[col_name] = value[:, i]
-    df = pd.DataFrame(data)
-
-    # Convert DataFrame to dict for JSON serialization
-    serializable_item = {"var_level_name": var_level_names} #df.to_dict(orient="list")
-
-    assert parser is not None, "Parser is required for parsing input_ids"
-    input_ids = item.get("input_ids")
-    assert input_ids is not None, "input_ids not found in item for parsing"
-    tree = parser.parse(input_ids)
-    serializable_item["parsed_tree"] = tree_to_dict(tree, df)
-
-    # Include cfg if provided
-    if cfg is not None:
-        from dataclasses import asdict, is_dataclass
-
-        if is_dataclass(cfg):
-            serializable_item["cfg"] = asdict(cfg)
-        elif hasattr(cfg, "__dict__"):
-            serializable_item["cfg"] = cfg.__dict__
-        else:
-            serializable_item["cfg"] = str(cfg)
-
-    with open(filename, "w") as f:
-        json.dump(serializable_item, f, indent=None)
-    print(f"   Sample dumped to {filename}")
-
-
 def init_distributed():
     """Initialize distributed environment for single-process testing."""
     os.environ["MASTER_ADDR"] = "localhost"
@@ -193,16 +112,15 @@ def test_climllama_dataset():
     documents = np.arange(start=0, stop=total_num_of_documents, step=1, dtype=np.int32)
 
     dataset = ClimLlamaDataset(
-        cfg=cfg,
+        cfg=cfg, # type: ignore
         tokenizer=tokenizer,
         name="test",
         data_prefix=data_prefix,
         documents=documents,
         indexed_dataset=indexed_dataset,
         num_samples=100,
-        seq_length=256,
         seed=42,
-        parallel_context=parallel_context,
+        parallel_context=parallel_context, # type: ignore
         drop_last=True,
     )
     print(f"   Dataset created successfully!")
@@ -211,7 +129,6 @@ def test_climllama_dataset():
     # Test __getitem__
     print("\n4. Testing __getitem__ with whole documents...")
     item = dataset[0]
-    dump_sample(item, cfg=cfg, var_level_names=dataset.var_level_names, parser=dataset.parser, filename="visualization/sample_0.json")
     print(f"   Item keys: {item.keys()}")
     print(f"   input_ids shape: {item['input_ids'].shape}")
     print(f"   var_idx shape: {item['var_idx'].shape}")
@@ -303,13 +220,12 @@ def test_blendable_climllama_dataset():
     print("\n2. Testing with list of paths (equal weights)...")
     data_prefix_list = [data_prefix_1, data_prefix_2]
     dataset = build_climllama_dataset(
-        cfg=cfg,
+        cfg=cfg, # type: ignore
         tokenizer=tokenizer,
         data_prefix=data_prefix_list,
         num_samples=100,
-        seq_length=256,
         seed=42,
-        parallel_context=parallel_context,
+        parallel_context=parallel_context, # type: ignore
         name="test",
         drop_last=True,
     )
@@ -345,13 +261,12 @@ def test_blendable_climllama_dataset():
     print("\n5. Testing with blended format (70/30 weights)...")
     data_prefix_weighted = [0.7, data_prefix_1, 0.3, data_prefix_2]
     dataset_weighted = build_climllama_dataset(
-        cfg=cfg,
+        cfg=cfg, # type: ignore
         tokenizer=tokenizer,
         data_prefix=data_prefix_weighted,
         num_samples=100,
-        seq_length=256,
         seed=42,
-        parallel_context=parallel_context,
+        parallel_context=parallel_context, # type: ignore
         name="test",
         drop_last=True,
     )
@@ -373,13 +288,12 @@ def test_blendable_climllama_dataset():
     from nanotron.data.climllama_dataset import ClimLlamaDataset
 
     dataset_single = build_climllama_dataset(
-        cfg=cfg,
+        cfg=cfg, # type: ignore
         tokenizer=tokenizer,
         data_prefix=data_prefix_1,
         num_samples=100,
-        seq_length=256,
         seed=42,
-        parallel_context=parallel_context,
+        parallel_context=parallel_context, # type: ignore
         name="test",
         drop_last=True,
     )
@@ -390,13 +304,12 @@ def test_blendable_climllama_dataset():
     # Test 4: List with single prefix (should also return ClimLlamaDataset)
     print("\n7. Testing with list containing single prefix...")
     dataset_single_list = build_climllama_dataset(
-        cfg=cfg,
+        cfg=cfg, # type: ignore
         tokenizer=tokenizer,
         data_prefix=[data_prefix_1],
         num_samples=100,
-        seq_length=256,
         seed=42,
-        parallel_context=parallel_context,
+        parallel_context=parallel_context, # type: ignore
         name="test",
         drop_last=True,
     )

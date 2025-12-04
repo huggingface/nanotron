@@ -179,4 +179,4 @@ data/*/*.json
 data/*/*.npy
 data/*/*.bin
 
-climllama/visualization/sample_0.json
+climllama/visualization/*.json

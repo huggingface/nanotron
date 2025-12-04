@@ -32,7 +32,17 @@ logger = logging.get_logger(__name__)
 
 @dataclass
 class ClimLlamaSubsetSplitLog:
-    """Log information for a ClimLlamaDataset subset."""
+    """Log information for a ClimLlamaDataset subset.
+
+    Attributes:
+        name: Dataset split name (e.g., "train", "valid", "test").
+        data_prefix: Path prefix for the indexed dataset files.
+        num_documents: Total number of documents in this subset.
+        num_samples: Number of samples to generate from this subset.
+        seq_length: Maximum token sequence length for model inputs. This defines
+            the temporal dimension for sequence processing and controls memory
+            usage, context window size, and distributed training coordination.
+    """
 
     name: str
     data_prefix: str
@@ -54,6 +64,27 @@ class ClimLlamaDataset(Dataset):
     The positional metadata is generated on-the-fly using the WeavedTokensPositionVisitor
     from atmtokenizer, which parses the token sequence using a Lark grammar and extracts
     positional information from the parse tree.
+
+    Args:
+        cfg: ClimLlama dataset configuration containing variable names, leadtimes, etc.
+        tokenizer: Tokenizer for encoding/decoding text.
+        name: Dataset split name (e.g., "train", "valid", "test").
+        data_prefix: Path prefix for indexed dataset files (.bin, .idx, .json).
+        documents: Array of document indices to include in this dataset.
+        indexed_dataset: MMapIndexedDataset containing the tokenized data.
+        num_samples: Number of samples to generate from this dataset.
+        seq_length: Maximum token sequence length for model inputs. This parameter
+            defines the temporal dimension for all sequence processing. It controls:
+            - Memory allocation (longer sequences require more GPU memory)
+            - Context window size for attention computations
+            - Distributed training coordination (must align with context parallelism)
+            Note: ClimLlamaDataset returns variable-length documents, but seq_length
+            is stored for compatibility with BlendableDataset and logging purposes.
+            If None, the value is loaded from the dataset's JSON metadata under
+            statistics -> max_sequence_length.
+        seed: Random seed for shuffling documents.
+        parallel_context: Parallel context for distributed training.
+        drop_last: Whether to drop the last incomplete batch (default: True).
     """
 
     def __init__(
@@ -65,16 +96,15 @@ class ClimLlamaDataset(Dataset):
         documents: np.ndarray,
         indexed_dataset: MMapIndexedDataset,
         num_samples: int,
-        seq_length: int,
         seed: int,
         parallel_context: ParallelContext,
+        seq_length: Optional[int] = None,
         drop_last: bool = True,
     ):
         super().__init__()
         self.name = name
         self.folder_path = data_prefix  # For BlendableDataset compatibility
         self.indexed_dataset = indexed_dataset
-        self.seq_length = seq_length
         self.documents = documents
         self.num_samples = num_samples
         self.cfg = cfg
@@ -87,10 +117,22 @@ class ClimLlamaDataset(Dataset):
         self._parser = None
         self._special_tokens = None
 
-        # Load metadata (resolution shapes and variable names)
+        # Load metadata (resolution shapes, variable names, and max_sequence_length)
         metadata = self._load_metadata(data_prefix)
         self.resolution_shapes = metadata["resolution_shapes"]
         self.var_level_names = metadata["variable_names"]
+
+        # Set seq_length from argument or metadata
+        if seq_length is not None:
+            self.seq_length = seq_length
+        else:
+            self.seq_length = metadata["max_sequence_length"]
+            log_rank(
+                f"seq_length not provided, using max_sequence_length={self.seq_length} from metadata",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
 
         # Build var_level to var_idx mapping
         self.var_level_to_var_idx = self._build_var_level_mapping()
@@ -107,7 +149,7 @@ class ClimLlamaDataset(Dataset):
             data_prefix=data_prefix,
             num_documents=len(documents),
             num_samples=num_samples,
-            seq_length=seq_length,
+            seq_length=self.seq_length,
         )
 
     def _build_document_shuffle_idx(
@@ -142,7 +184,7 @@ class ClimLlamaDataset(Dataset):
         return len(self.shuffle_idx)
 
     def _load_metadata(self, data_prefix: str) -> Dict[str, Any]:
-        """Load resolution shapes and variable names from dataset metadata.
+        """Load resolution shapes, variable names, and statistics from dataset metadata.
 
         Searches for metadata in the following locations (in order):
         1. {data_path}/metadata.json
@@ -160,6 +202,7 @@ class ClimLlamaDataset(Dataset):
             - "resolution_shapes": Dict mapping resolution ID to (height, width) tuple
               E.g., {0: (1, 2), 1: (2, 4), 2: (3, 6), ...}
             - "variable_names": List of variable names from metadata (e.g., ["z_500", "t_750", ...])
+            - "max_sequence_length": Maximum sequence length from statistics (int)
         """
         data_path = Path(data_prefix)
         if data_path.is_file():
@@ -218,6 +261,15 @@ class ClimLlamaDataset(Dataset):
             rank=0,
         )
 
+        # Extract max_sequence_length from statistics (required)
+        statistics = metadata.get("statistics", {})
+        max_sequence_length = statistics.get("max_sequence_length")
+        if max_sequence_length is None:
+            raise ValueError(
+                f"max_sequence_length not found in metadata statistics for data_prefix '{data_prefix}'. "
+                "Metadata must contain a 'statistics.max_sequence_length' field."
+            )
+
         # Try model_config.resolutions (list of integers)
         resolution_values = metadata.get("model_config", {}).get("resolutions", [])
         if resolution_values:
@@ -226,6 +278,7 @@ class ClimLlamaDataset(Dataset):
             return {
                 "resolution_shapes": {i: (n, 2 * n) for i, n in enumerate(resolution_values)},
                 "variable_names": var_level_names,
+                "max_sequence_length": max_sequence_length,
             }
 
         # Try weaver_config.resolutions (list of strings like "1×2", "2×4")
@@ -248,6 +301,7 @@ class ClimLlamaDataset(Dataset):
                 return {
                     "resolution_shapes": resolution_shapes,
                     "variable_names": var_level_names,
+                    "max_sequence_length": max_sequence_length,
                 }
 
         raise ValueError(
@@ -586,10 +640,10 @@ def _build_single_climllama_dataset(
     tokenizer: PreTrainedTokenizerBase,
     data_prefix: str,
     num_samples: int,
-    seq_length: int,
     seed: int,
     parallel_context: ParallelContext,
     name: str = "train",
+    seq_length: Optional[int] = None,
     drop_last: bool = True,
 ) -> ClimLlamaDataset:
     """Build a single ClimLlamaDataset from the given parameters.
@@ -601,10 +655,10 @@ def _build_single_climllama_dataset(
         tokenizer: Tokenizer (for FIM support)
         data_prefix: Path prefix for indexed dataset files
         num_samples: Number of samples to generate
-        seq_length: Sequence length
         seed: Random seed
         parallel_context: Parallel context for distributed training
         name: Dataset name ("train", "valid", "test")
+        seq_length: Sequence length. If None, loaded from metadata statistics.
         drop_last: Whether to drop the last incomplete batch
 
     Returns:
@@ -635,9 +689,9 @@ def _build_single_climllama_dataset(
         documents=documents,
         indexed_dataset=indexed_dataset,
         num_samples=num_samples,
-        seq_length=seq_length,
         seed=seed,
         parallel_context=parallel_context,
+        seq_length=seq_length,
         drop_last=drop_last,
     )
 
@@ -649,10 +703,10 @@ def build_climllama_dataset(
     tokenizer: PreTrainedTokenizerBase,
     data_prefix: Union[str, List[str]],
     num_samples: int,
-    seq_length: int,
     seed: int,
     parallel_context: ParallelContext,
     name: str = "train",
+    seq_length: Optional[int] = None,
     drop_last: bool = True,
 ) -> Union[ClimLlamaDataset, BlendableDataset]:
     """Build a ClimLlamaDataset or BlendableDataset from the given parameters.
@@ -670,10 +724,10 @@ def build_climllama_dataset(
             - A list of paths with equal weights (e.g., ["data/train1", "data/train2"])
             - A blended format list (e.g., [0.7, "data/train1", 0.3, "data/train2"])
         num_samples: Number of samples to generate
-        seq_length: Sequence length
         seed: Random seed
         parallel_context: Parallel context for distributed training
         name: Dataset name ("train", "valid", "test")
+        seq_length: Sequence length. If None, loaded from metadata statistics.
         drop_last: Whether to drop the last incomplete batch
 
     Returns:
@@ -686,10 +740,10 @@ def build_climllama_dataset(
             tokenizer=tokenizer,
             data_prefix=data_prefix,
             num_samples=num_samples,
-            seq_length=seq_length,
             seed=seed,
             parallel_context=parallel_context,
             name=name,
+            seq_length=seq_length,
             drop_last=drop_last,
         )
 
@@ -700,10 +754,10 @@ def build_climllama_dataset(
             tokenizer=tokenizer,
             data_prefix=data_prefix[0],
             num_samples=num_samples,
-            seq_length=seq_length,
             seed=seed,
             parallel_context=parallel_context,
             name=name,
+            seq_length=seq_length,
             drop_last=drop_last,
         )
 
@@ -755,9 +809,9 @@ def build_climllama_dataset(
             tokenizer=tokenizer,
             data_prefix=prefix,
             num_samples=ds_num_samples,
-            seq_length=seq_length,
             seed=seed,
             parallel_context=parallel_context,
+            seq_length=seq_length,
             name=name,
             drop_last=drop_last,
         )
