@@ -481,6 +481,8 @@
         let levels = null;
         let variableBlockSort = 'original';
         const THEME_KEY = 'parse-tree-viewer-theme';
+        const BURNED_KEY = '__BURNED_JSON_GZIP_BASE64__';
+        const BURNED_DATA_URL_KEY = '__BURNED_JSON_DATA_URL__';
 
         function applyTheme(theme) {
             const isLight = theme === 'light';
@@ -510,11 +512,40 @@
             }
         }
 
+        async function readBurnedJson() {
+            const dataUrl = window[BURNED_DATA_URL_KEY];
+            if (dataUrl) {
+                try {
+                    const resp = await fetch(dataUrl);
+                    return await resp.json();
+                } catch (err) {
+                    console.warn('Failed to read embedded data URL, trying gzip payload.', err);
+                }
+            }
+
+            const payload = window[BURNED_KEY];
+            if (payload && typeof DecompressionStream !== 'undefined') {
+                try {
+                    const clean = payload.replace(/\s+/g, '');
+                    const binary = Uint8Array.from(atob(clean), c => c.charCodeAt(0));
+                    const decompressedStream = new Blob([binary])
+                        .stream()
+                        .pipeThrough(new DecompressionStream('gzip'));
+                    const text = await new Response(decompressedStream).text();
+                    return JSON.parse(text);
+                } catch (err) {
+                    console.warn('Failed to read embedded gzip payload, falling back to fetch.', err);
+                }
+            }
+
+            return null;
+        }
+
         // Load the JSON data
         async function loadData() {
             try {
-                const response = await fetch('sample_0.json');
-                const data = await response.json();
+                const embeddedData = await readBurnedJson();
+                const data = embeddedData || await (await fetch('sample_0.json')).json();
                 treeData = data.parsed_tree;
                 configData = data.cfg;
                 var_level_names = data.var_level_name;
@@ -1064,9 +1095,11 @@
             container.appendChild(startWrapper);
         }
 
-        // Initialize
-        initThemeToggle();
-        loadData();
+        // Initialize after DOM is ready so burned payload (if any) is already available
+        document.addEventListener('DOMContentLoaded', () => {
+            initThemeToggle();
+            loadData();
+        });
     </script>
 </body>
 </html>
