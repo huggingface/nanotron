@@ -126,9 +126,9 @@ class ClimLlamaDataset(Dataset):
         if seq_length is not None:
             self.seq_length = seq_length
         else:
-            self.seq_length = metadata["max_sequence_length"]
+            self.seq_length = metadata["max_sequence_length"] - 1
             log_rank(
-                f"seq_length not provided, using max_sequence_length={self.seq_length} from metadata",
+                f"seq_length not provided, using {self.seq_length} = max_sequence_length - 1 from metadata",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,
@@ -652,7 +652,8 @@ class ClimLlamaDataset(Dataset):
         # Generate positions on-the-fly
         positions = self._generate_positions(input_ids, timestamp_0)
         # Generate positions requires full input_ids, so truncate after
-        input_ids = input_ids[: self.seq_length]
+        seq_length = len(positions["var_idx"]) - 1
+        input_ids = input_ids[: seq_length + 1]
 
         # Create position_ids (sequential within the document)
         position_ids = np.arange(len(input_ids), dtype=np.int64)
