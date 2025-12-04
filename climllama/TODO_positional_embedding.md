@@ -40,22 +40,35 @@ Add a new configuration class extending `Qwen2Config`:
 class ClimLlamaConfig(Qwen2Config):
     """Configuration for ClimLlama with climate-specific positional embeddings."""
 
+    is_climllama_config: bool = True  # Differentiate from Qwen2Config
+
     # Absolute positional embedding parameters
     # When setting to false, it should be compatible with Qwen2/Llama Model
     use_absolute_position_embeddings: bool = True
 
+    # Discrete position embedding vocab sizes
     # Always allocate one extra size for position embedding, index 0 for unknown
-    # Embedding dimensions for different position types
-    var_vocab_size: int = 13  # Number of pressure-level and surface-level atmosphere/climate variables
-    variables: List[str] = ["unk", "z", "t", "q", "u", "v", "w", "t2m", "msl", "u10", "v10", "tp", "tp_6h"]
+    # Embedding vocab sizes must be divisible by max_tp
+    var_vocab_size: int = 16  # Number of pressure-level and surface-level atmosphere/climate variables
+    variables: Tuple[str, ...] = (
+        "unk", # index 0 for unknown variable
+        "z", "t", "q", # pressure-level variables
+        "u", "v", "w",
+        "t2m", "msl", "u10", "v10", # surface-level variables
+        "tp", "tp_6h", # 1h and 6h accumulated precipitation
+        "pad0", "pad1", "pad2" # Padding variables if needed
+    )
 
     res_vocab_size: int = 12   # Number of resolution levels
-    leadtime_vocab_size: int = 13  # Embed 12 possible lead times, e.g., 0h, 6h, ..., 72h
-    leadtime_step: str = "6h"
+    leadtime_vocab_size: int = 12  # Embed 12 possible lead times, e.g., 0h, 1h, 3h, 6h, 12h, 1d, 2d, 3d, 5d, 1w, 2w, 1m
+    leadtimes: Tuple[int, ...] = (0, 1, 3, 6, 12, 24, 48, 72, 120, 168, 336, 720)  # in hours
 
     # Spatial-temporal continuous position encoding
     use_spatial_temporal_encoding: bool = True
     spatial_temporal_encoding_dim: int = 128  # Dimension for encoding x,y,z,time features
+
+    # Maximum TP size for embedding vocab padding (ensures checkpoint compatibility across TP sizes)
+    max_tp: int = 4
 ```
 
 **Key Design Decisions**:
@@ -472,7 +485,7 @@ The position arrays contain the following fields per token:
 |-------|------|-------------|
 | var_idx | int | Variable index (0=unknown, 1=z, 2=t, ...) |
 | res_idx | int | Resolution level (0=coarsest, N=finest) |
-| leadtime_idx | int | Lead time in hours from timestamp_0 |
+| leadtime_idx | int | Lead time index into cfg.leadtimes |
 | spatial_temporal_features[:, 0] | float | grid_x = cos(lat)sin(lon), range [-1, 1] |
 | spatial_temporal_features[:, 1] | float | grid_y = cos(lat)cos(lon), range [-1, 1] |
 | spatial_temporal_features[:, 2] | float | grid_z = sin(lat), range [-1, 1] |
@@ -480,6 +493,7 @@ The position arrays contain the following fields per token:
 | spatial_temporal_features[:, 4] | float | sin_hour_of_day, range [-1, 1] |
 | spatial_temporal_features[:, 5] | float | cos_day_of_year, range [-1, 1] |
 | spatial_temporal_features[:, 6] | float | sin_day_of_year, range [-1, 1] |
+| spatial_temporal_features[:, 7] | float | normalized log10(10*level_hPa), range [-1, 1], 1.0 for surface |
 
 ---
 
@@ -620,12 +634,12 @@ model:
 
 #### 4.3 Testing Checklist
 - [x] Test ClimLlamaEmbedding forward pass with all position types
-- [ ] Test ClimLlamaDataset returns correct shapes
-- [ ] Test DataCollatorForClimLlama batching
+- [x] Test ClimLlamaDataset returns correct shapes
+- [x] Test DataCollatorForClimLlama batching
 - [x] Test end-to-end training with small model
 - [x] Verify RoPE still works in attention layers
 - [x] Check tensor parallelism compatibility
-- [ ] Validate position encoding values (x, y, z in [-1, 1], temporal in [-1, 1])
+- [x] Validate position encoding values (x, y, z in [-1, 1], temporal in [-1, 1])
 
 ---
 

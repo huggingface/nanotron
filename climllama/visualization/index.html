@@ -648,8 +648,11 @@
 
         function log10LevelToHPa(log10_level_hPa) {
             if (log10_level_hPa == null) return 'N/A';
-            if (log10_level_hPa >= 5) return 'sfc';
-            return Math.pow(10, log10_level_hPa - 1).toFixed(0);
+
+            // Values are normalized to [-1, 1]; map back to [0, 5] before converting.
+            const scaledLog10 = (log10_level_hPa + 1) * 2.5;
+            if (scaledLog10 >= 5) return 'sfc';
+            return Math.pow(10, scaledLog10 - 1).toFixed(0);
         }
 
         function levelSortValue(levelLabel) {

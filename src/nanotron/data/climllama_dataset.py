@@ -361,25 +361,29 @@ class ClimLlamaDataset(Dataset):
         return mapping
 
     def _get_log10_level_hPa(self, var_level_name: str) -> float:
-        """Calculate log10(10*level) for a variable name.
+        """Calculate normalized log10(10*level) for a variable name.
 
-        For pressure level variables like "z_500", extracts level (500) and returns log10(10*500).
-        For surface variables like "msl" or "t2m", returns 5.0 (representing surface).
+        For pressure level variables like "z_500", extracts level (500) and returns
+        log10(10*500) normalized to [-1, 1] range (assuming raw range [0, 5]).
+        For surface variables like "msl" or "t2m", returns 1.0 (normalized max).
 
         Args:
             var_level_name: Variable name with optional level suffix (e.g., "z_500", "msl")
 
         Returns:
-            log10(10*level) for pressure level variables, or 5.0 for surface variables
+            Normalized log10(10*level) in range [-1, 1], or 1.0 for surface variables
         """
         parts = var_level_name.rsplit("_", 1)
         if len(parts) == 2 and parts[1].isdigit():
             # Pressure level variable like "z_500", "t_750"
             level = int(parts[1])
-            return np.log10(10.0 * level)
+            raw_value = np.log10(10.0 * level)  # Range ~2.0 (10hPa) to ~5.0 (10000hPa)
+            # Normalize from [0, 5] to [-1, 1]: normalized = (raw / 2.5) - 1
+            return (raw_value / 2.5) - 1.0
         else:
             # Surface variable like "msl", "t2m", "tp"
-            return 5.0
+            # Use max value (5.0) normalized to 1.0
+            return 1.0
 
     def _build_leadtime_mapping(self) -> Dict[int, int]:
         """Build mapping from leadtime hours to leadtime index.
@@ -549,12 +553,12 @@ class ClimLlamaDataset(Dataset):
                 spatial_temporal_features[i, 5] = pos.get("cos_day_of_year", 0.0)
                 spatial_temporal_features[i, 6] = pos.get("sin_day_of_year", 0.0)
 
-                # Pressure level feature: log10(10*level) in hPa
+                # Pressure level feature: normalized log10(10*level) in [-1, 1]
                 if var_level_idx < len(self.var_level_names):
                     var_level_name = self.var_level_names[var_level_idx]
                     spatial_temporal_features[i, 7] = self._get_log10_level_hPa(var_level_name)
                 else:
-                    spatial_temporal_features[i, 7] = 5.0  # Default to surface level
+                    spatial_temporal_features[i, 7] = 1.0  # Default to surface level (normalized)
 
         except Exception as e:
             # If parsing fails, return default zero arrays
