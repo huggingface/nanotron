@@ -261,13 +261,30 @@ class ClimLlamaDataset(Dataset):
             rank=0,
         )
 
-        # Extract max_sequence_length from statistics (required)
+        # Extract sequence length statistics (required)
         statistics = metadata.get("statistics", {})
         max_sequence_length = statistics.get("max_sequence_length")
+        min_sequence_length = statistics.get("min_sequence_length")
+
         if max_sequence_length is None:
             raise ValueError(
                 f"max_sequence_length not found in metadata statistics for data_prefix '{data_prefix}'. "
                 "Metadata must contain a 'statistics.max_sequence_length' field."
+            )
+
+        if min_sequence_length is None:
+            raise ValueError(
+                f"min_sequence_length not found in metadata statistics for data_prefix '{data_prefix}'. "
+                "Metadata must contain a 'statistics.min_sequence_length' field."
+            )
+
+        # Verify all documents have equal length (required for DataCollatorForClimLlama)
+        if min_sequence_length != max_sequence_length:
+            raise ValueError(
+                f"ClimLlamaDataset requires all documents to have equal length, but "
+                f"min_sequence_length={min_sequence_length} != max_sequence_length={max_sequence_length} "
+                f"for data_prefix '{data_prefix}'. "
+                "Please ensure all documents in the dataset have the same length."
             )
 
         # Try model_config.resolutions (list of integers)
@@ -503,7 +520,7 @@ class ClimLlamaDataset(Dataset):
         """
         from atmtokenizer.eval.weaved_tokens_position import get_leaf_positions
 
-        n_tokens = len(input_ids)
+        n_tokens = min(len(input_ids), self.seq_length)
 
         try:
             # Parse the token sequence using the custom lexer
@@ -625,6 +642,8 @@ class ClimLlamaDataset(Dataset):
 
         # Generate positions on-the-fly
         positions = self._generate_positions(input_ids, timestamp_0)
+        # Generate positions requires full input_ids, so truncate after
+        input_ids = input_ids[: self.seq_length]
 
         # Create position_ids (sequential within the document)
         position_ids = np.arange(len(input_ids), dtype=np.int64)
