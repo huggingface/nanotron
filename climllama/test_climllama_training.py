@@ -570,6 +570,7 @@ def test_dataset_and_collator(data_prefix: Optional[str] = None):
 def test_end_to_end_training(
     data_prefix: Optional[str] = None,
     checkpoint_path: Optional[str] = None,
+    sequence_length: Optional[int] = None,
     micro_batch_size: int = 2,
     train_steps: int = 5,
 ):
@@ -584,6 +585,7 @@ def test_end_to_end_training(
     Args:
         data_prefix: Path prefix for the indexed dataset. If None, uses default test path.
         checkpoint_path: Path for saving checkpoints. If None, uses a temp directory.
+        sequence_length: Sequence length to pass to the dataset. If None, dataset decides.
         micro_batch_size: Micro batch size for training.
         train_steps: Number of training steps to run.
     """
@@ -604,17 +606,10 @@ def test_end_to_end_training(
         print("Please ensure the test data is available to run this test.")
         return None  # Skip, not fail
 
-    # Get sequence length from dataset metadata
-    metadata_path = f"{data_prefix}.json"
-    if os.path.exists(metadata_path):
-        import json
-        with open(metadata_path) as f:
-            metadata = json.load(f)
-        seq_length = metadata.get("statistics", {}).get("max_sequence_length", 256)
-        print(f"Using sequence length from metadata: {seq_length}")
-    else:
-        seq_length = 256
-        print(f"Metadata not found, using default sequence length: {seq_length}")
+    # Allow explicit override; if None, dataset will use metadata/default
+    seq_length = sequence_length
+    if seq_length is not None:
+        print(f"Using provided sequence length override: {seq_length}")
 
     # Create checkpoint directory (use provided or temp)
     cleanup_checkpoint = False
@@ -701,6 +696,7 @@ def test_end_to_end_training(
             seed=42,
             parallel_context=parallel_context,
             name="train",
+            seq_length=seq_length,
             drop_last=True,
         )
 
@@ -831,7 +827,7 @@ def parse_args():
         "--sequence-length",
         type=int,
         default=None,
-        help="Sequence length for training. If not provided, uses value from dataset metadata."
+        help="Sequence length override to pass to the dataset. If not set, dataset uses metadata."
     )
     parser.add_argument(
         "--micro-batch-size",
@@ -882,6 +878,8 @@ def main():
         print(f"Data prefix: {data_prefix}")
     if args.checkpoint_path:
         print(f"Checkpoint path: {args.checkpoint_path}")
+    if args.sequence_length is not None:
+        print(f"Sequence length: {args.sequence_length}")
     print(f"Micro batch size: {args.micro_batch_size}")
     print(f"Train steps: {args.train_steps}")
 
@@ -906,6 +904,7 @@ def main():
         results["e2e_training"] = test_end_to_end_training(
             data_prefix=data_prefix,
             checkpoint_path=args.checkpoint_path,
+            sequence_length=args.sequence_length,
             micro_batch_size=args.micro_batch_size,
             train_steps=args.train_steps,
         )
