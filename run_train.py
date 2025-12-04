@@ -26,6 +26,8 @@ from nanotron.config import (
     Qwen2Config,
     SFTDatasetsArgs,
 )
+from nanotron.config.config import ClimLlamaDatasetsArgs
+from nanotron.config.models_config import ClimLlamaConfig
 from nanotron.data.dataloader import (
     dummy_infinite_data_generator,
     get_train_dataloader,
@@ -82,6 +84,13 @@ def get_dataloader_from_data_stage(
     """
     assert consumed_train_samples_stage >= 0, "consumed_train_samples_stage should be greater than 0"
     assert num_remaining_train_steps >= 0, "num_remaining_train_steps should be greater than 0"
+
+    # Verify ClimLlamaConfig and ClimLlamaDatasetsArgs occur together
+    if isinstance(trainer.model_config, ClimLlamaConfig) and not isinstance(data.dataset, ClimLlamaDatasetsArgs):
+        raise ValueError(
+            f"ClimLlamaConfig model requires ClimLlamaDatasetsArgs dataset, but got {type(data.dataset).__name__}. "
+            "ClimLlamaConfig and ClimLlamaDatasetsArgs must occur together."
+        )
 
     # First, we need to know which ranks to feed the dataloader to
     input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=trainer.model)
@@ -172,7 +181,8 @@ def get_dataloader_from_data_stage(
                 input_pp_rank=input_pp_rank,
                 output_pp_rank=output_pp_rank,
                 micro_batch_size=trainer.micro_batch_size,
-                consumed_train_samples_stage=consumed_train_samples_stage,
+                #consumed_train_samples_stage=consumed_train_samples_stage,
+                consumed_train_samples=consumed_train_samples_stage,
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
@@ -348,6 +358,88 @@ def get_dataloader_from_data_stage(
         #     dataloader_pin_memory=True,
         # )
         # dist.barrier()
+
+    # Case 5: ClimLlama datasets (must use ClimLlamaConfig model)
+    elif isinstance(data.dataset, ClimLlamaDatasetsArgs):
+        # Verify that ClimLlamaDatasetsArgs is used with ClimLlamaConfig
+        if not isinstance(trainer.model_config, ClimLlamaConfig):
+            raise ValueError(
+                f"ClimLlamaDatasetsArgs requires ClimLlamaConfig model, but got {type(trainer.model_config).__name__}. "
+                "ClimLlamaDataset and ClimLlamaConfig must occur together."
+            )
+
+        log_rank("Using ClimLlama Dataset", logger=logger, level=logging.INFO, rank=0)
+        from nanotron.data.climllama_dataset import build_climllama_dataset
+        from nanotron.data.climllama_collator import DataCollatorForClimLlama
+
+        tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+
+        log_rank(
+            f"[ClimLlama] Creating ClimLlamaDataset with {len(data.dataset.data_prefix)} dataset prefixes and "
+            f"{trainer.config.tokens.train_steps * trainer.global_batch_size} train samples",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
+        start_time = time.time()
+        train_dataset = build_climllama_dataset(
+            cfg=data.dataset,
+            tokenizer=tokenizer,
+            data_prefix=data.dataset.data_prefix,
+            num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+            seed=data.seed,
+            parallel_context=trainer.parallel_context,
+            name="train",
+            seq_length=trainer.sequence_length,
+            drop_last=True,
+        )
+        log_rank(
+            f"[ClimLlama] Time taken to create ClimLlamaDataset: {time.strftime('%M:%S', time.gmtime(time.time() - start_time))} (MM:SS)",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
+        # Create data collator for ClimLlama
+        data_collator = DataCollatorForClimLlama(
+            sequence_length=trainer.sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=trainer.parallel_context,
+            use_doc_masking=getattr(trainer.model_config, "_use_doc_masking", True),
+            cp_return_global_position_ids=True,
+        )
+
+        # Use Megatron sampler for ClimLlamaDataset/BlendableDataset
+        sampler_type = getattr(data.dataset, "sampler_type", "sequential")
+        log_rank(
+            f"Using Megatron sampler type: {sampler_type}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
+        dataloader = get_train_dataloader_with_megatron_sampler(
+            train_dataset=train_dataset,
+            sequence_length=trainer.sequence_length,
+            parallel_context=trainer.parallel_context,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            micro_batch_size=trainer.micro_batch_size,
+            global_batch_size=trainer.global_batch_size,
+            consumed_train_samples=consumed_train_samples_stage,
+            dataloader_num_workers=data.num_loading_workers,
+            seed_worker=data.seed,
+            dataloader_drop_last=True,
+            use_position_ids=True,  # ClimLlama always uses position_ids
+            sampler_type=sampler_type,
+            pad_samples_to_global_batch_size=getattr(
+                data.dataset, "pad_samples_to_global_batch_size", True
+            ),
+            collate_fn=data_collator,
+        )
 
     else:
         raise ValueError(f"Unhandled case of `self.config.data.dataset`. Got: {data.dataset}")
