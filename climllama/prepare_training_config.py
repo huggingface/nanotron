@@ -102,6 +102,7 @@ from nanotron.config import (
     TokenizerArgs,
     TokensArgs,
 )
+from nanotron.config.config import ClimLlamaDatasetsArgs
 from nanotron.config.models_config import ClimLlamaConfig
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
 from nanotron.logging import human_format
@@ -186,6 +187,52 @@ def calculate_parameters(model_config: Qwen2Config) -> int:
     total_params = base_params + ffn_params + attn_params
 
     return total_params
+
+
+def get_codebook_size_from_metadata(data_prefix: str) -> int:
+    """Read codebook_size from dataset metadata JSON file.
+
+    Searches for metadata in the following locations (in order):
+    1. {data_prefix}.json (e.g., data/combined_interleave_256/1.json)
+    2. {data_path}/metadata.json
+    3. {data_path.parent}/metadata.json
+
+    Args:
+        data_prefix: Path prefix for the dataset files
+
+    Returns:
+        codebook_size from weaver_config in metadata
+
+    Raises:
+        ValueError: If metadata or codebook_size not found
+    """
+    data_path = Path(data_prefix)
+    if data_path.is_file():
+        data_path = data_path.parent
+
+    # Try different locations for metadata
+    metadata_paths = [
+        Path(f"{data_prefix}.json"),
+        data_path / "metadata.json",
+        data_path.parent / "metadata.json",
+    ]
+
+    for metadata_path in metadata_paths:
+        if metadata_path.exists():
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+
+            # Try to get codebook_size from weaver_config or root level
+            codebook_size = metadata.get("codebook_size") or metadata.get("weaver_config", {}).get("codebook_size")
+            if codebook_size is not None:
+                print(f"  Found codebook_size={codebook_size} from {metadata_path}")
+                return codebook_size
+
+    raise ValueError(
+        f"Could not find codebook_size in metadata for data_prefix '{data_prefix}'. "
+        f"Searched locations: {[str(p) for p in metadata_paths]}. "
+        "Metadata must contain 'codebook_size' or 'weaver_config.codebook_size'."
+    )
 
 
 def expand_wildcard_paths(path_pattern: str) -> List[str]:
@@ -439,23 +486,54 @@ def create_training_config(
             print(f"  Using {len(parsed_data_prefix)} dataset(s):")
             print_items(parsed_data_prefix, lambda path: f"    - {truncate_path(path)}")
 
+    # Create dataset args based on model type
+    if isinstance(model_config, ClimLlamaConfig):
+        # ClimLlama requires ClimLlamaDatasetsArgs with climate-specific parameters
+        print(f"\n  Using ClimLlamaDatasetsArgs for ClimLlama model")
+
+        # Get codebook_size from the first dataset's metadata
+        # For weighted format, find the first path (skip weights)
+        first_data_prefix = None
+        for item in parsed_data_prefix:
+            if isinstance(item, str):
+                first_data_prefix = item
+                break
+        if first_data_prefix is None:
+            raise ValueError("No valid data prefix found in parsed_data_prefix")
+
+        codebook_size = get_codebook_size_from_metadata(first_data_prefix)
+
+        dataset_args = ClimLlamaDatasetsArgs(
+            data_prefix=parsed_data_prefix,
+            # Copy variable and leadtime configuration from model config
+            variables=model_config.variables,
+            leadtimes=model_config.leadtimes,
+            codebook_size=codebook_size,
+            # Megatron sampler configuration
+            sampler_type=sampler_type,
+            pad_samples_to_global_batch_size=pad_samples_to_global_batch_size,
+        )
+    else:
+        # Standard Qwen2/Llama uses IndexedDatasetsArgs
+        dataset_args = IndexedDatasetsArgs(
+            data_prefix=parsed_data_prefix,
+            splits_string=splits_string,
+            validation_drop_last=True,
+            eod_mask_loss=False,
+            no_seqlen_plus_one_input_tokens=False,
+            index_mapping_dir=index_mapping_dir,
+            skip_warmup=skip_warmup,
+            # Megatron sampler configuration
+            sampler_type=sampler_type,
+            pad_samples_to_global_batch_size=pad_samples_to_global_batch_size,
+        )
+
     data_stages = [
         DatasetStageArgs(
             name="Training Stage",
             start_training_step=1,
             data=DataArgs(
-                dataset=IndexedDatasetsArgs(
-                    data_prefix=parsed_data_prefix,
-                    splits_string=splits_string,
-                    validation_drop_last=True,
-                    eod_mask_loss=False,
-                    no_seqlen_plus_one_input_tokens=False,
-                    index_mapping_dir=index_mapping_dir,
-                    skip_warmup=skip_warmup,
-                    # Megatron sampler configuration
-                    sampler_type=sampler_type,
-                    pad_samples_to_global_batch_size=pad_samples_to_global_batch_size,
-                ),
+                dataset=dataset_args,
                 seed=seed,
             ),
         ),
