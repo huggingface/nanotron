@@ -43,6 +43,13 @@ Usage:
         --output_config config_climllama.yaml \
         --model_type climllama
 
+    # Upgrade a Qwen2/Llama checkpoint to ClimLlama with default configs
+    python climllama/prepare_training_config.py \
+        --checkpoint_path /path/to/qwen2/checkpoint \
+        --data_prefix /path/to/climate/data \
+        --output_config config_climllama.yaml \
+        --upgrade-to-climllama
+
 Arguments:
     --checkpoint_path: Path to the Nanotron checkpoint directory (required)
     --data_prefix: Path prefix to Megatron indexed dataset (.bin/.idx) (required)
@@ -71,6 +78,7 @@ Arguments:
     --no_accumulate_grad_in_fp32: Do not accumulate gradients in FP32 (use native precision)
     --disable_sanity_check: Disable sanity checks (default: False)
     --model_type: Model type to use - 'qwen2' (standard), 'climllama' (with position embedding), or auto-detect (default: auto-detect)
+    --upgrade-to-climllama: Upgrade Qwen2/Llama checkpoint to ClimLlama with default climate-specific configs
 
     Note: zero_stage > 0 is incompatible with accumulate_grad_in_fp32=True (reduce_scatter not implemented)
 """
@@ -170,6 +178,60 @@ def load_model_config(checkpoint_path: str, model_type: Optional[str] = None) ->
     model_config = config_cls(**filtered_config)
 
     return model_config
+
+
+def upgrade_to_climllama_config(base_config: Qwen2Config) -> ClimLlamaConfig:
+    """Upgrade a Qwen2/Llama config to ClimLlamaConfig with default climate-specific settings.
+
+    This function takes a base Qwen2Config and creates a new ClimLlamaConfig that:
+    - Preserves all base model architecture parameters (hidden_size, num_layers, etc.)
+    - Adds ClimLlama-specific positional embedding parameters with defaults
+    - Enables hybrid positional embeddings (absolute + RoPE)
+
+    Args:
+        base_config: The source Qwen2Config to upgrade
+
+    Returns:
+        ClimLlamaConfig with climate-specific defaults added
+    """
+    print("\n  Upgrading Qwen2Config to ClimLlamaConfig...")
+
+    # Get all fields from both configs
+    base_fields = {field.name for field in dataclasses.fields(Qwen2Config)}
+    climllama_fields = {field.name for field in dataclasses.fields(ClimLlamaConfig)}
+
+    # Copy all compatible fields from base config
+    config_dict = {}
+    for field_name in base_fields:
+        if field_name in climllama_fields and hasattr(base_config, field_name):
+            config_dict[field_name] = getattr(base_config, field_name)
+
+    # Get ClimLlama-specific defaults from a default ClimLlamaConfig instance
+    default_climllama = ClimLlamaConfig()
+    climllama_only_fields = climllama_fields - base_fields
+
+    # Apply ClimLlama-specific defaults for fields not in base config
+    for field_name in climllama_only_fields:
+        if hasattr(default_climllama, field_name):
+            config_dict[field_name] = getattr(default_climllama, field_name)
+
+    # Handle tuple conversion for variables and leadtimes
+    if "variables" in config_dict and isinstance(config_dict["variables"], list):
+        config_dict["variables"] = tuple(config_dict["variables"])
+    if "leadtimes" in config_dict and isinstance(config_dict["leadtimes"], list):
+        config_dict["leadtimes"] = tuple(config_dict["leadtimes"])
+
+    # Create the ClimLlamaConfig
+    climllama_config = ClimLlamaConfig(**config_dict)
+
+    print(f"  - Added climate-specific position embeddings:")
+    print(f"    - var_vocab_size: {climllama_config.var_vocab_size}")
+    print(f"    - res_vocab_size: {climllama_config.res_vocab_size}")
+    print(f"    - leadtime_vocab_size: {climllama_config.leadtime_vocab_size}")
+    print(f"    - use_spatial_temporal_encoding: {climllama_config.use_spatial_temporal_encoding}")
+    print(f"    - spatial_temporal_encoding_dim: {climllama_config.spatial_temporal_encoding_dim}")
+
+    return climllama_config
 
 
 def calculate_parameters(model_config: Qwen2Config) -> int:
@@ -338,6 +400,7 @@ def create_training_config(
     accumulate_grad_in_fp32: bool = True,
     disable_sanity_check: bool = False,
     model_type: Optional[str] = None,
+    upgrade_to_climllama: bool = False,
 ) -> Config:
     """Create a training configuration from checkpoint.
 
@@ -368,10 +431,18 @@ def create_training_config(
         accumulate_grad_in_fp32: Accumulate gradients in FP32
         disable_sanity_check: Disable sanity checks
         model_type: Model type override - 'qwen2', 'climllama', or None (auto-detect)
+        upgrade_to_climllama: Upgrade Qwen2/Llama checkpoint to ClimLlama with default configs
     """
 
     # Load model config from checkpoint
     model_config = load_model_config(checkpoint_path, model_type=model_type)
+
+    # Optionally upgrade to ClimLlamaConfig
+    if upgrade_to_climllama:
+        if isinstance(model_config, ClimLlamaConfig):
+            print("  Model is already ClimLlamaConfig, skipping upgrade")
+        else:
+            model_config = upgrade_to_climllama_config(model_config)
 
     # Calculate parameters for logging
     total_params = calculate_parameters(model_config)
@@ -811,6 +882,15 @@ def main():
         "If not specified, auto-detects from checkpoint config.",
     )
 
+    parser.add_argument(
+        "--upgrade-to-climllama",
+        action="store_true",
+        help="Upgrade a Qwen2/Llama checkpoint to ClimLlama model with default climate-specific configs. "
+        "This adds hybrid positional embeddings (variable, resolution, leadtime, spatial-temporal) "
+        "and creates a ClimLlamaDatasetsArgs config. Use this when starting ClimLlama training from "
+        "a pre-trained language model checkpoint.",
+    )
+
     args = parser.parse_args()
 
     # Validate ZeRO stage compatibility with FP32 gradient accumulation
@@ -836,6 +916,8 @@ def main():
     print(f"Tokenizer path: {tokenizer_path}")
     print(f"Data prefix: {args.data_prefix}")
     print(f"Model type: {args.model_type if args.model_type else 'auto-detect'}")
+    if args.upgrade_to_climllama:
+        print(f"Upgrade to ClimLlama: ENABLED (will add climate-specific position embeddings)")
     print(f"Training steps: {args.train_steps}")
     print(f"Learning rate: {args.learning_rate if args.learning_rate else 'auto'}")
     print(f"Parallelism: DP={args.dp}, TP={args.tp}, PP={args.pp}")
@@ -873,6 +955,7 @@ def main():
         accumulate_grad_in_fp32=args.accumulate_grad_in_fp32,
         disable_sanity_check=args.disable_sanity_check,
         model_type=args.model_type,
+        upgrade_to_climllama=args.upgrade_to_climllama,
     )
 
     # Check if output file exists and ask for permission to overwrite
