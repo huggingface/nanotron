@@ -302,18 +302,27 @@ class ClimLlamaDataset(Dataset):
         weaver_resolutions = metadata.get("weaver_config", {}).get("resolutions", [])
         if weaver_resolutions:
             resolution_shapes = {}
-            for i, res_str in enumerate(weaver_resolutions):
+            for i, res_pair in enumerate(weaver_resolutions):
                 # Parse "height×width" format (× is Unicode multiplication sign)
                 # Also handle "heightxwidth" with lowercase x
-                if "×" in res_str:
-                    parts = res_str.split("×")
-                elif "x" in res_str:
-                    parts = res_str.split("x")
-                else:
-                    continue
-                if len(parts) == 2:
+                if isinstance(res_pair, int):
+                    resolution_shapes[i] = (res_pair, 2 * res_pair)
+                elif isinstance(res_pair, (list, tuple)) and len(res_pair) == 2:
+                    resolution_shapes[i] = (int(res_pair[0]), int(res_pair[1]))
+                elif isinstance(res_pair, str):
+                    parts = []
+                    if "×" in res_pair:
+                        parts = res_pair.split("×")
+                    elif "x" in res_pair:
+                        parts = res_pair.split("x")
+                    assert len(parts) == 2, f"Invalid resolution format '{res_pair}'"
                     height, width = int(parts[0]), int(parts[1])
                     resolution_shapes[i] = (height, width)
+                else:
+                    raise ValueError(
+                        f"Invalid resolution format '{res_pair}' in weaver_config.resolutions for data_prefix '{data_prefix}'. "
+                        "Expected formats like '1×2', '2x4', integer, or tuple/list of two integers."
+                    )
             if resolution_shapes:
                 return {
                     "resolution_shapes": resolution_shapes,
