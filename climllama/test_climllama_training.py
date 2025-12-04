@@ -349,6 +349,7 @@ def test_model_forward_pass():
     try:
         # Import model components
         from nanotron.models.climllama import ClimLlamaForTraining
+        from nanotron.models import build_model
         from nanotron.parallel.context import ParallelContext
         from nanotron.config import ParallelismArgs
 
@@ -369,16 +370,21 @@ def test_model_forward_pass():
         print(f"Creating model with config: hidden_size={config.hidden_size}, "
               f"layers={config.num_hidden_layers}, heads={config.num_attention_heads}")
 
-        # Build model
-        model = ClimLlamaForTraining(
-            config=config,
-            parallel_context=parallel_context,
-            parallel_config=parallel_config,
-        )
-
-        # Move to device
+        # Determine device and dtype
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = model.to(device)
+        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
+        # Build model using nanotron's build_model to properly set up pipeline blocks
+        model = build_model(
+            model_builder=lambda: ClimLlamaForTraining(
+                config=config,
+                parallel_context=parallel_context,
+                parallel_config=parallel_config,
+            ),
+            parallel_context=parallel_context,
+            dtype=dtype,
+            device=device,
+        )
 
         # Initialize model weights randomly
         for param in model.parameters():
@@ -395,7 +401,7 @@ def test_model_forward_pass():
         res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_length), device=device)
         leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_length), device=device)
         spatial_temporal_features = torch.randn(
-            batch_size, seq_length, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device=device
+            batch_size, seq_length, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device=device, dtype=dtype
         )
         label_ids = torch.randint(0, config.vocab_size, (batch_size, seq_length), device=device)
         label_mask = torch.ones(batch_size, seq_length, dtype=torch.bool, device=device)
@@ -623,6 +629,7 @@ def test_end_to_end_training(
         init_distributed()
 
         from nanotron.models.climllama import ClimLlamaForTraining
+        from nanotron.models import build_model
         from nanotron.parallel.context import ParallelContext
         from nanotron.config import ParallelismArgs
 
@@ -642,16 +649,21 @@ def test_end_to_end_training(
 
         print(f"Building model: hidden={config.hidden_size}, layers={config.num_hidden_layers}")
 
-        # Build model
-        model = ClimLlamaForTraining(
-            config=config,
-            parallel_context=parallel_context,
-            parallel_config=parallel_config,
-        )
-
-        # Move to device
+        # Determine device and dtype
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = model.to(device)
+        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
+        # Build model using nanotron's build_model to properly set up pipeline blocks
+        model = build_model(
+            model_builder=lambda: ClimLlamaForTraining(
+                config=config,
+                parallel_context=parallel_context,
+                parallel_config=parallel_config,
+            ),
+            parallel_context=parallel_context,
+            dtype=dtype,
+            device=device,
+        )
 
         # Initialize model weights
         for param in model.parameters():
@@ -730,13 +742,22 @@ def test_end_to_end_training(
             if step >= num_steps:
                 break
 
-            # Move batch to device
+            # Move batch to device and convert dtypes as needed
             batch_device = {}
             for k, v in batch.items():
                 if isinstance(v, np.ndarray):
-                    batch_device[k] = torch.from_numpy(v).to(device)
+                    tensor = torch.from_numpy(v)
+                    # Float tensors need correct dtype for model
+                    if tensor.dtype in (torch.float32, torch.float64):
+                        tensor = tensor.to(dtype=dtype, device=device)
+                    else:
+                        tensor = tensor.to(device=device)
+                    batch_device[k] = tensor
                 elif isinstance(v, torch.Tensor):
-                    batch_device[k] = v.to(device)
+                    if v.dtype in (torch.float32, torch.float64):
+                        batch_device[k] = v.to(dtype=dtype, device=device)
+                    else:
+                        batch_device[k] = v.to(device=device)
                 else:
                     batch_device[k] = v
 
