@@ -636,7 +636,7 @@ model:
 - [x] Test ClimLlamaEmbedding forward pass with all position types
 - [x] Test ClimLlamaDataset returns correct shapes
 - [x] Test DataCollatorForClimLlama batching
-- [x] Test end-to-end training with small model
+- [ ] Test end-to-end training with small model
 - [x] Verify RoPE still works in attention layers
 - [x] Check tensor parallelism compatibility
 - [x] Validate position encoding values (x, y, z in [-1, 1], temporal in [-1, 1])
