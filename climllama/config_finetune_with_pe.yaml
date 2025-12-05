@@ -329,8 +329,7 @@ model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
   init_method:
-    scaling_method: NUM_LAYERS
-    std: 0.025
+    use_mup: true
   make_vocab_size_divisible_by: 1
   model_config:
     _attn_implementation: flash_attention_2
