@@ -6,6 +6,7 @@ This module implements the ClimLlama model which extends Qwen2 with:
 - RoPE for relative position encoding (inherited from Qwen2)
 """
 
+import math
 from typing import Dict, Optional, Union
 
 import torch
@@ -42,6 +43,63 @@ logger = logging.get_logger(__name__)
 
 # Number of spatial-temporal features: [x, y, z, cos_hour, sin_hour, cos_day, sin_day, log10_level_hPa]
 CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES = 8
+
+
+class SinusoidalSpatialTemporalEncoding(nn.Module):
+    """Sinusoidal positional encoding for spatial-temporal features.
+
+    Applies sinusoidal encoding to each of the 8 spatial-temporal features
+    in the style of "Attention Is All You Need" (Vaswani et al., 2017).
+
+    For each feature f_i, we generate hidden_size dimensions of encoding:
+        PE(f_i, 2j) = sin(f_i / 10000^(2j/hidden_size))
+        PE(f_i, 2j+1) = cos(f_i / 10000^(2j/hidden_size))
+
+    The final encoding is the average of all feature encodings.
+    """
+
+    def __init__(self, hidden_size: int, num_features: int = CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_features = num_features
+
+        # Precompute the division terms: 10000^(2i/d) for i in [0, d/2)
+        # These are the wavelengths for the sinusoidal functions
+        div_term = torch.exp(
+            torch.arange(0, hidden_size, 2, dtype=torch.float32)
+            * (-math.log(10000.0) / hidden_size)
+        )
+        self.register_buffer("div_term", div_term)
+
+    def forward(self, spatial_temporal_features: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            spatial_temporal_features: [batch*seq_len, num_features] tensor of continuous features
+
+        Returns:
+            [batch*seq_len, hidden_size] tensor of sinusoidal encodings
+        """
+        dtype = spatial_temporal_features.dtype
+
+        # Compute angles for all features at once
+        # spatial_temporal_features: [batch*seq_len, num_features]
+        # div_term: [hidden_size/2]
+        # angles: [batch*seq_len, num_features, hidden_size/2]
+        scale = 2048 # Scale features from [-1, 1] to [-2048, 2048] for matching original PE range
+        angles = spatial_temporal_features.unsqueeze(-1) * self.div_term.to(dtype) * scale
+
+        # Compute sin and cos for all features: [batch*seq_len, num_features, hidden_size/2]
+        sin_enc = torch.sin(angles)
+        cos_enc = torch.cos(angles)
+
+        # Average over features: [batch*seq_len, hidden_size/2]
+        sin_enc = sin_enc.mean(dim=1)
+        cos_enc = cos_enc.mean(dim=1)
+
+        # Interleave sin and cos: [batch*seq_len, hidden_size]
+        encoding = torch.stack([sin_enc, cos_enc], dim=-1).flatten(start_dim=1)
+
+        return encoding
 
 
 class ClimLlamaEmbedding(nn.Module):
@@ -107,20 +165,12 @@ class ClimLlamaEmbedding(nn.Module):
                 mode=tp_mode,
             )
 
-        # Continuous spatial-temporal encoding
+        # Continuous spatial-temporal encoding (sinusoidal)
         if config.use_spatial_temporal_encoding:
-            # MLP to project spatial-temporal features to hidden_size
-            self.spatial_temporal_proj = nn.Linear(
-                in_features=CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES,
-                out_features=config.spatial_temporal_encoding_dim,
-                bias=True,
+            self.spatial_temporal_encoding = SinusoidalSpatialTemporalEncoding(
+                hidden_size=config.hidden_size,
+                num_features=CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES,
             )
-            self.spatial_temporal_proj2 = nn.Linear(
-                in_features=config.spatial_temporal_encoding_dim,
-                out_features=config.hidden_size,
-                bias=True,
-            )
-            self.activation = nn.GELU()
 
     def forward(
         self,
@@ -152,11 +202,10 @@ class ClimLlamaEmbedding(nn.Module):
 
             token_embeds = token_embeds + var_embeds + res_embeds + leadtime_embeds
 
-        # Add continuous spatial-temporal encoding
+        # Add continuous spatial-temporal encoding (sinusoidal)
         if self.config.use_spatial_temporal_encoding and spatial_temporal_features is not None:
             spatial_temporal_flat = spatial_temporal_features.view(-1, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES)
-            spatial_embeds = self.activation(self.spatial_temporal_proj(spatial_temporal_flat))
-            spatial_embeds = self.spatial_temporal_proj2(spatial_embeds)  # [batch*seq_len, hidden]
+            spatial_embeds = self.spatial_temporal_encoding(spatial_temporal_flat)  # [batch*seq_len, hidden]
             token_embeds = token_embeds + spatial_embeds
 
         return {"input_embeds": token_embeds, "position_ids": position_ids}
