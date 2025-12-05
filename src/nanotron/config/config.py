@@ -1,7 +1,7 @@
 import datetime
 import glob
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Dict, List, Optional, Type, Union
 
@@ -244,7 +244,7 @@ class ClimLlamaDatasetsArgs:
     data_prefix: Union[List[str], Dict[str, List[str]]]
     # Variable names for position embeddings (must match model config)
     # These are base variable names like "z", "t", "q", etc. (not "z_500", "t_750")
-    variables: tuple[str, ...] = (
+    variables: List[str] = field(default_factory=lambda: [
         "unk",
         "z",
         "t",
@@ -258,8 +258,8 @@ class ClimLlamaDatasetsArgs:
         "v10",
         "tp",
         "tp_6h",
-    )
-    leadtimes: tuple[int, ...] = (0, 1, 3, 6, 12, 24, 48, 72, 120, 168, 336, 720)  # in hours
+    ])
+    leadtimes: List[int] = field(default_factory=lambda: [0, 1, 3, 6, 12, 24, 48, 72, 120, 168, 336, 720])  # in hours
     splits_string: str = "969,30,1"
     validation_drop_last: bool = True
     skip_warmup: bool = False
