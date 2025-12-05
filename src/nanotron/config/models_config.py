@@ -360,4 +360,4 @@ class ClimLlamaConfig(Qwen2Config):
             )
 
 
-NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Qwen2Config, "ClimLlamaConfig", Any]
+NanotronConfigs = Union[LlamaConfig, Starcoder2Config, Qwen2Config, ClimLlamaConfig, Any]
