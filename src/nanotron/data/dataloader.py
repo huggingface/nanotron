@@ -1,4 +1,4 @@
-from typing import Dict, Iterator, List, Optional, Union
+from typing import Callable, Dict, Iterator, List, Optional, Union
 
 import datasets
 import numpy as np
@@ -392,6 +392,7 @@ def get_train_dataloader_with_megatron_sampler(
     use_position_ids: bool = True,
     sampler_type: str = "sequential",
     pad_samples_to_global_batch_size: bool = False,
+    collate_fn: Optional[Callable] = None,
 ) -> DataLoader:
     """
     Get a PyTorch DataLoader for training using Megatron-style samplers.
@@ -444,8 +445,10 @@ def get_train_dataloader_with_megatron_sampler(
         train_dataset = EmptyInfiniteDataset(length=dataset_length)
         dataloader_num_workers = 0
 
-    # Setup data collator
-    if use_position_ids:
+    # Setup data collator (use provided collate_fn if available)
+    if collate_fn is not None:
+        data_collator = collate_fn
+    elif use_position_ids:
         data_collator = DataCollatorForCLMWithPositionIds(
             sequence_length=sequence_length,
             input_pp_rank=input_pp_rank,
