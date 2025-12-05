@@ -1,6 +1,12 @@
-# ClimLLaMA Training Pipeline
+# ClimLlama Training Pipeline
 
 This directory contains scripts for converting HuggingFace checkpoints to Nanotron format and setting up finetuning configurations.
+
+# Pipeline
+- Convert HF ckpt (Llama) to nanotron (Qwen2): `climllama/convert_hf_to_nt.sh`
+- Prepare config file and upgrade to Climllama model (only introduce Climllama specific configs):  `climllama/prepare_finetune_config.sh`
+- Upgrade Qwen2 ckpt to Climllama ckpt: `climllama/upgrade_ckpt.sh`
+- Run finetuning: `climllama/run_finetune.sh`
 
 ## Workflow Overview
 
