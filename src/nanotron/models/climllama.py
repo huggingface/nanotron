@@ -56,12 +56,23 @@ class SinusoidalSpatialTemporalEncoding(nn.Module):
         PE(f_i, 2j+1) = cos(f_i / 10000^(2j/hidden_size))
 
     The final encoding is the average of all feature encodings.
+
+    When using REDUCE_SCATTER TP mode, the output is scattered along the sequence
+    dimension to match the token embeddings.
     """
 
-    def __init__(self, hidden_size: int, num_features: int = CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_features: int = CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES,
+        tp_pg: Optional[dist.ProcessGroup] = None,
+        tp_mode: Optional[TensorParallelLinearMode] = None,
+    ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_features = num_features
+        self.tp_pg = tp_pg
+        self.tp_mode = tp_mode if tp_mode is not None else TensorParallelLinearMode.ALL_REDUCE
 
         # Precompute the division terms: 10000^(2i/d) for i in [0, d/2)
         # These are the wavelengths for the sinusoidal functions
@@ -77,7 +88,7 @@ class SinusoidalSpatialTemporalEncoding(nn.Module):
             spatial_temporal_features: [batch*seq_len, num_features] tensor of continuous features
 
         Returns:
-            [batch*seq_len, hidden_size] tensor of sinusoidal encodings
+            [batch*seq_len, hidden_size] tensor of sinusoidal encodings (or scattered if REDUCE_SCATTER mode)
         """
         dtype = spatial_temporal_features.dtype
 
@@ -98,6 +109,19 @@ class SinusoidalSpatialTemporalEncoding(nn.Module):
 
         # Interleave sin and cos: [batch*seq_len, hidden_size]
         encoding = torch.stack([sin_enc, cos_enc], dim=-1).flatten(start_dim=1)
+
+        # In REDUCE_SCATTER mode, token embeddings are scattered along the sequence dimension.
+        # We need to slice the spatial encodings to match.
+        if (
+            self.tp_mode == TensorParallelLinearMode.REDUCE_SCATTER
+            and self.tp_pg is not None
+            and self.tp_pg.size() > 1
+        ):
+            tp_rank = dist.get_rank(self.tp_pg)
+            tp_size = self.tp_pg.size()
+            seq_len = encoding.shape[0]
+            chunk_size = seq_len // tp_size
+            encoding = encoding[tp_rank * chunk_size : (tp_rank + 1) * chunk_size]
 
         return encoding
 
@@ -170,6 +194,8 @@ class ClimLlamaEmbedding(nn.Module):
             self.spatial_temporal_encoding = SinusoidalSpatialTemporalEncoding(
                 hidden_size=config.hidden_size,
                 num_features=CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES,
+                tp_pg=tp_pg,
+                tp_mode=tp_mode,
             )
 
     def forward(
