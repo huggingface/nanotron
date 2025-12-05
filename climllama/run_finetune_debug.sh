@@ -8,7 +8,8 @@ WORKDIR=/capstor/scratch/cscs/lhuang/nanotron_climllama
 #export MASTER_PORT=18899
 #export LOCAL_RANK=0
 #ipython -i --pdb $WORKDIR/run_train.py -- --config-file $CONFIG_FILE
-
+export OMP_NUM_THREADS=1
+export NANOTRON_LOGGING_LEVEL=debug
 torchrun --nproc_per_node=4 \
  --node_rank 0 \
  --nnodes=1 \
