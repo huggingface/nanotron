@@ -7,9 +7,6 @@ set -euo pipefail
 CKPT_PATH_NT=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_checkpoints/exp_fsq_245_split_vocab32768/llama_3B_vocab_32768/iter_0204000_nanotron
 TOKENIZER_PATH=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/pretrained_tokenizer
 
-# Output config file
-OUTPUT_CONFIG=climllama/config_finetune.yaml
-
 # Training settings - now using Megatron IndexedDataset
 # DATA_PREFIX should point to your .bin/.idx dataset files (without extension)
 # Supports wildcards: "/path/data_*" or "/path/*" to match multiple files
@@ -23,6 +20,10 @@ SEQUENCE_LENGTH=4096
 SPLITS_STRING="969,30,1"  # Train/val/test split ratios
 INDEX_MAPPING_DIR="/iopsstor/scratch/cscs/lhuang/cache/nanotron-index-mapping"  # Optional: directory to cache index mappings
 SKIP_WARMUP=""  # Optional: add "--skip_warmup" to skip warmup
+UPGRADE_TO_CLIMLLAMA="--upgrade-to-climllama"  # Optional: add "--upgrade-to-climllama" to upgrade checkpoint
+
+# Output config file
+OUTPUT_CONFIG=climllama/config_finetune_with_pe.yaml
 
 # Parallelism settings (adjust based on your GPU count)
 # Keep GBS = 1024
@@ -57,7 +58,8 @@ python climllama/prepare_training_config.py \
     --splits_string $SPLITS_STRING \
     ${INDEX_MAPPING_DIR:+--index_mapping_dir $INDEX_MAPPING_DIR} \
     $SKIP_WARMUP \
-    $DISABLE_SANITY_CHECK
+    $DISABLE_SANITY_CHECK \
+    $UPGRADE_TO_CLIMLLAMA
 
 echo ""
 echo "Config generated successfully!"
