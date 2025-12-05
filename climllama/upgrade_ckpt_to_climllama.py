@@ -84,18 +84,33 @@ def ensure_all_params_are_nanotron(model: torch.nn.Module) -> None:
     are not sharded or tied. This function converts any remaining regular
     Parameters to NanotronParameter.
     """
+    converted_count = 0
     for module_name, module in model.named_modules():
         for param_name, param in list(module.named_parameters(recurse=False)):
             if not isinstance(param, NanotronParameter):
                 # Convert to NanotronParameter
                 new_param = NanotronParameter(tensor=param.data, requires_grad=param.requires_grad)
                 setattr(module, param_name, new_param)
-                log_rank(
-                    f"Converted {module_name}.{param_name} to NanotronParameter",
-                    logger=logger,
-                    level=logging.DEBUG,
-                    rank=0,
-                )
+                converted_count += 1
+                print(f"Converted {module_name}.{param_name} to NanotronParameter")
+
+    # Also check state_dict to find any parameters that might be missed
+    state_dict_keys = set(model.state_dict().keys())
+    for name in state_dict_keys:
+        try:
+            param = model.get_parameter(name)
+            if not isinstance(param, NanotronParameter):
+                print(f"WARNING: {name} is still not NanotronParameter after conversion")
+        except AttributeError:
+            # This is a buffer, not a parameter - that's OK
+            pass
+
+    log_rank(
+        f"Converted {converted_count} parameters to NanotronParameter",
+        logger=logger,
+        level=logging.INFO,
+        rank=0,
+    )
 
 
 def copy_qwen2_weights_to_climllama(
