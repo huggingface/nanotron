@@ -21,7 +21,7 @@ INDEX_MAPPING_DIR="/iopsstor/scratch/cscs/lhuang/cache/nanotron-index-mapping"  
 SKIP_WARMUP=""  # Optional: add "--skip_warmup" to skip warmup
 UPGRADE_TO_CLIMLLAMA="--upgrade-to-climllama"  # Optional: add "--upgrade-to-climllama" to upgrade checkpoint
 
-if [ $UPGRADE_TO_CLIMLLAMA == ""] ; then
+if [ "$UPGRADE_TO_CLIMLLAMA" == "" ] ; then
     OUTPUT_CONFIG=climllama/config_finetune_vanilla_llama.yaml
     DATA_PREFIX="/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/*"
     TOKENIZER_PATH=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/pretrained_tokenizer
