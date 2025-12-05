@@ -110,6 +110,9 @@ class SinusoidalSpatialTemporalEncoding(nn.Module):
         # Interleave sin and cos: [batch*seq_len, hidden_size]
         encoding = torch.stack([sin_enc, cos_enc], dim=-1).flatten(start_dim=1)
 
+        # Ensure output dtype matches input dtype (sin/cos may produce float32)
+        encoding = encoding.to(dtype)
+
         # In REDUCE_SCATTER mode, token embeddings are scattered along the sequence dimension.
         # We need to slice the spatial encodings to match.
         if (
