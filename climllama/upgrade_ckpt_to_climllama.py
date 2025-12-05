@@ -229,10 +229,10 @@ def upgrade_checkpoint(
     )
     mark_tied_parameters(model=climllama_model, parallel_context=parallel_context, parallel_config=parallel_config)
 
-    # Initialize ClimLlama model with random weights
-    climllama_model.init_model_randomly(training_config)
-
     # Copy weights from Qwen2 to ClimLlama
+    # Note: We don't call init_model_randomly() because:
+    # 1. Shared weights (token embeddings, decoder layers, lm_head) will be copied from Qwen2
+    # 2. New CLiMLLaMA embeddings are already initialized during model construction
     log_rank(
         "Copying Qwen2 weights to ClimLlama model",
         logger=logger,
