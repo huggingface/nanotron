@@ -32,6 +32,7 @@ from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.parallel import ParallelContext
 from nanotron.parallel.parameters import NanotronParameter
 from nanotron.serialize.weights import load_weights, save_weights
+from nanotron.trainer import mark_tied_parameters
 
 logger = logging.get_logger(__name__)
 
@@ -194,6 +195,7 @@ def upgrade_checkpoint(
         dtype=model_dtype,
         device=torch.device("cuda"),
     )
+    mark_tied_parameters(model=qwen2_model, parallel_context=parallel_context, parallel_config=parallel_config)
 
     # Load Qwen2 checkpoint
     log_rank(
@@ -225,6 +227,7 @@ def upgrade_checkpoint(
         dtype=model_dtype,
         device=torch.device("cuda"),
     )
+    mark_tied_parameters(model=climllama_model, parallel_context=parallel_context, parallel_config=parallel_config)
 
     # Initialize ClimLlama model with random weights
     climllama_model.init_model_randomly(training_config)
