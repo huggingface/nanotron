@@ -69,7 +69,7 @@ class SinusoidalSpatialTemporalEncoding(nn.Module):
             torch.arange(0, hidden_size, 2, dtype=torch.float32)
             * (-math.log(10000.0) / hidden_size)
         )
-        self.register_buffer("div_term", div_term)
+        self.register_buffer("div_term", div_term, persistent=False)
 
     def forward(self, spatial_temporal_features: torch.Tensor) -> torch.Tensor:
         """
