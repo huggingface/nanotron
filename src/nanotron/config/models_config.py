@@ -325,6 +325,10 @@ class ClimLlamaConfig(Qwen2Config):
     )
 
     res_vocab_size: int = 12  # Number of resolution levels
+    resolutions: List[str] = field(default_factory=lambda: [
+        "1x2", "2x4", "3x6", "4x8", "5x10", "6x12",
+        "8x16", "10x20", "13x26", "16x32", "32x64", "unk"
+    ])  # Resolution strings from weaver_config (latxlon grid sizes), last one is unknown
     leadtime_vocab_size: int = 12  # Embed 12 possible lead times, e.g., 0h, 1h, 3h, 6h, 12h, 1d, 2d, 3d, 5d, 1w, 2w, 1m
     leadtimes: Tuple[int, ...] = (0, 1, 3, 6, 12, 24, 48, 72, 120, 168, 336, 720)  # in hours
 
@@ -345,6 +349,10 @@ class ClimLlamaConfig(Qwen2Config):
         if len(self.leadtimes) != self.leadtime_vocab_size:
             raise ValueError(
                 f"Number of leadtimes ({len(self.leadtimes)}) must match leadtime_vocab_size ({self.leadtime_vocab_size})"
+            )
+        if len(self.resolutions) != self.res_vocab_size:
+            raise ValueError(
+                f"Number of resolutions ({len(self.resolutions)}) must match res_vocab_size ({self.res_vocab_size})"
             )
         if self.var_vocab_size % self.max_tp != 0:
             raise ValueError(
