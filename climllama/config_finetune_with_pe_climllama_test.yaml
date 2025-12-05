@@ -55,9 +55,9 @@ data_stages:
       - pad0
       - pad1
       - pad2
+      shuffle: false
     num_loading_workers: 1
     seed: 42
-    shuffle: false
   name: Training Stage
   sequence_length: 4096
   start_training_step: 1
