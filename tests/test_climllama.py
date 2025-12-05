@@ -213,6 +213,7 @@ def get_small_climllama_config():
         variables=("unk", "t", "q", "u", "v", "w", "z", "sp"),
         res_vocab_size=4,
         leadtime_vocab_size=8,
+        leadtimes=(0, 6, 12, 24, 48, 72, 96, 120),
         spatial_temporal_encoding_dim=32,
         use_absolute_position_embeddings=True,
         use_spatial_temporal_encoding=True,
