@@ -43,6 +43,13 @@ Usage:
         --output_config config_climllama.yaml \
         --model_type climllama
 
+    # Enable muTransfer (Spectral MuP) init and LR scaling
+    python climllama/prepare_training_config.py \
+        --checkpoint_path /path/to/checkpoint \
+        --data_prefix /path/to/data \
+        --output_config config_train.yaml \
+        --mup-init
+
     # Upgrade a Qwen2/Llama checkpoint to ClimLlama with default configs
     python climllama/prepare_training_config.py \
         --checkpoint_path /path/to/qwen2/checkpoint \
@@ -75,10 +82,14 @@ Arguments:
     --wandb_entity: WandB entity/team name (default: None)
     --zero_stage: ZeRO optimizer stage - 0 (disabled), 1 (optimizer states), 2 (+ gradients), 3 (+ parameters) (default: 0)
     --accumulate_grad_in_fp32: Accumulate gradients in FP32 for better numerical stability (default: True)
+    --mup-init: Use spectral muTransfer init (Spectral MuP) instead of standard init (default: False)
     --no_accumulate_grad_in_fp32: Do not accumulate gradients in FP32 (use native precision)
     --disable_sanity_check: Disable sanity checks (default: False)
     --model_type: Model type to use - 'qwen2' (standard), 'climllama' (with position embedding), or auto-detect (default: auto-detect)
     --upgrade-to-climllama: Upgrade Qwen2/Llama checkpoint to ClimLlama with default climate-specific configs
+
+    Caution on Spectral MuP: internal README notes it worked well on 300–350M LLaMA/MLP, but larger runs (1B/8B) blew up.
+    Start small, monitor loss closely, and consider switching back to standard muTransfer if you see instability.
 
     Note: zero_stage > 0 is incompatible with accumulate_grad_in_fp32=True (reduce_scatter not implemented)
 """
@@ -107,6 +118,7 @@ from nanotron.config import (
     ParallelismArgs,
     Qwen2Config,
     RandomInit,
+    SpectralMupInit,
     TokenizerArgs,
     TokensArgs,
 )
@@ -401,6 +413,7 @@ def create_training_config(
     disable_sanity_check: bool = False,
     model_type: Optional[str] = None,
     upgrade_to_climllama: bool = False,
+    mup_init: bool = False,
 ) -> Config:
     """Create a training configuration from checkpoint.
 
@@ -432,6 +445,7 @@ def create_training_config(
         disable_sanity_check: Disable sanity checks
         model_type: Model type override - 'qwen2', 'climllama', or None (auto-detect)
         upgrade_to_climllama: Upgrade Qwen2/Llama checkpoint to ClimLlama with default configs
+        mup_init: Use spectral muTransfer initialization (and per-parameter LR scaling)
     """
 
     # Load model config from checkpoint
@@ -652,7 +666,7 @@ def create_training_config(
         ),
         parallelism=parallelism,
         model=ModelArgs(
-            init_method=RandomInit(std=0.025),
+            init_method=SpectralMupInit(use_mup=True) if mup_init else RandomInit(std=0.025),
             model_config=model_config,
         ),
         tokenizer=TokenizerArgs(tokenizer_name_or_path=tokenizer_path),
@@ -891,6 +905,12 @@ def main():
         "a pre-trained language model checkpoint.",
     )
 
+    parser.add_argument(
+        "--mup-init",
+        action="store_true",
+        help="Use spectral muTransfer init (Spectral MuP) instead of standard init",
+    )
+
     args = parser.parse_args()
 
     # Validate ZeRO stage compatibility with FP32 gradient accumulation
@@ -923,6 +943,7 @@ def main():
     print(f"Parallelism: DP={args.dp}, TP={args.tp}, PP={args.pp}")
     print(f"ZeRO stage: {args.zero_stage}")
     print(f"FP32 gradient accumulation: {args.accumulate_grad_in_fp32}")
+    print(f"MuP init: {args.mup_init}")
     print(f"Splits: {args.splits_string}")
     print(f"Megatron Sampler: {args.sampler_type} (pad_last_batch={args.pad_samples_to_global_batch_size})")
     print()
@@ -956,6 +977,7 @@ def main():
         disable_sanity_check=args.disable_sanity_check,
         model_type=args.model_type,
         upgrade_to_climllama=args.upgrade_to_climllama,
+        mup_init=args.mup_init,
     )
 
     # Check if output file exists and ask for permission to overwrite

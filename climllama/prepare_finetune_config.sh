@@ -20,6 +20,7 @@ SPLITS_STRING="969,30,1"  # Train/val/test split ratios
 INDEX_MAPPING_DIR="/iopsstor/scratch/cscs/lhuang/cache/nanotron-index-mapping"  # Optional: directory to cache index mappings
 SKIP_WARMUP=""  # Optional: add "--skip_warmup" to skip warmup
 UPGRADE_TO_CLIMLLAMA="--upgrade-to-climllama"  # Optional: add "--upgrade-to-climllama" to upgrade checkpoint
+MUP_INIT="--mup-init"  # Optional: add "--mup-init" to use Spectral MuP initialization
 
 if [ "$UPGRADE_TO_CLIMLLAMA" == "" ] ; then
     OUTPUT_CONFIG=climllama/config_finetune_vanilla_llama.yaml
@@ -66,7 +67,8 @@ python climllama/prepare_training_config.py \
     ${INDEX_MAPPING_DIR:+--index_mapping_dir $INDEX_MAPPING_DIR} \
     $SKIP_WARMUP \
     $DISABLE_SANITY_CHECK \
-    $UPGRADE_TO_CLIMLLAMA
+    $UPGRADE_TO_CLIMLLAMA \
+    $MUP_INIT
 
 echo ""
 echo "Config generated successfully!"
