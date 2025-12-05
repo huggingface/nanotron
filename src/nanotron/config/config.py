@@ -268,6 +268,8 @@ class ClimLlamaDatasetsArgs:
     # Megatron sampler configuration
     sampler_type: str = "sequential"  # Options: "sequential", "random", "cyclic"
     pad_samples_to_global_batch_size: bool = True
+    # Whether to shuffle documents within each epoch (default: False for deterministic ordering)
+    shuffle: bool = False
 
 
 @dataclass

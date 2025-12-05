@@ -57,6 +57,7 @@ data_stages:
       - pad2
     num_loading_workers: 1
     seed: 42
+    shuffle: false
   name: Training Stage
   sequence_length: 4096
   start_training_step: 1
@@ -213,5 +214,5 @@ tokens:
   limit_val_batches: 0
   micro_batch_size: 4
   sequence_length: 4096
-  train_steps: 5000
+  train_steps: 3
   val_check_interval: -1

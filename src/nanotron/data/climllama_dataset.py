@@ -109,9 +109,9 @@ class ClimLlamaDataset(Dataset):
         self.num_samples = num_samples
         self.cfg = cfg
 
-        # Build shuffled document indices
+        # Build document indices (shuffled or sequential based on cfg.shuffle)
         np_rng = np.random.RandomState(seed=seed)
-        self.shuffle_idx = self._build_document_shuffle_idx(documents, num_samples, np_rng)
+        self.shuffle_idx = self._build_document_shuffle_idx(documents, num_samples, np_rng, shuffle=cfg.shuffle)
 
         # Lazy import atmtokenizer modules
         self._parser = None
@@ -153,17 +153,18 @@ class ClimLlamaDataset(Dataset):
         )
 
     def _build_document_shuffle_idx(
-        self, documents: np.ndarray, num_samples: int, np_rng: np.random.RandomState
+        self, documents: np.ndarray, num_samples: int, np_rng: np.random.RandomState, shuffle: bool = False
     ) -> np.ndarray:
-        """Build shuffled index mapping for whole documents.
+        """Build index mapping for whole documents.
 
         Args:
             documents: Array of document indices to use
             num_samples: Number of samples to generate
             np_rng: Random state for shuffling
+            shuffle: Whether to shuffle documents within each epoch
 
         Returns:
-            Shuffled array of document indices
+            Array of document indices (shuffled or sequential)
         """
         num_docs = len(documents)
         # Calculate how many epochs we need
@@ -173,7 +174,8 @@ class ClimLlamaDataset(Dataset):
         doc_indices = []
         for _ in range(num_epochs):
             epoch_docs = documents.copy()
-            np_rng.shuffle(epoch_docs)
+            if shuffle:
+                np_rng.shuffle(epoch_docs)
             doc_indices.append(epoch_docs)
 
         # Concatenate and truncate to num_samples
