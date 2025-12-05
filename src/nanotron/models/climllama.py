@@ -234,7 +234,7 @@ class ClimLlamaEmbedding(nn.Module):
         # Add continuous spatial-temporal encoding (sinusoidal)
         if self.config.use_spatial_temporal_encoding and spatial_temporal_features is not None:
             spatial_temporal_flat = spatial_temporal_features.view(-1, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES)
-            spatial_embeds = self.spatial_temporal_encoding(spatial_temporal_flat)  # [batch*seq_len, hidden]
+            spatial_embeds = self.spatial_temporal_encoding(spatial_temporal_flat).to(token_embeds.dtype)  # [batch*seq_len, hidden]
             token_embeds = token_embeds + spatial_embeds
 
         return {"input_embeds": token_embeds, "position_ids": position_ids}
