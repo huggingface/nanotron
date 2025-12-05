@@ -5,13 +5,12 @@
 set -euo pipefail
 # Paths from your conversion script
 CKPT_PATH_NT=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_checkpoints/exp_fsq_245_split_vocab32768/llama_3B_vocab_32768/iter_0204000_nanotron
-TOKENIZER_PATH=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/pretrained_tokenizer
 
 # Training settings - now using Megatron IndexedDataset
 # DATA_PREFIX should point to your .bin/.idx dataset files (without extension)
 # Supports wildcards: "/path/data_*" or "/path/*" to match multiple files
 # Example: "/path/data_*" will match data_001.bin, data_002.bin, etc.
-DATA_PREFIX="/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/*"
+
 TRAIN_STEPS=5000
 LEARNING_RATE=1e-5
 SEQUENCE_LENGTH=4096
@@ -22,8 +21,16 @@ INDEX_MAPPING_DIR="/iopsstor/scratch/cscs/lhuang/cache/nanotron-index-mapping"  
 SKIP_WARMUP=""  # Optional: add "--skip_warmup" to skip warmup
 UPGRADE_TO_CLIMLLAMA="--upgrade-to-climllama"  # Optional: add "--upgrade-to-climllama" to upgrade checkpoint
 
-# Output config file
-OUTPUT_CONFIG=climllama/config_finetune_with_pe.yaml
+if [ $UPGRADE_TO_CLIMLLAMA == ""] ; then
+    OUTPUT_CONFIG=climllama/config_finetune_vanilla_llama.yaml
+    DATA_PREFIX="/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/*"
+    TOKENIZER_PATH=/iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_datasets/245-fsq_2025-02-07-14-06-33-00230000-split/pretrained_tokenizer
+else
+    OUTPUT_CONFIG=climllama/config_finetune_with_pe.yaml
+    DATA_PREFIX="/capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/*"
+    TOKENIZER_PATH=/capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/pretrained_tokenizer
+fi
+
 
 # Parallelism settings (adjust based on your GPU count)
 # Keep GBS = 1024
