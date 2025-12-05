@@ -77,6 +77,27 @@ def build_parallel_context(tp_size: int = 1, pp_size: int = 1, dp_size: int = 1)
     )
 
 
+def ensure_all_params_are_nanotron(model: torch.nn.Module) -> None:
+    """Ensure all parameters in the model are NanotronParameter.
+
+    Some parameters might not be converted during mark_tied_parameters if they
+    are not sharded or tied. This function converts any remaining regular
+    Parameters to NanotronParameter.
+    """
+    for module_name, module in model.named_modules():
+        for param_name, param in list(module.named_parameters(recurse=False)):
+            if not isinstance(param, NanotronParameter):
+                # Convert to NanotronParameter
+                new_param = NanotronParameter(tensor=param.data, requires_grad=param.requires_grad)
+                setattr(module, param_name, new_param)
+                log_rank(
+                    f"Converted {module_name}.{param_name} to NanotronParameter",
+                    logger=logger,
+                    level=logging.DEBUG,
+                    rank=0,
+                )
+
+
 def copy_qwen2_weights_to_climllama(
     qwen2_model: Qwen2ForTraining,
     climllama_model: ClimLlamaForTraining,
@@ -232,7 +253,7 @@ def upgrade_checkpoint(
     # Copy weights from Qwen2 to ClimLlama
     # Note: We don't call init_model_randomly() because:
     # 1. Shared weights (token embeddings, decoder layers, lm_head) will be copied from Qwen2
-    # 2. New CLiMLLaMA embeddings are already initialized during model construction
+    # 2. New ClimLlama embeddings are already initialized during model construction
     log_rank(
         "Copying Qwen2 weights to ClimLlama model",
         logger=logger,
@@ -240,6 +261,9 @@ def upgrade_checkpoint(
         rank=0,
     )
     copy_qwen2_weights_to_climllama(qwen2_model, climllama_model)
+
+    # Ensure all parameters are NanotronParameter before saving
+    ensure_all_params_are_nanotron(climllama_model)
 
     # Save ClimLlama checkpoint
     log_rank(
