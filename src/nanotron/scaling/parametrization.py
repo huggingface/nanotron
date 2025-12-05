@@ -213,6 +213,7 @@ class LearningRateForSpectralMup(LearningRateForParametrizator):
             TensorParallelColumnLinear: self._get_mup_lr,
             TensorParallelRowLinear: self._get_mup_lr,
             TritonRMSNorm: self._get_global_lr,
+            LlamaRMSNorm: self._get_global_lr,
             TensorParallelEmbedding: self._get_global_lr,
         }
 
