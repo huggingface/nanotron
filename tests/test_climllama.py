@@ -15,6 +15,7 @@ import numpy as np
 
 from helpers.utils import init_distributed, rerun_if_address_is_in_use
 from nanotron.config.models_config import ClimLlamaConfig
+from nanotron.models.climllama import CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES
 from nanotron.parallel import ParallelContext
 
 
@@ -251,7 +252,9 @@ def _test_embedding_output_shape(parallel_context: ParallelContext):
     var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
     res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
     leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
-    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda")
+    spatial_temporal_features = torch.randn(
+        batch_size, seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device="cuda"
+    )
 
     output = embedding_layer(
         input_ids=input_ids,
@@ -412,7 +415,9 @@ def _test_embedding_combines_all_components(parallel_context: ParallelContext):
     var_idx = torch.zeros(batch_size, seq_len, dtype=torch.long, device="cuda")
     res_idx = torch.zeros(batch_size, seq_len, dtype=torch.long, device="cuda")
     leadtime_idx = torch.zeros(batch_size, seq_len, dtype=torch.long, device="cuda")
-    spatial_temporal_features = torch.ones(batch_size, seq_len, 7, device="cuda")
+    spatial_temporal_features = torch.ones(
+        batch_size, seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device="cuda"
+    )
 
     output = embedding_layer(
         input_ids=input_ids,
@@ -533,7 +538,9 @@ def _test_embedding_forward_backward(parallel_context: ParallelContext):
     var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
     res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
     leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
-    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda", requires_grad=True)
+    spatial_temporal_features = torch.randn(
+        batch_size, seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device="cuda", requires_grad=True
+    )
 
     output = embedding_layer(
         input_ids=input_ids,
@@ -864,7 +871,9 @@ def _test_full_model_forward_pass(parallel_context: ParallelContext):
     var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
     res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
     leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
-    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda", dtype=torch.bfloat16)
+    spatial_temporal_features = torch.randn(
+        batch_size, seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device="cuda", dtype=torch.bfloat16
+    )
     label_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device="cuda")
     label_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device="cuda")
 
@@ -936,7 +945,9 @@ def _test_full_model_forward_pass_parallel(parallel_context: ParallelContext):
     var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
     res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
     leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
-    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda", dtype=torch.bfloat16)
+    spatial_temporal_features = torch.randn(
+        batch_size, seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device="cuda", dtype=torch.bfloat16
+    )
     label_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device="cuda")
     label_mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device="cuda")
 
@@ -990,7 +1001,9 @@ def _test_hybrid_pe_absolute_plus_rope(parallel_context: ParallelContext):
     var_idx = torch.randint(0, config.var_vocab_size, (batch_size, seq_len), device="cuda")
     res_idx = torch.randint(0, config.res_vocab_size, (batch_size, seq_len), device="cuda")
     leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, seq_len), device="cuda")
-    spatial_temporal_features = torch.randn(batch_size, seq_len, 7, device="cuda")
+    spatial_temporal_features = torch.randn(
+        batch_size, seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device="cuda"
+    )
 
     # Test 1: Verify embedding output contains position_ids for RoPE
     output = embedding_layer(
