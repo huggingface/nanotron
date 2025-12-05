@@ -146,6 +146,10 @@ def upgrade_checkpoint(
         save_path: Path to save the new ClimLlama checkpoint
         tp_size: Tensor parallel size for loading/saving
     """
+    # Build parallel context first (required for log_rank and distributed operations)
+    print(f"Building parallel context with TP={tp_size}")
+    parallel_context = build_parallel_context(tp_size=tp_size)
+
     log_rank(
         f"Loading ClimLlama config from {config_path}",
         logger=logger,
@@ -153,14 +157,6 @@ def upgrade_checkpoint(
         rank=0,
     )
     climllama_config = get_climllama_config_from_yaml(config_path)
-
-    log_rank(
-        f"Building parallel context with TP={tp_size}",
-        logger=logger,
-        level=logging.INFO,
-        rank=0,
-    )
-    parallel_context = build_parallel_context(tp_size=tp_size)
 
     # Load the full training config to get parallel config
     training_config = get_config_from_file(str(config_path))
