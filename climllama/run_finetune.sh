@@ -7,14 +7,15 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=96
 #SBATCH --time=12:00:00
-#SBATCH --output=logs/finetune_%j.out
+#SBATCH --output=logs/finetune_climllama_%j.out
 
 # Script to run finetuning with the generated config
 # Make sure you've run prepare_finetune_config.sh first to generate the config file
 
 set -euo pipefail
 
-CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune.yaml
+#CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune.yaml
+CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune_with_pe_climllama.yaml
 WORKDIR=/capstor/scratch/cscs/lhuang/nanotron_climllama
 
 # Check if config exists
