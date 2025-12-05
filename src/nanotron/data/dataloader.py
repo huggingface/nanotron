@@ -69,6 +69,10 @@ def sanity_check_dataloader(
                         # It's fine if mask is the same across DP
                         continue
 
+                    if key in ("var_idx", "res_idx", "leadtime_idx", "spatial_temporal_features"):
+                        # These ClimLlama position features can be the same across DP
+                        continue
+
                     with assert_fail_except_rank_with(AssertionError, rank_exception=0, pg=parallel_context.dp_pg):
                         assert_tensor_synced_across_pg(
                             tensor=value, pg=parallel_context.dp_pg, msg=lambda err: f"{key} {err}"
