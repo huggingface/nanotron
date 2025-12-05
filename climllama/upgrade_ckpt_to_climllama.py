@@ -30,7 +30,6 @@ from nanotron.models import build_model
 from nanotron.models.climllama import ClimLlamaForTraining
 from nanotron.models.qwen import Qwen2ForTraining
 from nanotron.parallel import ParallelContext
-from nanotron.parallel.parameters import NanotronParameter
 from nanotron.serialize.weights import load_weights, save_weights
 from nanotron.trainer import mark_tied_parameters
 
@@ -74,42 +73,6 @@ def build_parallel_context(tp_size: int = 1, pp_size: int = 1, dp_size: int = 1)
         data_parallel_size=dp_size,
         pipeline_parallel_size=pp_size,
         tensor_parallel_size=tp_size,
-    )
-
-
-def ensure_all_params_are_nanotron(model: torch.nn.Module) -> None:
-    """Ensure all parameters in the model are NanotronParameter.
-
-    Some parameters might not be converted during mark_tied_parameters if they
-    are not sharded or tied. This function converts any remaining regular
-    Parameters to NanotronParameter.
-    """
-    converted_count = 0
-    for module_name, module in model.named_modules():
-        for param_name, param in list(module.named_parameters(recurse=False)):
-            if not isinstance(param, NanotronParameter):
-                # Convert to NanotronParameter
-                new_param = NanotronParameter(tensor=param.data, requires_grad=param.requires_grad)
-                setattr(module, param_name, new_param)
-                converted_count += 1
-                print(f"Converted {module_name}.{param_name} to NanotronParameter")
-
-    # Also check state_dict to find any parameters that might be missed
-    state_dict_keys = set(model.state_dict().keys())
-    for name in state_dict_keys:
-        try:
-            param = model.get_parameter(name)
-            if not isinstance(param, NanotronParameter):
-                print(f"WARNING: {name} is still not NanotronParameter after conversion")
-        except AttributeError:
-            # This is a buffer, not a parameter - that's OK
-            pass
-
-    log_rank(
-        f"Converted {converted_count} parameters to NanotronParameter",
-        logger=logger,
-        level=logging.INFO,
-        rank=0,
     )
 
 
@@ -276,9 +239,6 @@ def upgrade_checkpoint(
         rank=0,
     )
     copy_qwen2_weights_to_climllama(qwen2_model, climllama_model)
-
-    # Ensure all parameters are NanotronParameter before saving
-    ensure_all_params_are_nanotron(climllama_model)
 
     # Save ClimLlama checkpoint
     log_rank(
