@@ -15,7 +15,7 @@
 set -euo pipefail
 
 #CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune.yaml
-CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune_with_pe_climllama.yaml
+CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune_with_pe_climllama_test.yaml
 WORKDIR=/capstor/scratch/cscs/lhuang/nanotron_climllama
 
 # Check if config exists
