@@ -179,6 +179,11 @@ def upgrade_checkpoint(
     qwen2_config_dict.pop("is_climllama_config", None)
     qwen2_config = Qwen2Config(**qwen2_config_dict)
 
+    # Get dtype - handle both string and torch.dtype
+    model_dtype = training_config.model.dtype
+    if isinstance(model_dtype, str):
+        model_dtype = getattr(torch, model_dtype)
+
     qwen2_model = build_model(
         model_builder=lambda: Qwen2ForTraining(
             config=qwen2_config,
@@ -186,7 +191,7 @@ def upgrade_checkpoint(
             parallel_config=parallel_config,
         ),
         parallel_context=parallel_context,
-        dtype=getattr(torch, training_config.model.dtype),
+        dtype=model_dtype,
         device=torch.device("cuda"),
     )
 
@@ -217,7 +222,7 @@ def upgrade_checkpoint(
             parallel_config=parallel_config,
         ),
         parallel_context=parallel_context,
-        dtype=getattr(torch, training_config.model.dtype),
+        dtype=model_dtype,
         device=torch.device("cuda"),
     )
 
