@@ -14,7 +14,15 @@ from transformers import AutoTokenizer
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
+from nanotron.config.models_config import (
+    ClimLlamaConfig,
+    ExistingCheckpointInit,
+    LlamaConfig,
+    NanotronConfigs,
+    Qwen2Config,
+    RandomInit,
+    SpectralMupInit,
+)
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     InitScalingMethod,
@@ -27,7 +35,6 @@ from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger, human_format
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
-from nanotron.config.models_config import Qwen2Config
 
 logger = get_logger(__name__)
 
@@ -387,7 +394,11 @@ class ModelArgs:
             self.dtype = cast_str_to_torch_dtype(self.dtype)
 
         if isinstance(self.model_config, dict):
-            self.model_config = Qwen2Config(**self.model_config)
+            cfg_dict = self.model_config
+            if cfg_dict.get("is_climllama_config"):
+                self.model_config = ClimLlamaConfig(**cfg_dict)
+            else:
+                self.model_config = Qwen2Config(**cfg_dict)
 
         self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
