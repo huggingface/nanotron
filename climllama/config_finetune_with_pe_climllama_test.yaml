@@ -135,7 +135,7 @@ general:
   _expand_run_template: true
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
+  ignore_sanity_checks: true
   project: llama_finetune
   run: finetune_%date_%jobid_%githash
   seed: 42
@@ -152,7 +152,7 @@ model:
   ddp_bucket_cap_mb: 25
   dtype: bfloat16
   init_method:
-    use_mup: true
+    std: 0.02
   make_vocab_size_divisible_by: 1
   model_config:
     _attn_implementation: llama3_ring_attention 
@@ -271,7 +271,17 @@ parallelism:
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
   tp_recompute_allgather: true
-profiler: null
+profiler:
+  profiler_export_path: ./tb_logs        # required to save traces; set to a writable folder
+  wait: 0                                # steps to skip before warmup (per repeat)
+  warmup: 0                              # steps to record but not log
+  active: 1                              # steps to actually capture
+  repeat: 1                              # how many times to run the schedule
+  skip_first: 0                          # initial steps to skip before scheduling starts
+  record_shapes: true                    # set true to log tensor shapes
+  profile_memory: true                   # set true to include memory events
+  with_stack: true                       # capture stack traces (heavier)
+  export_chrome_trace: false             # not currently used in code
 s3_upload: null
 tokenizer:
   tokenizer_max_length: null
