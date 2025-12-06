@@ -2,7 +2,7 @@
 #SBATCH --job-name=climllama_finetune
 #SBATCH -A a122
 #SBATCH --mem=260000
-#SBATCH --nodes=4
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=96

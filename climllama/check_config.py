@@ -65,6 +65,18 @@ def check_flash_attention_with_cp(config: Config) -> List[str]:
     return errors
 
 
+def check_heads_divisible_by_tp(config: Config) -> List[str]:
+    errors: List[str] = []
+
+    num_heads = getattr(config.model.model_config, "num_attention_heads", None)
+    tp_size = getattr(config.parallelism, "tp", None)
+
+    if num_heads is not None and tp_size not in (None, 0) and num_heads % tp_size != 0:
+        errors.append(f"num_attention_heads={num_heads} must be divisible by tp={tp_size}")
+
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check ClimLlama config for sequence length consistency.")
     parser.add_argument("config_file", help="Path to YAML or python config file.")
@@ -74,6 +86,7 @@ def main() -> int:
 
     errors = check_sequence_lengths(config)
     errors.extend(check_flash_attention_with_cp(config))
+    errors.extend(check_heads_divisible_by_tp(config))
 
     if errors:
         print("Config consistency check failed:")
