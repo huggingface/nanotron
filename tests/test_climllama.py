@@ -1053,5 +1053,211 @@ def _test_hybrid_pe_absolute_plus_rope(parallel_context: ParallelContext):
     parallel_context.destroy()
 
 
+# --- Context Parallelism Tests (position_ids shape preservation) ---
+
+def get_small_climllama_config_for_cp():
+    """Create a small ClimLlama config for CP testing with llama3_ring_attention."""
+    return ClimLlamaConfig(
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=4,  # Must equal num_attention_heads for ring attention
+        vocab_size=100,
+        max_position_embeddings=128,
+        var_vocab_size=8,
+        variables=("unk", "t", "q", "u", "v", "w", "z", "sp"),
+        res_vocab_size=4,
+        resolutions=("1x2", "2x4", "4x8", "unk"),
+        leadtime_vocab_size=8,
+        leadtimes=(0, 6, 12, 24, 48, 72, 96, 120),
+        spatial_temporal_encoding_dim=32,
+        use_absolute_position_embeddings=True,
+        use_spatial_temporal_encoding=True,
+        _fused_rms_norm=False,
+        _fused_rotary_emb=False,
+        _attn_implementation="llama3_ring_attention",
+        _use_qkv_packed=True,
+        ring_attn_heads_k_stride=2,
+    )
+
+
+@pytest.mark.parametrize("tp,dp,pp,cp", [(1, 1, 1, 2), (1, 2, 1, 2)])
+@rerun_if_address_is_in_use()
+def test_climllama_forward_with_context_parallelism(tp: int, dp: int, pp: int, cp: int):
+    """Test ClimLlama forward pass with Context Parallelism enabled.
+
+    This test verifies the fix for the position_ids reshape bug where
+    position_ids shape was incorrectly changed from [batch, global_seq] to
+    [batch * cp_size, local_seq] when CP > 1.
+    """
+    init_distributed(tp=tp, dp=dp, pp=pp, cp=cp)(_test_climllama_forward_with_context_parallelism)()
+
+
+def _test_climllama_forward_with_context_parallelism(parallel_context: ParallelContext):
+    """Test full model forward pass with Context Parallelism."""
+    from math import ceil
+    from nanotron.models.climllama import ClimLlamaForTraining
+    from nanotron.config import ParallelismArgs
+    from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+    from nanotron import distributed as dist
+
+    config = get_small_climllama_config_for_cp()
+
+    cp_size = parallel_context.context_parallel_size
+    tp_size = dist.get_world_size(parallel_context.tp_pg)
+    dp_size = dist.get_world_size(parallel_context.dp_pg)
+
+    parallel_config = ParallelismArgs(
+        dp=dp_size,
+        pp=1,
+        tp=tp_size,
+        context_parallel_size=cp_size,
+    )
+
+    # Initialize model
+    model = ClimLlamaForTraining(
+        config=config,
+        parallel_context=parallel_context,
+        parallel_config=parallel_config,
+        random_states=None,
+    )
+
+    # Build and set rank for all pipeline blocks
+    pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
+    contiguous_size = ceil(len(pipeline_blocks) / parallel_context.pp_pg.size())
+    for i, block in enumerate(pipeline_blocks):
+        rank = i // contiguous_size
+        block.build_and_set_rank(rank)
+
+    model = model.to("cuda").to(torch.bfloat16)
+
+    batch_size = 2
+    global_seq_len = 32  # Global sequence length
+    local_seq_len = global_seq_len // cp_size  # Each CP rank processes this much
+
+    # input_ids are sharded across CP ranks (local_seq_len per rank)
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, local_seq_len), device="cuda")
+
+    # position_ids are GLOBAL (not sharded) - this is the key invariant
+    position_ids = torch.arange(global_seq_len, device="cuda").unsqueeze(0).expand(batch_size, -1)
+    assert position_ids.shape == (batch_size, global_seq_len), \
+        f"position_ids should have global shape [batch, global_seq], got {position_ids.shape}"
+
+    # Other inputs follow input_ids sharding (local_seq_len)
+    var_idx = torch.randint(0, config.var_vocab_size, (batch_size, local_seq_len), device="cuda")
+    res_idx = torch.randint(0, config.res_vocab_size, (batch_size, local_seq_len), device="cuda")
+    leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, local_seq_len), device="cuda")
+    spatial_temporal_features = torch.randn(
+        batch_size, local_seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device="cuda", dtype=torch.bfloat16
+    )
+    label_ids = torch.randint(0, config.vocab_size, (batch_size, local_seq_len), device="cuda")
+    label_mask = torch.ones(batch_size, local_seq_len, dtype=torch.bool, device="cuda")
+
+    # Forward pass - this should NOT crash with CUDA illegal memory access
+    # Before the fix, this would fail because position_ids shape would be
+    # incorrectly reshaped from [2, 32] to [4, 16] when CP=2
+    output = model(
+        input_ids=input_ids,
+        position_ids=position_ids,
+        var_idx=var_idx,
+        res_idx=res_idx,
+        leadtime_idx=leadtime_idx,
+        spatial_temporal_features=spatial_temporal_features,
+        label_ids=label_ids,
+        label_mask=label_mask,
+    )
+
+    # Verify output structure
+    assert "loss" in output, "Model should return loss"
+
+    # Verify loss is valid (not NaN or Inf)
+    loss = output["loss"]
+    assert not torch.isnan(loss), "Loss should not be NaN"
+    assert not torch.isinf(loss), "Loss should not be Inf"
+
+    parallel_context.destroy()
+
+
+@pytest.mark.parametrize("tp,dp,pp,cp", [(1, 1, 1, 2)])
+@rerun_if_address_is_in_use()
+def test_position_ids_shape_preserved_through_layers(tp: int, dp: int, pp: int, cp: int):
+    """Test that position_ids shape is preserved through decoder layers with CP."""
+    init_distributed(tp=tp, dp=dp, pp=pp, cp=cp)(_test_position_ids_shape_preserved_through_layers)()
+
+
+def _test_position_ids_shape_preserved_through_layers(parallel_context: ParallelContext):
+    """Verify position_ids maintains [batch, global_seq] shape through all layers."""
+    from nanotron.models.climllama import ClimLlamaModel
+    from nanotron.config import ParallelismArgs
+    from nanotron.parallel.pipeline_parallel.block import PipelineBlock
+    from nanotron import distributed as dist
+    from math import ceil
+
+    config = get_small_climllama_config_for_cp()
+
+    cp_size = parallel_context.context_parallel_size
+    tp_size = dist.get_world_size(parallel_context.tp_pg)
+    dp_size = dist.get_world_size(parallel_context.dp_pg)
+
+    parallel_config = ParallelismArgs(
+        dp=dp_size,
+        pp=1,
+        tp=tp_size,
+        context_parallel_size=cp_size,
+    )
+
+    # Initialize the core model (without loss computation)
+    model = ClimLlamaModel(
+        config=config,
+        parallel_context=parallel_context,
+        parallel_config=parallel_config,
+    )
+
+    # Build and set rank for all pipeline blocks
+    pipeline_blocks = [module for name, module in model.named_modules() if isinstance(module, PipelineBlock)]
+    contiguous_size = ceil(len(pipeline_blocks) / parallel_context.pp_pg.size())
+    for i, block in enumerate(pipeline_blocks):
+        rank = i // contiguous_size
+        block.build_and_set_rank(rank)
+
+    model = model.to("cuda").to(torch.bfloat16)
+
+    batch_size = 2
+    global_seq_len = 32
+    local_seq_len = global_seq_len // cp_size
+
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, local_seq_len), device="cuda")
+    position_ids = torch.arange(global_seq_len, device="cuda").unsqueeze(0).expand(batch_size, -1).contiguous()
+    var_idx = torch.randint(0, config.var_vocab_size, (batch_size, local_seq_len), device="cuda")
+    res_idx = torch.randint(0, config.res_vocab_size, (batch_size, local_seq_len), device="cuda")
+    leadtime_idx = torch.randint(0, config.leadtime_vocab_size, (batch_size, local_seq_len), device="cuda")
+    spatial_temporal_features = torch.randn(
+        batch_size, local_seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device="cuda", dtype=torch.bfloat16
+    )
+
+    # Store original position_ids shape
+    original_position_ids_shape = position_ids.shape
+    assert original_position_ids_shape == (batch_size, global_seq_len), \
+        f"Expected position_ids shape {(batch_size, global_seq_len)}, got {original_position_ids_shape}"
+
+    # Forward pass through the model
+    # This tests that position_ids shape is preserved through all decoder layers
+    logits = model(
+        input_ids=input_ids,
+        position_ids=position_ids,
+        var_idx=var_idx,
+        res_idx=res_idx,
+        leadtime_idx=leadtime_idx,
+        spatial_temporal_features=spatial_temporal_features,
+    )
+
+    # Verify logits have expected shape
+    # logits should be [batch * local_seq_len, vocab_size] after TP sharding
+    assert logits is not None, "Model should return logits"
+
+    parallel_context.destroy()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

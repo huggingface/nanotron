@@ -5,7 +5,7 @@ checkpoints:
   load_lr_scheduler: false
   load_optimizer: false
   resume_checkpoint_path: /iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_checkpoints/exp_fsq_245_split_vocab32768/llama_3B_vocab_32768/iter_0204000_nanotron_climllama
-  save_final_state: true
+  save_final_state: false
   save_initial_state: false
 data_stages:
 - data:
@@ -185,7 +185,7 @@ model:
     - 336
     - 720
     log_attn_probs: true
-    max_position_embeddings: 4096
+    max_position_embeddings: 512
     max_tp: 4
     moe_config: null
     no_rope_layer: null
