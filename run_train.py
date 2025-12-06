@@ -552,9 +552,15 @@ if __name__ == "__main__":
     args = get_args()
     config_file = args.config_file
 
-    # Load trainer and data
-    trainer = DistributedTrainer(config_file)
-    dataloader = get_dataloader(trainer, args.sanity_check_dataloader_interval)
+    trainer = None
+    try:
+        # Load trainer and data
+        trainer = DistributedTrainer(config_file)
+        dataloader = get_dataloader(trainer, args.sanity_check_dataloader_interval)
 
-    # Train
-    trainer.train(dataloader)
+        # Train
+        trainer.train(dataloader)
+    finally:
+        # Ensure distributed resources are released to avoid NCCL warnings/leaks
+        if trainer is not None and hasattr(trainer, "parallel_context"):
+            trainer.parallel_context.destroy()
