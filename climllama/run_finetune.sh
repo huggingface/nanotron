@@ -57,6 +57,9 @@ else
   echo "Git metadata unavailable."
 fi
 
+echo "Checking config consistency..."
+bash -c "source $WORKDIR/.venv/bin/activate && python $WORKDIR/climllama/check_config.py $CONFIG_FILE"
+
 echo "Starting finetuning with config: $CONFIG_FILE"
 echo "Using 4 GPUs"
 echo "Job ID: $SLURM_JOB_ID"

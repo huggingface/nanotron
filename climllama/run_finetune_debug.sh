@@ -12,6 +12,9 @@ export OMP_NUM_THREADS=1
 export NANOTRON_LOGGING_LEVEL=debug
 export WANDB_MODE=disabled
 export CUDA_DEVICE_MAX_CONNECTIONS=1
+
+python $WORKDIR/climllama/check_config.py $CONFIG_FILE
+
 torchrun --nproc_per_node=4 \
  --node_rank 0 \
  --nnodes=1 \
