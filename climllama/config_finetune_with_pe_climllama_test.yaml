@@ -129,7 +129,7 @@ data_stages:
     num_loading_workers: 1
     seed: 42
   name: Training Stage
-  sequence_length: 512
+  sequence_length: 16384
   start_training_step: 1
 general:
   _expand_run_template: true
@@ -155,7 +155,7 @@ model:
     use_mup: true
   make_vocab_size_divisible_by: 1
   model_config:
-    _attn_implementation: flash_attention_2
+    _attn_implementation: llama3_ring_attention 
     _fused_rms_norm: true
     _fused_rotary_emb: true
     _use_doc_masking: false
@@ -185,7 +185,7 @@ model:
     - 336
     - 720
     log_attn_probs: true
-    max_position_embeddings: 512
+    max_position_embeddings: 16384
     max_tp: 4
     moe_config: null
     no_rope_layer: null
@@ -208,7 +208,7 @@ model:
     - 16x32
     - 32x64
     - unk
-    ring_attn_heads_k_stride: null
+    ring_attn_heads_k_stride: 1
     rms_norm_eps: 1.0e-05
     rope_interleaved: false
     rope_scaling: null
@@ -262,12 +262,12 @@ optimizer:
   weight_decay_exclude_named_params: []
   zero_stage: 0
 parallelism:
-  context_parallel_size: 1
-  dp: 4
+  context_parallel_size: 4
+  dp: 1
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  recompute_layer: false
+  recompute_layer: true
   tp: 1
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
@@ -283,6 +283,6 @@ tokens:
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 4
-  sequence_length: 512
+  sequence_length: 16384
   train_steps: 3
   val_check_interval: -1
