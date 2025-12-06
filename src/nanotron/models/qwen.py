@@ -231,6 +231,7 @@ class Qwen2Attention(LogMixin, nn.Module):
         # position_ids = position_ids.masked_fill(position_ids == -1, 0)
         seq_length = position_ids.shape[1] // self.cp_pg_size # in CP, position_ids are global
         # Keep original position_ids shape for return, flatten for internal use
+        original_position_ids_shape = position_ids.shape  # [batch_size, global_seq_length]
         position_ids = position_ids.view(-1)  # [batch_size*seq_length]
 
         qkv = self.qkv_proj(hidden_states)
@@ -260,8 +261,8 @@ class Qwen2Attention(LogMixin, nn.Module):
         #         q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
         #     )
         output = self.o_proj(attn_output)
-        # Return original position_ids shape
-        return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}
+        # Return original position_ids shape to preserve [batch, global_seq] dimensions
+        return {"hidden_states": output, "position_ids": position_ids.view(original_position_ids_shape)}
 
     def _forward_packed(self, qkv, seq_length, position_ids, cu_seqlens):
         assert cu_seqlens is not None, "cu_seqlens must be provided for packed attention"
