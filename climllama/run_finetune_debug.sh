@@ -12,6 +12,7 @@ export OMP_NUM_THREADS=1
 export NANOTRON_LOGGING_LEVEL=debug
 export WANDB_MODE=disabled
 export CUDA_DEVICE_MAX_CONNECTIONS=1
+export CUDA_LAUNCH_BLOCKING=1
 
 python $WORKDIR/climllama/check_config.py $CONFIG_FILE
 

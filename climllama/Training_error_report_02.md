@@ -3,13 +3,13 @@
 **Date:** 2025-12-06
 **Time:** 18:42:22
 **Log File:** `debug_output3.log`
-**Status:** FAILED
+**Status:** RESOLVED (root cause identified)
 
 ---
 
 ## Executive Summary
 
-Training failed with a CUDA CUBLAS error during the forward pass of the first training step. The error occurred in the attention output projection layer (`o_proj`) during a tensor parallel row-wise linear operation on rank 2.
+Training initially failed with a CUDA CUBLAS error during the forward pass of the first training step. The issue was traced to using flash-attn with context parallelism (CP) > 1; switching to ring-attn for CP > 1 resolved the failure. The error occurred in the attention output projection layer (`o_proj`) during a tensor parallel row-wise linear operation on rank 2.
 
 ---
 
@@ -201,37 +201,10 @@ From log (debug_output3.log, batch processing section):
 
 ## Root Cause Analysis
 
-### Most Likely Cause: Numerical Instability
+### Root Cause: flash-attn with CP > 1
 
-The `CUBLAS_STATUS_EXECUTION_FAILED` error during `cublasGemmEx` with BFloat16 precision typically indicates:
-
-1. **NaN or Inf values in tensors**
-   - Input activations from attention contain invalid values
-   - Propagated from earlier layers or data
-   - BFloat16 has reduced precision compared to FP32, making it more susceptible
-
-2. **Critical location: Attention Output Projection**
-   - Error occurs in `qwen.py:263` at `self.o_proj(attn_output)`
-   - This is the final linear projection after attention computation
-   - Suggests attention outputs may contain extreme values
-
-### Secondary Possibilities
-
-1. **Memory Corruption**
-   - GPU memory corruption during tensor operations
-   - Less likely given clean initialization and first-step failure
-
-2. **Tensor Shape Mismatch**
-   - Incorrect tensor dimensions in tensor parallel operations
-   - Would likely manifest as immediate error, not during computation
-
-3. **Data Issues**
-   - Corrupted or extreme values in training data
-   - Could trigger numerical overflow in attention
-
-4. **Hardware Issues**
-   - GPU hardware failure or instability
-   - Less likely given multi-GPU setup with failure on single rank
+- The CUBLAS failure was triggered when using flash-attn while context parallelism was enabled with CP > 1.
+- Switching the attention backend to ring-attn for CP > 1 removes the failure; training proceeds normally with the same configuration otherwise unchanged.
 
 ---
 
@@ -325,12 +298,7 @@ W1206 18:42:22.964000 174632 torch/distributed/elastic/multiprocessing/api.py:90
 
 ## Next Steps
 
-1. ✅ Add NaN/Inf detection to attention layers
-2. ✅ Validate training data for first 10 batches
-3. ✅ Test with reduced micro batch size
-4. ✅ Run GPU memory diagnostics
-5. ✅ Consider enabling AMP (Automatic Mixed Precision) with loss scaling
-6. ⚠️ If issue persists: Test with FP32 precision to isolate BFloat16 issues
+1. ✅ Use ring-attn when CP > 1 (fix applied; training passes first step)
 
 ---
 
