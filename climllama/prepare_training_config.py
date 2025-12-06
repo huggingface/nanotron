@@ -241,7 +241,6 @@ def upgrade_to_climllama_config(base_config: Qwen2Config) -> ClimLlamaConfig:
     print(f"    - res_vocab_size: {climllama_config.res_vocab_size}")
     print(f"    - leadtime_vocab_size: {climllama_config.leadtime_vocab_size}")
     print(f"    - use_spatial_temporal_encoding: {climllama_config.use_spatial_temporal_encoding}")
-    print(f"    - spatial_temporal_encoding_dim: {climllama_config.spatial_temporal_encoding_dim}")
 
     return climllama_config
 

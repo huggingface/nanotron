@@ -131,7 +131,6 @@ def create_small_climllama_config() -> ClimLlamaConfig:
         leadtime_vocab_size=12,
         leadtimes=(0, 1, 3, 6, 12, 24, 48, 72, 120, 168, 336, 720),
         use_spatial_temporal_encoding=True,
-        spatial_temporal_encoding_dim=64,
         max_tp=4,
 
         # Architecture settings

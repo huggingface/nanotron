@@ -334,7 +334,6 @@ class ClimLlamaConfig(Qwen2Config):
 
     # Spatial-temporal continuous position encoding
     use_spatial_temporal_encoding: bool = True
-    spatial_temporal_encoding_dim: int = 128  # Dimension for encoding x,y,z,time features
 
     # Maximum TP size for embedding vocab padding (ensures checkpoint compatibility across TP sizes)
     max_tp: int = 4

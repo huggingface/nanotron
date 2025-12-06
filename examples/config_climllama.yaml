@@ -118,7 +118,6 @@ model:
 
     # Spatial-temporal continuous position encoding
     use_spatial_temporal_encoding: true
-    spatial_temporal_encoding_dim: 128
 
     # Maximum TP size for embedding vocab padding (ensures checkpoint compatibility across TP sizes)
     max_tp: 4

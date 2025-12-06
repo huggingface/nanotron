@@ -65,7 +65,6 @@ class ClimLlamaConfig(Qwen2Config):
 
     # Spatial-temporal continuous position encoding
     use_spatial_temporal_encoding: bool = True
-    spatial_temporal_encoding_dim: int = 128  # Dimension for encoding x,y,z,time features
 
     # Maximum TP size for embedding vocab padding (ensures checkpoint compatibility across TP sizes)
     max_tp: int = 4
@@ -74,7 +73,6 @@ class ClimLlamaConfig(Qwen2Config):
 **Key Design Decisions**:
 - Inherit from `Qwen2Config` to maintain compatibility
 - Separate discrete embeddings (var, res, leadtime) from continuous encodings (spatial-temporal)
-- Configurable dimensions for flexibility
 - Grid size (resolutions) is NOT in model config - it's loaded from the dataset's `metadata.json` file which contains the resolution hierarchy from the original tokenizer training configuration
 
 #### 1.2 Create ClimLlamaEmbedding
@@ -126,23 +124,13 @@ class ClimLlamaEmbedding(nn.Module, AttachableStore):
 
         # Continuous spatial-temporal encoding
         if config.use_spatial_temporal_encoding:
-            # MLP to project 7D spatial-temporal features to hidden_size
-            # Input: [x, y, z, cos_hour, sin_hour, cos_day, sin_day]
-            self.spatial_temporal_proj = TensorParallelColumnLinear(
-                in_features=7,
-                out_features=config.spatial_temporal_encoding_dim,
-                pg=tp_pg,
-                mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
-                bias=True,
+            # Sinusoidal encoding projects 8D features directly to hidden_size
+            self.spatial_temporal_encoding = SinusoidalSpatialTemporalEncoding(
+                hidden_size=config.hidden_size,
+                num_features=CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES,
+                tp_pg=tp_pg,
+                tp_mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
             )
-            self.spatial_temporal_proj2 = TensorParallelColumnLinear(
-                in_features=config.spatial_temporal_encoding_dim,
-                out_features=config.hidden_size,
-                pg=tp_pg,
-                mode=parallel_config.tp_mode if parallel_config is not None else TensorParallelLinearMode.ALL_REDUCE,
-                bias=True,
-            )
-            self.activation = nn.GELU()
 
         self.config = config
 
@@ -625,7 +613,6 @@ model:
     res_vocab_size: 10
     leadtime_vocab_size: 240
     use_spatial_temporal_encoding: true
-    spatial_temporal_encoding_dim: 128
 
 # Note: Grid resolutions are loaded from the dataset's metadata.json,
 # not from the model config. The dataset metadata contains the resolution

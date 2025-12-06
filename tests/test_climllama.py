@@ -29,10 +29,9 @@ class TestClimLlamaConfig:
         assert config.is_climllama_config is True
         assert config.use_absolute_position_embeddings is True
         assert config.use_spatial_temporal_encoding is True
-        assert config.var_vocab_size == 13
+        assert config.var_vocab_size == 16
         assert config.res_vocab_size == 12
-        assert config.leadtime_vocab_size == 13
-        assert config.spatial_temporal_encoding_dim == 128
+        assert config.leadtime_vocab_size == 12
         assert config.max_tp == 4
         assert len(config.variables) == config.var_vocab_size
 
@@ -49,7 +48,6 @@ class TestClimLlamaConfig:
             variables=custom_vars,
             res_vocab_size=8,
             leadtime_vocab_size=6,
-            spatial_temporal_encoding_dim=64,
             hidden_size=512,
         )
 
@@ -57,7 +55,6 @@ class TestClimLlamaConfig:
         assert config.variables == custom_vars
         assert config.res_vocab_size == 8
         assert config.leadtime_vocab_size == 6
-        assert config.spatial_temporal_encoding_dim == 64
         assert config.hidden_size == 512
 
     def test_inherits_from_qwen2(self):
@@ -101,7 +98,6 @@ class TestClimLlamaConfig:
             variables=("unk", "t", "q", "u", "v"),
             res_vocab_size=4,
             leadtime_vocab_size=6,
-            spatial_temporal_encoding_dim=32,
             use_absolute_position_embeddings=True,
             use_spatial_temporal_encoding=True,
             _fused_rms_norm=False,
@@ -216,7 +212,6 @@ def get_small_climllama_config():
         resolutions=("1x2", "2x4", "4x8", "unk"),
         leadtime_vocab_size=8,
         leadtimes=(0, 6, 12, 24, 48, 72, 96, 120),
-        spatial_temporal_encoding_dim=32,
         use_absolute_position_embeddings=True,
         use_spatial_temporal_encoding=True,
         _fused_rms_norm=False,
@@ -329,7 +324,6 @@ def _test_embedding_only_with_spatial_temporal(parallel_context: ParallelContext
         variables=("unk", "t", "q", "u", "v"),
         use_absolute_position_embeddings=False,
         use_spatial_temporal_encoding=True,
-        spatial_temporal_encoding_dim=32,
     )
 
     embedding_layer = ClimLlamaEmbedding(
@@ -343,21 +337,20 @@ def _test_embedding_only_with_spatial_temporal(parallel_context: ParallelContext
     assert not hasattr(embedding_layer, 'res_embedding')
     assert not hasattr(embedding_layer, 'leadtime_embedding')
 
-    # Should have spatial-temporal projection
-    assert hasattr(embedding_layer, 'spatial_temporal_proj')
-    assert hasattr(embedding_layer, 'spatial_temporal_proj2')
+    # Should have spatial-temporal encoding module
+    assert hasattr(embedding_layer, 'spatial_temporal_encoding')
 
     parallel_context.destroy()
 
 
 @pytest.mark.parametrize("tp,dp,pp", PARALLEL_CONFIGS_4GPU)
 @rerun_if_address_is_in_use()
-def test_spatial_temporal_projection_dimensions(tp: int, dp: int, pp: int):
-    """Test spatial-temporal projection layer dimensions."""
-    init_distributed(tp=tp, dp=dp, pp=pp)(_test_spatial_temporal_projection_dimensions)()
+def test_spatial_temporal_encoding_output_shape(tp: int, dp: int, pp: int):
+    """Test spatial-temporal encoding output shape matches hidden size."""
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_spatial_temporal_encoding_output_shape)()
 
 
-def _test_spatial_temporal_projection_dimensions(parallel_context: ParallelContext):
+def _test_spatial_temporal_encoding_output_shape(parallel_context: ParallelContext):
     from nanotron.models.climllama import ClimLlamaEmbedding
 
     # Note: vocab sizes must be divisible by max TP (4) for TensorParallelEmbedding
@@ -368,7 +361,6 @@ def _test_spatial_temporal_projection_dimensions(parallel_context: ParallelConte
         variables=("unk", "t", "q", "u", "v", "w", "z", "sp"),
         res_vocab_size=4,
         leadtime_vocab_size=8,
-        spatial_temporal_encoding_dim=64,
         use_spatial_temporal_encoding=True,
     )
 
@@ -378,11 +370,19 @@ def _test_spatial_temporal_projection_dimensions(parallel_context: ParallelConte
         parallel_config=None,
     ).to("cuda")
 
-    # Check projection layer dimensions
-    assert embedding_layer.spatial_temporal_proj.in_features == 7
-    assert embedding_layer.spatial_temporal_proj.out_features == 64
-    assert embedding_layer.spatial_temporal_proj2.in_features == 64
-    assert embedding_layer.spatial_temporal_proj2.out_features == 128
+    batch_size = 2
+    seq_len = 4
+    spatial_temporal_features = torch.randn(
+        batch_size, seq_len, CLIMLLAMA_SPATIAL_TEMPORAL_FEATURES, device="cuda"
+    )
+
+    output = embedding_layer(
+        input_ids=torch.zeros(batch_size, seq_len, dtype=torch.long, device="cuda"),
+        position_ids=torch.arange(seq_len, device="cuda").unsqueeze(0).expand(batch_size, -1),
+        spatial_temporal_features=spatial_temporal_features,
+    )
+
+    assert output["input_embeds"].shape == (batch_size * seq_len, config.hidden_size)
 
     parallel_context.destroy()
 
@@ -557,7 +557,6 @@ def _test_embedding_forward_backward(parallel_context: ParallelContext):
 
     # Check gradients flow through
     assert spatial_temporal_features.grad is not None
-    assert embedding_layer.spatial_temporal_proj.weight.grad is not None
 
     parallel_context.destroy()
 
@@ -1071,7 +1070,6 @@ def get_small_climllama_config_for_cp():
         resolutions=("1x2", "2x4", "4x8", "unk"),
         leadtime_vocab_size=8,
         leadtimes=(0, 6, 12, 24, 48, 72, 96, 120),
-        spatial_temporal_encoding_dim=32,
         use_absolute_position_embeddings=True,
         use_spatial_temporal_encoding=True,
         _fused_rms_norm=False,

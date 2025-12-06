@@ -50,7 +50,7 @@ def get_qwen2_config_from_checkpoint(ckpt_path: Path) -> Qwen2Config:
         "is_climllama_config", "use_absolute_position_embeddings",
         "var_vocab_size", "variables", "res_vocab_size", "resolutions",
         "leadtime_vocab_size", "leadtimes", "use_spatial_temporal_encoding",
-        "spatial_temporal_encoding_dim", "max_tp"
+        "max_tp"
     ]
     for key in climllama_keys:
         config_dict.pop(key, None)

@@ -215,7 +215,6 @@ model:
     rope_seq_len_interpolation_factor: null
     rope_theta: 10000
     sliding_window_size: null
-    spatial_temporal_encoding_dim: 128
     tie_word_embeddings: false
     use_absolute_position_embeddings: true
     use_cache: true
