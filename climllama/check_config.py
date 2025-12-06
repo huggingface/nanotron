@@ -7,6 +7,8 @@ Usage:
 Checks for:
 - data_stages[*].sequence_length matching tokens.sequence_length
 - model.model_config.max_position_embeddings (if set) matching tokens.sequence_length
+- flash_attention_2 is not used with context_parallel_size > 1
+- ring_attn_heads_k_stride is set when using llama3_ring_attention
 """
 
 import argparse
@@ -39,6 +41,30 @@ def check_sequence_lengths(config: Config) -> List[str]:
     return errors
 
 
+def check_flash_attention_with_cp(config: Config) -> List[str]:
+    errors: List[str] = []
+
+    cp_size = getattr(config.parallelism, "context_parallel_size", 1)
+    attn_impl = getattr(config.model.model_config, "_attn_implementation", None)
+
+    if cp_size > 1 and attn_impl == "flash_attention_2":
+        errors.append(
+            f"flash_attention_2 is not supported with context_parallel_size > 1 (got cp={cp_size}). "
+            f"Use _attn_implementation='llama3_ring_attention' instead."
+        )
+
+    # Check ring_attn_heads_k_stride is set for llama3_ring_attention
+    if attn_impl == "llama3_ring_attention":
+        heads_k_stride = getattr(config.model.model_config, "ring_attn_heads_k_stride", None)
+        if heads_k_stride is None:
+            errors.append(
+                "ring_attn_heads_k_stride must be specified when using llama3_ring_attention. "
+                "Set ring_attn_heads_k_stride to a positive integer (e.g., 1)."
+            )
+
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check ClimLlama config for sequence length consistency.")
     parser.add_argument("config_file", help="Path to YAML or python config file.")
@@ -47,6 +73,8 @@ def main() -> int:
     config = get_config_from_file(args.config_file)
 
     errors = check_sequence_lengths(config)
+    errors.extend(check_flash_attention_with_cp(config))
+
     if errors:
         print("Config consistency check failed:")
         for err in errors:
