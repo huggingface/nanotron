@@ -24,14 +24,15 @@ def assert_tensor_synced_across_pg(
 ):
     """Assert that `tensor` is synced across `pg` with reference rank. Note that this always passes for reference rank"""
     if dist.get_rank(pg) == reference_rank:
-        reference_tensor = tensor
+        reference_tensor = tensor.detach()
     else:
-        reference_tensor = torch.empty_like(tensor)
-    dist.broadcast(
-        reference_tensor,
-        src=dist.get_global_rank(group=pg, group_rank=reference_rank),
-        group=pg,
-    )
+        reference_tensor = torch.empty_like(tensor, requires_grad=False)
+    with torch.no_grad():
+        dist.broadcast(
+            reference_tensor,
+            src=dist.get_global_rank(group=pg, group_rank=reference_rank),
+            group=pg,
+        )
 
     # TODO @nouamane: Getting Greatest absolute difference: 4.6e-10 at large scale when syncing tied weights
     torch.testing.assert_close(tensor, reference_tensor, msg=msg)
