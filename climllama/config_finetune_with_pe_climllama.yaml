@@ -307,13 +307,13 @@ data_stages:
     num_loading_workers: 1
     seed: 42
   name: Training Stage
-  sequence_length: 4096
+  sequence_length: 106880
   start_training_step: 1
 general:
   _expand_run_template: true
   benchmark_csv_path: null
   consumed_train_samples: null
-  ignore_sanity_checks: false
+  ignore_sanity_checks: true
   project: llama_finetune
   run: finetune_%date_%jobid_%githash
   seed: 42
@@ -327,13 +327,13 @@ metrics_logging:
   log_detail_interval: 100
   log_level: 0
 model:
-  ddp_bucket_cap_mb: 25
+  ddp_bucket_cap_mb: 50
   dtype: bfloat16
   init_method:
-    use_mup: true
+    std: 0.02
   make_vocab_size_divisible_by: 1
   model_config:
-    _attn_implementation: flash_attention_2
+    _attn_implementation: llama3_ring_attention
     _fused_rms_norm: true
     _fused_rotary_emb: true
     _use_doc_masking: false
@@ -362,7 +362,7 @@ model:
     - 168
     - 336
     - 720
-    log_attn_probs: true
+    log_attn_probs: false
     max_position_embeddings: 4096
     max_tp: 4
     moe_config: null
@@ -386,7 +386,7 @@ model:
     - 16x32
     - 32x64
     - unk
-    ring_attn_heads_k_stride: null
+    ring_attn_heads_k_stride: 1
     rms_norm_eps: 1.0e-05
     rope_interleaved: false
     rope_scaling: null
@@ -419,7 +419,7 @@ model:
     z_loss_coefficient: 0.0001
     z_loss_enabled: false
 optimizer:
-  accumulate_grad_in_fp32: true
+  accumulate_grad_in_fp32: false
   clip_grad: 1.0
   learning_rate_scheduler:
     learning_rate: 1.0e-05
@@ -437,14 +437,14 @@ optimizer:
     torch_adam_is_fused: true
   weight_decay: 0.01
   weight_decay_exclude_named_params: []
-  zero_stage: 0
+  zero_stage: 1
 parallelism:
-  context_parallel_size: 1
-  dp: 4
+  context_parallel_size: 16
+  dp: 2
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  recompute_layer: false
+  recompute_layer: true
   tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
@@ -459,7 +459,7 @@ tokens:
   batch_accumulation_per_replica: 32
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 4
-  sequence_length: 4096
+  micro_batch_size: 1
+  sequence_length: 106880
   train_steps: 5000
   val_check_interval: -1

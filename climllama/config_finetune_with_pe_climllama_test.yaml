@@ -184,7 +184,7 @@ model:
     - 168
     - 336
     - 720
-    log_attn_probs: true
+    log_attn_probs: false
     max_position_embeddings: 106880 
     max_tp: 4
     moe_config: null
