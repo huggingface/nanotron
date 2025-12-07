@@ -2,7 +2,7 @@
 #SBATCH --job-name=climllama_finetune
 #SBATCH -A a122
 #SBATCH --mem=260000
-#SBATCH --nodes=2
+#SBATCH --nodes=12
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=96
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 #CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune.yaml
-CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune_with_pe_climllama_test.yaml
+CONFIG_FILE=/capstor/scratch/cscs/lhuang/nanotron_climllama/climllama/config_finetune_with_pe_climllama.yaml
 WORKDIR=/capstor/scratch/cscs/lhuang/nanotron_climllama
 
 # Check if config exists
