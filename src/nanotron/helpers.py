@@ -206,17 +206,21 @@ def get_custom_weight_decay_for_named_parameters(
     named_param_groups_with_custom_weight_decay = []
     counter_excluded_params = 0
     for name, param in named_parameters:
+        tied_names: List[str] = []
         # Handle tied parameters: we exclude all tied parameters if one of them is in the exclude list
         if param.is_tied:
             tied_name = param.get_tied_info().get_full_name_from_module_id_to_prefix(
                 module_id_to_prefix=module_id_to_prefix
             )
+            tied_names.append(tied_name)
 
         # Determine weight decay value
         should_exclude = False
         if exclude_named_params is not None:
             should_exclude = any(
-                re.match(pattern, name) or re.match(pattern, tied_name) for pattern in exclude_named_params
+                re.match(pattern, candidate_name)
+                for pattern in exclude_named_params
+                for candidate_name in [name, *tied_names]
             )
             if should_exclude:
                 counter_excluded_params += 1

@@ -436,7 +436,15 @@ optimizer:
     name: adamW
     torch_adam_is_fused: true
   weight_decay: 0.01
-  weight_decay_exclude_named_params: []
+  weight_decay_exclude_named_params:
+  - .*lm_head.*
+  - .*token_embedding.*
+  - .*var_embedding.*
+  - .*res_embedding.*
+  - .*leadtime_embedding.*
+  - .*input_layernorm.*
+  - .*post_attention_layernorm.*
+  - .*final_layer_norm.*
   zero_stage: 1
 parallelism:
   context_parallel_size: 16
