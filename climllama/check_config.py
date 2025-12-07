@@ -7,7 +7,7 @@ Usage:
 Checks for:
 - data_stages[*].sequence_length matching tokens.sequence_length
 - model.model_config.max_position_embeddings (if set) matching tokens.sequence_length
-- tokens.sequence_length divisible by context_parallel_size
+- tokens.sequence_length divisible by context_parallel_size * tp
 - flash_attention_2 is not used with context_parallel_size > 1
 - ring_attn_heads_k_stride is set when using llama3_ring_attention
 """
@@ -24,6 +24,8 @@ def check_sequence_lengths(config: Config) -> List[str]:
 
     tokens_seq_len = config.tokens.sequence_length
     cp_size = getattr(config.parallelism, "context_parallel_size", 1)
+    tp_size = getattr(config.parallelism, "tp", 1)
+    cp_tp = (cp_size or 1) * (tp_size or 1)
 
     # data_stages stage sequence_length consistency
     for stage in config.data_stages or []:
@@ -33,10 +35,11 @@ def check_sequence_lengths(config: Config) -> List[str]:
                 f"but tokens.sequence_length={tokens_seq_len}"
             )
 
-    # sequence_length must be divisible by context parallel size
-    if cp_size not in (None, 0, 1) and tokens_seq_len % cp_size != 0:
+    # sequence_length must be divisible by context parallel size * tensor parallel size
+    if cp_tp not in (None, 0, 1) and tokens_seq_len % cp_tp != 0:
         errors.append(
-            f"tokens.sequence_length={tokens_seq_len} must be divisible by context_parallel_size={cp_size}"
+            f"tokens.sequence_length={tokens_seq_len} must be divisible by context_parallel_size={cp_size} * tp={tp_size} "
+            f"(product={cp_tp})"
         )
 
     # model max_position_embeddings consistency (optional but helpful)
