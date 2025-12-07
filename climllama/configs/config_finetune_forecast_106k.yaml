@@ -363,7 +363,7 @@ model:
     - 336
     - 720
     log_attn_probs: false
-    max_position_embeddings: 4096
+    max_position_embeddings: 106880
     max_tp: 4
     moe_config: null
     no_rope_layer: null
@@ -467,7 +467,7 @@ tokens:
   batch_accumulation_per_replica: 6
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 1
+  micro_batch_size: 2
   sequence_length: 106880
   train_steps: 20000
   val_check_interval: -1

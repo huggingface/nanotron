@@ -12,84 +12,84 @@ data_stages:
     dataset:
       codebook_size: 32768
       data_prefix:
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/1
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/10
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/100
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/101
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/102
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/103
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/104
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/105
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/106
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/107
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/108
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/109
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/11
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/110
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/111
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/112
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/113
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/114
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/115
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/116
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/117
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/118
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/119
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/12
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/120
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/121
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/122
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/123
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/124
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/125
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/126
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/127
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/128
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/129
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/13
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/130
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/131
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/132
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/133
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/134
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/135
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/136
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/137
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/138
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/139
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/14
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/140
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/141
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/142
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/143
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/144
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/145
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/146
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/147
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/148
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/149
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/15
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/150
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/151
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/152
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/153
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/154
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/155
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/156
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/157
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/158
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/159
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/16
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/160
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/161
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/162
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/163
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/164
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/165
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/166
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/167
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/168
-      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/169
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/1
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/10
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/100
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/101
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/102
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/103
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/104
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/105
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/106
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/107
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/108
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/109
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/11
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/110
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/111
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/112
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/113
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/114
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/115
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/116
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/117
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/118
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/119
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/12
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/120
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/121
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/122
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/123
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/124
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/125
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/126
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/127
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/128
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/129
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/13
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/130
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/131
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/132
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/133
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/134
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/135
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/136
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/137
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/138
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/139
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/14
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/140
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/141
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/142
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/143
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/144
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/145
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/146
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/147
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/148
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/149
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/15
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/150
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/151
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/152
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/153
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/154
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/155
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/156
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/157
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/158
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/159
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/16
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/160
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/161
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/162
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/163
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/164
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/165
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/166
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/167
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/168
+      - /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/169
       leadtimes:
       - 0
       - 1
@@ -129,7 +129,7 @@ data_stages:
     num_loading_workers: 1
     seed: 42
   name: Training Stage
-  sequence_length: 106880 
+  sequence_length: 52100 
   start_training_step: 1
 general:
   _expand_run_template: true
@@ -185,7 +185,7 @@ model:
     - 336
     - 720
     log_attn_probs: false
-    max_position_embeddings: 106880 
+    max_position_embeddings: 52100 
     max_tp: 4
     moe_config: null
     no_rope_layer: null
@@ -257,7 +257,7 @@ optimizer:
     adam_eps: 1.0e-08
     name: adamW
     torch_adam_is_fused: true
-  weight_decay: 0.01
+  weight_decay: 0.1
   weight_decay_exclude_named_params:
   - .*lm_head.*
   - .*token_embedding.*
@@ -274,7 +274,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  recompute_layer: true
+  recompute_layer: false
   tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
@@ -293,13 +293,13 @@ profiler:
 s3_upload: null
 tokenizer:
   tokenizer_max_length: null
-  tokenizer_name_or_path: /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6/245-fsq_2025-02-07-14-06-33-00230000/pretrained_tokenizer
+  tokenizer_name_or_path: /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/pretrained_tokenizer
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 32
+  batch_accumulation_per_replica: 1
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 2
-  sequence_length: 106880 
+  micro_batch_size: 1
+  sequence_length: 52100 
   train_steps: 3
   val_check_interval: -1
