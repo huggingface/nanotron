@@ -423,10 +423,10 @@ optimizer:
   clip_grad: 1.0
   learning_rate_scheduler:
     learning_rate: 1.0e-05
-    lr_decay_starting_step: 1000
-    lr_decay_steps: 21000
+    lr_decay_starting_step: 60
+    lr_decay_steps: 1140
     lr_decay_style: cosine
-    lr_warmup_steps: 1000
+    lr_warmup_steps: 60
     lr_warmup_style: linear
     min_decay_lr: 0
   optimizer_factory:
@@ -448,7 +448,7 @@ optimizer:
   zero_stage: 0
 parallelism:
   context_parallel_size: 2
-  dp: 12
+  dp: 36
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
@@ -464,10 +464,10 @@ tokenizer:
   tokenizer_name_or_path: /capstor/store/cscs/swissai/a122/ycheng/ClimLlama/token_pred_6_19vars/245-fsq_2025-02-07-14-06-33-00230000/pretrained_tokenizer
   tokenizer_revision: null
 tokens:
-  batch_accumulation_per_replica: 6
+  batch_accumulation_per_replica: 2
   limit_test_batches: 0
   limit_val_batches: 0
   micro_batch_size: 6
   sequence_length: 52100
-  train_steps: 20000
+  train_steps: 1200 # 551514 documents / 432 documents per step
   val_check_interval: -1
