@@ -452,7 +452,7 @@ parallelism:
   expert_parallel_size: 1
   pp: 1
   pp_engine: 1f1b
-  recompute_layer: false
+  recompute_layer: true
   tp: 2
   tp_linear_async_communication: true
   tp_mode: REDUCE_SCATTER
@@ -467,7 +467,7 @@ tokens:
   batch_accumulation_per_replica: 6
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 1
+  micro_batch_size: 6
   sequence_length: 52100
   train_steps: 20000
   val_check_interval: -1
