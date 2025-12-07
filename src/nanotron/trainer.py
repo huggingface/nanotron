@@ -780,7 +780,7 @@ class DistributedTrainer:
         eta_seconds = int(remaining_steps * (elapsed_time_per_iteration_ms / 1000))
 
         # Calculate GPU memory percentage for console logging
-        cuda_allocated = torch.cuda.memory_allocated()
+        cuda_allocated = torch.cuda.max_memory_allocated()
         cuda_total = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
         cuda_mem_percent = (cuda_allocated / cuda_total * 100) if cuda_total > 0 else 0
 
@@ -797,7 +797,7 @@ class DistributedTrainer:
             LogItem("lr", lr, "human_format"),  # , ".3E"),
             LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
             LogItem("mfu_%", mfu, ".2f"),  # Model FLOPS Utilization
-            LogItem("gpu_mem_%", cuda_mem_percent, ".1f"),
+            LogItem("peak_gpu_mem_%", cuda_mem_percent, ".1f"),
             LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
         ]
 
