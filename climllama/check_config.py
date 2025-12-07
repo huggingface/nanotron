@@ -88,9 +88,27 @@ def check_heads_divisible_by_tp(config: Config) -> List[str]:
     return errors
 
 
+def check_log_attn_probs(config: Config, allow_log_attn_probs: bool) -> List[str]:
+    errors: List[str] = []
+
+    log_attn_probs = getattr(config.model.model_config, "log_attn_probs", False)
+    if log_attn_probs and not allow_log_attn_probs:
+        errors.append(
+            "log_attn_probs=true is not allowed by default because it materializes full attention matrices "
+            "and can cause OOMs; pass --allow-log-attn-probs to acknowledge the overhead."
+        )
+
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check ClimLlama config for sequence length consistency.")
     parser.add_argument("config_file", help="Path to YAML or python config file.")
+    parser.add_argument(
+        "--allow-log-attn-probs",
+        action="store_true",
+        help="Permit configs with log_attn_probs=true (otherwise raises to avoid memory blow-ups).",
+    )
     args = parser.parse_args()
 
     config = get_config_from_file(args.config_file)
@@ -98,6 +116,7 @@ def main() -> int:
     errors = check_sequence_lengths(config)
     errors.extend(check_flash_attention_with_cp(config))
     errors.extend(check_heads_divisible_by_tp(config))
+    errors.extend(check_log_attn_probs(config, allow_log_attn_probs=args.allow_log_attn_probs))
 
     if errors:
         print("Config consistency check failed:")
