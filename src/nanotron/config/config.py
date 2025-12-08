@@ -355,7 +355,7 @@ class GeneralArgs:
 
         # Only expand if flag is True (default behavior)
         if self._expand_run_template:
-            self.run = self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+            self.run = self.run.replace("%date", datetime.datetime.now().strftime("%Y%m%d_%H"))
             self.run = self.run.replace("%jobid", os.environ.get("SLURM_JOB_ID", "local"))
             # Get git commit hash from environment variable (first 7 chars)
             git_hash = os.environ.get("GIT_COMMIT_HASH", "unknown")
