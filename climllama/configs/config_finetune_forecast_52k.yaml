@@ -467,7 +467,7 @@ tokens:
   batch_accumulation_per_replica: 2
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 6
+  micro_batch_size: 4
   sequence_length: 52100
   train_steps: 1200 # 551514 documents / 432 documents per step
   val_check_interval: -1
