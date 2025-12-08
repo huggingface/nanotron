@@ -8,6 +8,7 @@
 #SBATCH --cpus-per-task=96
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/%x_%j.out
+#SBATCH --signal=USR1@600  # Send SIGUSR1 10 minutes before timeout
 
 # Script to run finetuning with the generated config
 # Make sure you've run prepare_finetune_config.sh first to generate the config file

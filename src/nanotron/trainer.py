@@ -3,6 +3,7 @@ import gc
 import json
 import os
 import shutil
+import signal
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -163,6 +164,8 @@ class DistributedTrainer:
         self.model_config = self.config.model.model_config
         if model_class is not None:
             CONFIG_TO_MODEL_CLASS[self.model_config.__class__.__name__] = model_class
+        self._signal_received: bool = False
+        self._signal_number: Optional[int] = None
 
         ########################################
         ## We start with setting up loggers and process groups
@@ -525,6 +528,8 @@ class DistributedTrainer:
         ],
         **kwargs,
     ) -> None:
+        # Register signal handlers once we have distributed context ready
+        self._setup_signal_handlers()
         if self.config.checkpoints.save_initial_state and self.init_checkpoint_path is None:
             self.save_checkpoint()
 
@@ -549,8 +554,22 @@ class DistributedTrainer:
         # free memory
         gc.collect()
         torch.cuda.empty_cache()
+        triggered_by_signal = False
         with prof:
             for self.iteration_step in range(self.initial_iter_step, self.last_iter_step + 1):
+                saved_this_iteration = False
+
+                if self._signal_received:
+                    log_rank(
+                        f"Signal {self._signal_number} received before starting step {self.iteration_step}; saving checkpoint then exiting.",
+                        logger=logger,
+                        level=logging.WARNING,
+                        rank=0,
+                    )
+                    self.save_checkpoint()
+                    triggered_by_signal = True
+                    break
+
                 if isinstance(prof, torch.profiler.profile):
                     logger.info(f"Profiler on for step {self.iteration_step}")
                     prof.step()
@@ -598,8 +617,32 @@ class DistributedTrainer:
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
+                    saved_this_iteration = True
+
+                if self._signal_received:
+                    # Make sure we persist the latest state before exiting
+                    if not saved_this_iteration:
+                        log_rank(
+                            f"Signal {self._signal_number} received during training; saving checkpoint then exiting.",
+                            logger=logger,
+                            level=logging.WARNING,
+                            rank=0,
+                        )
+                        self.save_checkpoint()
+                    triggered_by_signal = True
+                    break
 
         dist.barrier()  # let's wait for everyone before leaving
+
+        if triggered_by_signal:
+            log_rank(
+                f"Exiting early after handling signal {self._signal_number}; checkpoint saved.",
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
+            self.post_training()
+            return
 
         if self.config.checkpoints.save_final_state:
             self.save_checkpoint()
@@ -1213,6 +1256,37 @@ class DistributedTrainer:
             loggerwriter = None
 
         return loggerwriter
+
+    def _handle_signal(self, signum, frame):
+        # Lightweight handler: mark the signal and let the training loop do the heavy work
+        if self._signal_received:
+            return
+        self._signal_received = True
+        self._signal_number = signum
+        try:
+            signal_name = signal.Signals(signum).name
+        except ValueError:
+            signal_name = str(signum)
+
+        log_rank(
+            f"Received signal {signal_name}; will save a checkpoint at step {self.metadata.last_train_step}",
+            logger=logger,
+            level=logging.WARNING,
+            rank=0,
+        )
+
+    def _setup_signal_handlers(self):
+        # Catch preemption signals so we can save a checkpoint before exiting
+        for sig in (signal.SIGUSR1,): #signal.SIGTERM, 
+            try:
+                signal.signal(sig, self._handle_signal)
+            except (AttributeError, OSError, ValueError) as exc:
+                log_rank(
+                    f"Could not register handler for signal {sig}: {exc}",
+                    logger=logger,
+                    level=logging.WARNING,
+                    rank=0,
+                )
 
     def pre_save_checkpoint(self) -> Path:
         # Check if eval_interval should be updated from file
