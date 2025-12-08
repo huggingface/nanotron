@@ -1,5 +1,5 @@
 checkpoints:
-  checkpoint_interval: 500
+  checkpoint_interval: 100
   checkpoints_path: /iopsstor/scratch/cscs/lhuang/FoundationModel/outputs/megatron_checkpoints/exp_fsq_245_split_vocab32768/llama_3B_vocab_32768/finetuned_checkpoints
   checkpoints_path_is_shared_file_system: true
   load_lr_scheduler: false
