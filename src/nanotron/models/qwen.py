@@ -208,7 +208,7 @@ class Qwen2Attention(LogMixin, nn.Module):
                 max_seq_len=config.max_position_embeddings,
                 base=config.rope_theta,
                 interleaved=config.rope_interleaved,
-                seq_len_scaling_factor=config.rope_seq_len_scaling_factor,
+                seq_len_scaling_factor=config.rope_seq_len_interpolation_factor,
                 fused=config._fused_rotary_emb,
             )
         self.attention = CoreAttention(config, tp_pg, cp_pg, layer_idx)
@@ -238,28 +238,28 @@ class Qwen2Attention(LogMixin, nn.Module):
 
         if self._use_qkv_packed:
             attn_output = self._forward_packed(qkv, seq_length, position_ids, cu_seqlens)
-        # else:
-        #     q, k, v = qkv.split(
-        #         [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
-        #     )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
-        #     q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
-        #     k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-        #     v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
-        #     if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
-        #         rotary_pos_emb = self.rotary_emb(
-        #             position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
-        #         )  # [b*s, dim] or [seq_length, dim]
-        #         q = self.rotary_emb.apply_rotary_pos_emb(
-        #             q, rotary_pos_emb, seq_length=seq_length
-        #         )  # [b*s, num_heads, head_dim]
-        #         k = self.rotary_emb.apply_rotary_pos_emb(
-        #             k, rotary_pos_emb, seq_length=seq_length
-        #         )  # [b*s, num_kv_heads, head_dim]
-        #     else:
-        #         log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
-        #     attn_output = self.attention(
-        #         q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
-        #     )
+        else:
+            q, k, v = qkv.split(
+                [self.local_q_size, self.local_kv_size, self.local_kv_size], dim=-1
+            )  # [batch_size*seq_length, q_size], [batch_size*seq_length, kv_size]
+            q = q.view(-1, self.local_num_heads, self.head_dim)  # [b*s, num_heads, head_dim]
+            k = k.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+            v = v.view(-1, self.local_num_kv_heads, self.head_dim)  # [b*s, num_kv_heads, head_dim]
+            if self.config.no_rope_layer is None or (self.layer_idx + 1) % self.config.no_rope_layer != 0:
+                rotary_pos_emb = self.rotary_emb(
+                    position_ids=position_ids if not self.simple_causal_mask else None, seq_length=seq_length
+                )  # [b*s, dim] or [seq_length, dim]
+                q = self.rotary_emb.apply_rotary_pos_emb(
+                    q, rotary_pos_emb, seq_length=seq_length
+                )  # [b*s, num_heads, head_dim]
+                k = self.rotary_emb.apply_rotary_pos_emb(
+                    k, rotary_pos_emb, seq_length=seq_length
+                )  # [b*s, num_kv_heads, head_dim]
+            else:
+                log_rank(f"skipping rotary for layer {self.layer_idx + 1}", logger=logger, level=logging.DEBUG, rank=0)
+            attn_output = self.attention(
+                q, k, v, position_ids=position_ids, seq_length=seq_length, cu_seqlens=cu_seqlens
+            )
         output = self.o_proj(attn_output)
         # Return original position_ids shape
         return {"hidden_states": output, "position_ids": position_ids.view(-1, seq_length)}

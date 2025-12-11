@@ -1,8 +1,13 @@
 # ruff: noqa: E402
 import dataclasses
 import json
+import sys
 from pathlib import Path
 from typing import Optional
+
+_this_file = Path(__file__).resolve()
+_nanotron_root = _this_file.parent.parent.parent.parent  # tests -> llama -> examples -> nanotron
+sys.path.insert(0, str(_nanotron_root))
 
 import pytest
 import torch
@@ -12,6 +17,7 @@ from utils import set_system_path
 set_system_path()
 
 import nanotron
+
 from nanotron import distributed as dist
 from nanotron.config import LlamaConfig as NanotronLlamaConfig
 from nanotron.config import NanotronConfigs
@@ -84,7 +90,7 @@ elif NT_MODEL_INSTANCE == Qwen2ForTraining:
             "tie_word_embeddings": False,
             "use_cache": True,
             "vocab_size": 4096,
-            "_attn_implementation": "sdpa",
+            "_attn_implementation": "flash_attention_2",
             "attention_bias": False,
             "rope_interleaved": False,
         }
@@ -117,8 +123,7 @@ def create_huggingface_model(model_name: Optional[str] = None) -> LlamaForCausal
         with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
             model_hf = LlamaForCausalLM._from_config(get_hf_config(CONFIG))
     else:
-        with init_on_device_and_dtype(torch.device("cuda"), torch.bfloat16):
-            model_hf = AutoModelForCausalLM.from_pretrained(model_name)
+        model_hf = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).cuda()
     return model_hf
 
 
@@ -336,13 +341,13 @@ if __name__ == "__main__":
     # run all tests
     # test_nt_to_hf(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
     # test_hf_to_nt(input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"))
-    test_tensor_parallel_conversion(
-        input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
-    )
+    # test_tensor_parallel_conversion(
+    #     input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda")
+    # )
 
     # Warning: Converting from HF to Nanotron is a better test because we don't initialize weights in standard way. (e.g. Layernorms)
     # Test SmolLM2-135M
-    # test_hf_to_nt(
-    #     input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"),
-    #     model_name="HuggingFaceTB/SmolLM2-135M",
-    # )
+    test_hf_to_nt(
+        input_ids=torch.randint(0, CONFIG.vocab_size, size=(BATCH_SIZE, SEQUENCE_LENGTH), device="cuda"),
+        model_name="HuggingFaceTB/SmolLM2-135M",
+    )

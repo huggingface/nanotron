@@ -141,6 +141,9 @@ class RotaryEmbedding(nn.Module):
                 self.rotate_half(rotary_part) * self.sin_values.unsqueeze(1)
             )
 
+        # Reshape back to [b*s, nheads, dim]
+        rotated_tensor = rotated_tensor.view(-1, rotated_tensor.shape[2], rotated_tensor.shape[3])
+
         # Concatenate with the pass-through part (if any)
         if pass_through_part is not None and pass_through_part.shape[-1] > 0:
             return torch.cat((rotated_tensor, pass_through_part), dim=-1)
