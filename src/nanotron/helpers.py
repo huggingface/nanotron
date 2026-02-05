@@ -157,6 +157,10 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         # Optional constant phase at min_decay_lr
         else:
             lmbda = lr_scheduler_args.min_decay_lr
+        
+        # TMP only to fix if optimizer load 0 get this exeption
+        if initial_lr == 0:
+            initial_lr = 0.003
 
         lmbda /= initial_lr  # Normalization for pytorch
         return lmbda
