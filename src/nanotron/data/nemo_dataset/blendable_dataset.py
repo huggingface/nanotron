@@ -142,10 +142,7 @@ class BlendableDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         dataset_idx = self.dataset_index[idx]
         sample_idx = self.dataset_sample_index[idx]
-        #print(f"dataset_idx: {dataset_idx}, sample_idx: {sample_idx}")
-        #print(f"offsets_in_samples: {self.offsets_in_samples}")
-        #print(f"calculated index: {sample_idx + self.offsets_in_samples[dataset_idx]}")
-        #print(f"dataset length: {len(self.datasets[dataset_idx])}")
+
         dataset = self.datasets[dataset_idx]
         dataset_length = len(dataset)
         if dataset_length == 0:
