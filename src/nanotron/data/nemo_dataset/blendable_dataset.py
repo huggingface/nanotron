@@ -142,9 +142,32 @@ class BlendableDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         dataset_idx = self.dataset_index[idx]
         sample_idx = self.dataset_sample_index[idx]
+        #print(f"dataset_idx: {dataset_idx}, sample_idx: {sample_idx}")
+        #print(f"offsets_in_samples: {self.offsets_in_samples}")
+        #print(f"calculated index: {sample_idx + self.offsets_in_samples[dataset_idx]}")
+        #print(f"dataset length: {len(self.datasets[dataset_idx])}")
+        dataset = self.datasets[dataset_idx]
+        dataset_length = len(dataset)
+        if dataset_length == 0:
+            raise IndexError(f"Dataset at index {dataset_idx} is empty.")
 
-        return self.datasets[dataset_idx][sample_idx + self.offsets_in_samples[dataset_idx]] # TODO: is it okay to not respect dataset_sample_index? Since it's sequential it's okay for now
+        offset = self.offsets_in_samples[dataset_idx]
+        normalized_offset = offset % dataset_length
+        if normalized_offset != offset:
+            log_rank(
+                f"[BlendableDataset] Adjusting runtime offset from {offset} to {normalized_offset} for dataset {dataset_idx}.",
+                logger=logger,
+                level=logging.WARNING,
+                rank=0,
+            )
+            self.offsets_in_samples[dataset_idx] = normalized_offset
 
+        target_idx = sample_idx + normalized_offset
+        if target_idx >= dataset_length:
+            target_idx %= dataset_length
+
+        #return self.datasets[dataset_idx][sample_idx + self.offsets_in_samples[dataset_idx]] # TODO: is it okay to not respect dataset_sample_index? Since it's sequential it's okay for now
+        return dataset[target_idx] # TODO: is it okay to not respect dataset_sample_index? Since it's sequential it's okay for now
     # @property
     # def last_file_idx(self):
     #     return None if self.last_dataset_idx[-1] == -1 else self.datasets[self.last_dataset_idx[-1]].current_file
@@ -184,12 +207,13 @@ class BlendableDataset(torch.utils.data.Dataset):
         """
         stats = {}
         for dataset_idx, dataset in enumerate(self.datasets):
-            assert (
-                "s3" in dataset.folder_path
-            ), "Only S3 paths are supported for consumption stats"  # TODO: remove this
+            #assert (
+            #    "s3" in str(dataset.folder_path)
+            #), "Only S3 paths are supported for consumption stats"  # TODO: remove this
+            #print("PROVA")
+            #print(self.consumed_tokens[dataset_idx])
             stats[dataset.folder_path] = {"tokens": self.consumed_tokens[dataset_idx]}
         return stats
-
 
 class MemoryEfficientBlendableDataset(torch.utils.data.Dataset):
     """
