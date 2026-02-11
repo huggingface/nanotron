@@ -85,6 +85,7 @@ def get_config_mapping(nt_to_hf: bool = True) -> dict[str, str]:
         "vocab_size": "vocab_size",
         "attention_bias": "attention_bias",
         "rope_interleaved": "rope_interleaved",
+        "no_rope_layer_interval": "no_rope_layer",
     }
     if nt_to_hf:
         return {nt: hf for hf, nt in hf_to_nt_map.items()}
