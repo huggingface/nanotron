@@ -1,4 +1,5 @@
 import dataclasses
+import os
 from typing import Dict, List, Union
 
 import numpy as np
@@ -7,6 +8,32 @@ import torch
 from nanotron import distributed as dist
 from nanotron.parallel.context import ParallelContext
 from nanotron.parallel.pipeline_parallel.tensor_pointer import TensorPointer
+
+
+def _hybrid_bp_cfg():
+    start = int(os.getenv("HYBRID_BP_DNA_KMER_START_ID", "-1"))
+    end = int(os.getenv("HYBRID_BP_DNA_KMER_END_ID", "-1"))
+    k = int(os.getenv("HYBRID_BP_K", "6"))
+    enabled = start >= 0 and end > start
+    return enabled, start, end, k
+
+
+def _build_token_mask(
+    label_ids: Union[np.ndarray, torch.Tensor],
+    label_mask: Union[np.ndarray, torch.Tensor],
+    use_numpy: bool,
+):
+    enabled, start, end, k = _hybrid_bp_cfg()
+    if not enabled:
+        return None
+    if use_numpy:
+        token_mask = np.full_like(label_ids, fill_value=-1, dtype=np.int64)
+    else:
+        token_mask = torch.full_like(label_ids, fill_value=-1, dtype=torch.long)
+    valid = label_mask > 0
+    dna = valid & (label_ids >= start) & (label_ids < end)
+    token_mask[dna] = k
+    return token_mask
 
 
 @dataclasses.dataclass
@@ -40,12 +67,17 @@ class DataCollatorForCLM:
             self.output_pp_rank,
         ]:
             assert all(len(example) == 0 for example in examples)
-            return {
+            enabled, _, _, _ = _hybrid_bp_cfg()
+            token_mask = TensorPointer(group_rank=self.output_pp_rank) if enabled else None
+            result = {
                 "input_ids": TensorPointer(group_rank=self.input_pp_rank),
                 "input_mask": TensorPointer(group_rank=self.input_pp_rank),
                 "label_ids": TensorPointer(group_rank=self.output_pp_rank),
                 "label_mask": TensorPointer(group_rank=self.output_pp_rank),
             }
+            if token_mask is not None:
+                result["token_mask"] = token_mask
+            return result
 
         # TODO @nouamanetazi: Is it better to have examples as np.array or torch.Tensor?
         input_ids = vstack([examples[i]["input_ids"] for i in range(len(examples))])  # (b, s)
@@ -103,6 +135,13 @@ class DataCollatorForCLM:
             )
             result["label_ids"] = result["label_ids"][:, local_slice]  # (b, s/cp_size)
             result["label_mask"] = result["label_mask"][:, local_slice]  # (b, s/cp_size)
+            token_mask = _build_token_mask(
+                label_ids=result["label_ids"],
+                label_mask=result["label_mask"],
+                use_numpy=self.use_numpy,
+            )
+            if token_mask is not None:
+                result["token_mask"] = token_mask
 
         if (
             not isinstance(result["input_ids"], TensorPointer)
@@ -156,12 +195,17 @@ class DataCollatorForCLMWithPositionIds:
         current_pp_rank = dist.get_rank(self.parallel_context.pp_pg)
         if current_pp_rank not in [self.input_pp_rank, self.output_pp_rank]:
             assert all(len(example) == 0 for example in examples)
-            return {
+            enabled, _, _, _ = _hybrid_bp_cfg()
+            token_mask = TensorPointer(group_rank=self.output_pp_rank) if enabled else None
+            result = {
                 "input_ids": TensorPointer(group_rank=self.input_pp_rank),
                 "positions": TensorPointer(group_rank=self.input_pp_rank),
                 "label_ids": TensorPointer(group_rank=self.output_pp_rank),
                 "label_mask": TensorPointer(group_rank=self.output_pp_rank),
             }
+            if token_mask is not None:
+                result["token_mask"] = token_mask
+            return result
 
         # input_ids[0,:20]
         # array([  198,    50,    30, 12532,  3589,   198,    51,    30, 30618,
@@ -249,6 +293,13 @@ class DataCollatorForCLMWithPositionIds:
             )
             result["label_ids"] = result["label_ids"][:, local_slice]  # (b, s/cp_size)
             result["label_mask"] = result["label_mask"][:, local_slice]  # (b, s/cp_size)
+            token_mask = _build_token_mask(
+                label_ids=result["label_ids"],
+                label_mask=result["label_mask"],
+                use_numpy=True,
+            )
+            if token_mask is not None:
+                result["token_mask"] = token_mask
 
         # Validate shapes
         if (

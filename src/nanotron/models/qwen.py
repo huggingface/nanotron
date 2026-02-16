@@ -889,6 +889,133 @@ class LossWithZLoss(Loss):
         z_loss = masked_mean(z_loss.detach(), label_mask, dtype=torch.float)
         return {"loss": loss, "z_loss": z_loss}
 
+
+class HybridBPLoss(Loss):
+    """Hybrid loss: BP-marginal loss on DNA k-mers + CE on non-BP tokens."""
+
+    def __init__(
+        self,
+        tp_pg: dist.ProcessGroup,
+        k: int,
+        dna_kmer_start_id: int,
+        dna_kmer_end_id: int,
+        weight_special_ce: float = 1.0,
+    ):
+        super().__init__(tp_pg)
+        self.k = k
+        self.dna_kmer_start_id = dna_kmer_start_id
+        self.dna_kmer_end_id = dna_kmer_end_id
+        self.weight_special_ce = weight_special_ce
+        self._warned_tp = False
+        self._warned_missing = False
+
+    def _fallback_ce(
+        self,
+        sharded_logits: torch.Tensor,
+        label_ids: torch.Tensor,
+        label_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        ce = sharded_cross_entropy(sharded_logits, label_ids.contiguous(), group=self.tp_pg, dtype=torch.float)
+        ce = masked_mean(ce, label_mask, dtype=torch.float)
+        return {"loss": ce}
+
+    def _synthesize_token_mask(
+        self,
+        label_ids: torch.Tensor,
+        label_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        # Interim behavior: full-k supervision for tokens in DNA k-mer id range.
+        token_mask = torch.full_like(label_ids, fill_value=-1, dtype=torch.long)
+        valid = label_mask > 0
+        dna = valid & (label_ids >= self.dna_kmer_start_id) & (label_ids < self.dna_kmer_end_id)
+        token_mask[dna] = self.k
+        return token_mask
+
+    def _label_nt_indices(self, label_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Map DNA k-mer label ids to nucleotide indices [0..3] at each k position.
+        Base order is A,T,C,G to match HybridTokenizer.
+        """
+        local = (label_ids - self.dna_kmer_start_id).clamp(min=0)
+        base = torch.tensor(4, device=label_ids.device, dtype=local.dtype)
+        nt_by_pos = []
+        for pos in range(self.k):
+            power = self.k - 1 - pos
+            div = torch.pow(base, power)
+            nt = (local // div) % 4
+            nt_by_pos.append(nt)
+        return torch.stack(nt_by_pos, dim=-1)
+
+    def forward(
+        self,
+        sharded_logits: torch.Tensor,  # [batch_size*seq_length, logits]
+        label_ids: torch.Tensor,  # [batch_size, seq_length]
+        label_mask: torch.Tensor,  # [batch_size, seq_length]
+        token_mask: torch.Tensor,  # [batch_size, seq_length]
+    ) -> Dict[str, torch.Tensor]:
+        sharded_logits = sharded_logits.view(label_ids.shape[0], label_ids.shape[1], -1)
+
+        if self.tp_pg.size() > 1:
+            if not self._warned_tp and dist.get_rank(self.tp_pg) == 0:
+                logger.warning("Hybrid BP loss currently supports tp=1 only; falling back to CE.")
+                self._warned_tp = True
+            return self._fallback_ce(sharded_logits=sharded_logits, label_ids=label_ids, label_mask=label_mask)
+
+        if token_mask is None:
+            if not self._warned_missing and dist.get_rank(self.tp_pg) == 0:
+                logger.warning("token_mask is missing; synthesizing token_mask from label_ids/label_mask.")
+                self._warned_missing = True
+            token_mask = self._synthesize_token_mask(label_ids=label_ids, label_mask=label_mask)
+
+        valid = label_mask > 0
+        in_dna_range = (label_ids >= self.dna_kmer_start_id) & (label_ids < self.dna_kmer_end_id)
+        bp_mask = valid & (token_mask > 0) & in_dna_range
+        non_bp_mask = valid & (~bp_mask)
+
+        token_probs = torch.softmax(sharded_logits, dim=-1)
+        vocab_indices = torch.arange(sharded_logits.shape[-1], device=sharded_logits.device, dtype=label_ids.dtype)
+        nt_by_pos = self._label_nt_indices(label_ids)
+
+        bp_loss_total = torch.tensor(0.0, device=sharded_logits.device)
+        bp_terms = torch.tensor(0.0, device=sharded_logits.device)
+        for pos in range(self.k):
+            pos_valid = bp_mask & (token_mask > pos)
+            if not torch.any(pos_valid):
+                continue
+
+            nt_prob = []
+            for nt_idx in range(4):
+                matches = ((vocab_indices - self.dna_kmer_start_id) >= 0) & (
+                    (vocab_indices - self.dna_kmer_start_id) < (4 ** self.k)
+                )
+                local = (vocab_indices - self.dna_kmer_start_id).clamp(min=0)
+                div = 4 ** (self.k - 1 - pos)
+                vocab_nt = (local // div) % 4
+                nt_mask = matches & (vocab_nt == nt_idx)
+                nt_prob.append(token_probs[..., nt_mask].sum(dim=-1))
+            nt_prob = torch.stack(nt_prob, dim=-1).clamp_min(1e-9)
+
+            target_nt = nt_by_pos[..., pos]
+            nll = -torch.log(nt_prob.gather(-1, target_nt.unsqueeze(-1)).squeeze(-1))
+            bp_loss_total = bp_loss_total + (nll * pos_valid).sum(dtype=torch.float)
+            bp_terms = bp_terms + pos_valid.sum(dtype=torch.float)
+
+        bp_loss = bp_loss_total / bp_terms.clamp_min(1.0)
+
+        ce_loss = sharded_cross_entropy(sharded_logits, label_ids.contiguous(), group=self.tp_pg, dtype=torch.float)
+        ce_loss = (ce_loss * non_bp_mask).sum(dtype=torch.float) / non_bp_mask.sum(dtype=torch.float).clamp_min(1.0)
+
+        has_bp = bp_terms > 0
+        has_ce = non_bp_mask.sum() > 0
+        if has_bp and has_ce:
+            loss = bp_loss + self.weight_special_ce * ce_loss
+        elif has_bp:
+            loss = bp_loss
+        else:
+            loss = ce_loss
+        return {"loss": loss}
+
+
 from nanotron.logging import LoggingCollectorMixin
 class Qwen2ForTraining(NanotronModel, LoggingCollectorMixin):
     def __init__(
@@ -902,21 +1029,42 @@ class Qwen2ForTraining(NanotronModel, LoggingCollectorMixin):
         self.model = Qwen2Model(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
 
         # Choose the appropriate loss class based on config
+        hybrid_bp_loss_enabled = getattr(config, "hybrid_bp_loss_enabled", False)
+        hybrid_bp_loss_k = getattr(config, "hybrid_bp_loss_k", 6)
+        hybrid_bp_dna_kmer_start_id = getattr(config, "hybrid_bp_dna_kmer_start_id", None)
+        hybrid_bp_dna_kmer_end_id = getattr(config, "hybrid_bp_dna_kmer_end_id", None)
+        hybrid_bp_weight_special_ce = getattr(config, "hybrid_bp_weight_special_ce", 1.0)
         loss_kwargs = {
             "tp_pg": parallel_context.tp_pg,
         }
+        if hybrid_bp_loss_enabled and config.z_loss_enabled:
+            raise ValueError("hybrid_bp_loss_enabled is not yet supported with z_loss_enabled.")
+        module_input_keys = {"sharded_logits", "label_ids", "label_mask"}
+        if hybrid_bp_loss_enabled:
+            if hybrid_bp_dna_kmer_start_id is None or hybrid_bp_dna_kmer_end_id is None:
+                raise ValueError(
+                    "hybrid_bp_loss_enabled=true requires hybrid_bp_dna_kmer_start_id "
+                    "and hybrid_bp_dna_kmer_end_id in model_config."
+                )
+            loss_kwargs.update(
+                {
+                    "k": hybrid_bp_loss_k,
+                    "dna_kmer_start_id": hybrid_bp_dna_kmer_start_id,
+                    "dna_kmer_end_id": hybrid_bp_dna_kmer_end_id,
+                    "weight_special_ce": hybrid_bp_weight_special_ce,
+                }
+            )
+            module_input_keys.add("token_mask")
         if config.z_loss_enabled:
             loss_kwargs["z_loss_coefficient"] = config.z_loss_coefficient
 
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
-            module_builder=LossWithZLoss if config.z_loss_enabled else Loss,
+            module_builder=LossWithZLoss
+            if config.z_loss_enabled
+            else (HybridBPLoss if hybrid_bp_loss_enabled else Loss),
             module_kwargs=loss_kwargs,
-            module_input_keys={
-                "sharded_logits",
-                "label_ids",
-                "label_mask",
-            },
+            module_input_keys=module_input_keys,
             module_output_keys={"loss", "z_loss"} if config.z_loss_enabled else {"loss"},
         )
         self.parallel_context = parallel_context
@@ -929,16 +1077,20 @@ class Qwen2ForTraining(NanotronModel, LoggingCollectorMixin):
         position_ids: Union[torch.Tensor, TensorPointer],
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
+        token_mask: Optional[Union[torch.Tensor, TensorPointer]] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         sharded_logits = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
         )
-        loss = self.loss(
-            sharded_logits=sharded_logits,
-            label_ids=label_ids,
-            label_mask=label_mask,
-        )
+        loss_inputs = {
+            "sharded_logits": sharded_logits,
+            "label_ids": label_ids,
+            "label_mask": label_mask,
+        }
+        if token_mask is not None:
+            loss_inputs["token_mask"] = token_mask
+        loss = self.loss(**loss_inputs)
         if self.config.z_loss_enabled:
             return {"loss": loss["loss"], "z_loss": loss["z_loss"]}
         else:
