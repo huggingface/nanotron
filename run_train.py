@@ -56,7 +56,18 @@ logger = logging.get_logger(__name__)
 # import lovely_tensors as lt
 
 # lt.monkey_patch()
+import os
+import torch.distributed as dist
 
+# Set unique Triton cache per rank to avoid race conditions
+if dist.is_available() and dist.is_initialized():
+    rank = dist.get_rank()
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    node_rank = int(os.environ.get('SLURM_PROCID', 0))
+    # Create unique cache directory per rank
+    cache_dir = f"/fsx/{os.getenv('USER')}/.triton/node_{node_rank}_rank_{rank}_local_{local_rank}"
+    os.environ['TRITON_CACHE_DIR'] = cache_dir
+    os.makedirs(cache_dir, exist_ok=True)
 
 def get_dataloader_from_data_stage(
     trainer: DistributedTrainer,
@@ -121,7 +132,7 @@ def get_dataloader_from_data_stage(
                 splits=data.dataset.hf_dataset_splits,
             )["train"]
 
-            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
             tokenizer.padding_side = "left"
             sequence_sep_tokens = [tokenizer.bos_token, tokenizer.eos_token, tokenizer.pad_token, tokenizer.unk_token]
             # assert bos or eos are present
@@ -191,7 +202,7 @@ def get_dataloader_from_data_stage(
         from nanotron.data.tokenized_bytes import get_tb_dataloader, get_tb_datasets
 
         tokenizer_path = trainer.config.tokenizer.tokenizer_name_or_path
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
         assert (
             len(tokenizer) == trainer.model_config.vocab_size
         ), f"Tokenizer vocab size ({len(tokenizer)}) does not match model config vocab size ({trainer.model_config.vocab_size}). "
