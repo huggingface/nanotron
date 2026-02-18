@@ -286,7 +286,7 @@ def sanity_check_dataloader(dataloader, tokenizer_path, sanity_check_dataloader_
         return
 
     NUM_BATCHES = 10
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
 
     if dist.get_rank() == 0:
         check_step = -1
