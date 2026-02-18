@@ -907,7 +907,6 @@ class HybridBPLoss(Loss):
         self.dna_kmer_end_id = dna_kmer_end_id
         self.weight_special_ce = weight_special_ce
         self._warned_tp = False
-        self._warned_missing = False
 
     def _fallback_ce(
         self,
@@ -918,18 +917,6 @@ class HybridBPLoss(Loss):
         ce = sharded_cross_entropy(sharded_logits, label_ids.contiguous(), group=self.tp_pg, dtype=torch.float)
         ce = masked_mean(ce, label_mask, dtype=torch.float)
         return {"loss": ce}
-
-    def _synthesize_token_mask(
-        self,
-        label_ids: torch.Tensor,
-        label_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        # Interim behavior: full-k supervision for tokens in DNA k-mer id range.
-        token_mask = torch.full_like(label_ids, fill_value=-1, dtype=torch.long)
-        valid = label_mask > 0
-        dna = valid & (label_ids >= self.dna_kmer_start_id) & (label_ids < self.dna_kmer_end_id)
-        token_mask[dna] = self.k
-        return token_mask
 
     def _label_nt_indices(self, label_ids: torch.Tensor) -> torch.Tensor:
         """
@@ -962,15 +949,29 @@ class HybridBPLoss(Loss):
             return self._fallback_ce(sharded_logits=sharded_logits, label_ids=label_ids, label_mask=label_mask)
 
         if token_mask is None:
-            if not self._warned_missing and dist.get_rank(self.tp_pg) == 0:
-                logger.warning("token_mask is missing; synthesizing token_mask from label_ids/label_mask.")
-                self._warned_missing = True
-            token_mask = self._synthesize_token_mask(label_ids=label_ids, label_mask=label_mask)
+            raise ValueError(
+                "Hybrid BP loss requires dataset-provided `token_mask` aligned with `label_ids`. "
+                "Do not synthesize token_mask from id ranges, as this breaks tail supervision."
+            )
+
+        if token_mask.shape != label_ids.shape:
+            raise ValueError(
+                f"`token_mask` shape {tuple(token_mask.shape)} must match `label_ids` shape {tuple(label_ids.shape)}."
+            )
+        if token_mask.dtype.is_floating_point:
+            raise ValueError(f"`token_mask` must be integer dtype, got {token_mask.dtype}.")
 
         valid = label_mask > 0
+        bad = (token_mask < -2) | (token_mask > self.k)
+        if torch.any(bad & valid):
+            raise ValueError("`token_mask` contains invalid values on supervised positions; expected {-2,-1,0..k}.")
+        if torch.any((token_mask == -2) & valid):
+            raise ValueError("`token_mask==-2` (padding) found on supervised positions.")
+
         in_dna_range = (label_ids >= self.dna_kmer_start_id) & (label_ids < self.dna_kmer_end_id)
         bp_mask = valid & (token_mask > 0) & in_dna_range
-        non_bp_mask = valid & (~bp_mask)
+        # CE is only for natural-language positions; DNA special/ignored (token_mask==0) has no loss.
+        ce_mask = valid & (token_mask == -1)
 
         token_probs = torch.softmax(sharded_logits, dim=-1)
         vocab_indices = torch.arange(sharded_logits.shape[-1], device=sharded_logits.device, dtype=label_ids.dtype)
@@ -1003,10 +1004,10 @@ class HybridBPLoss(Loss):
         bp_loss = bp_loss_total / bp_terms.clamp_min(1.0)
 
         ce_loss = sharded_cross_entropy(sharded_logits, label_ids.contiguous(), group=self.tp_pg, dtype=torch.float)
-        ce_loss = (ce_loss * non_bp_mask).sum(dtype=torch.float) / non_bp_mask.sum(dtype=torch.float).clamp_min(1.0)
+        ce_loss = (ce_loss * ce_mask).sum(dtype=torch.float) / ce_mask.sum(dtype=torch.float).clamp_min(1.0)
 
         has_bp = bp_terms > 0
-        has_ce = non_bp_mask.sum() > 0
+        has_ce = ce_mask.sum() > 0
         if has_bp and has_ce:
             loss = bp_loss + self.weight_special_ce * ce_loss
         elif has_bp:
