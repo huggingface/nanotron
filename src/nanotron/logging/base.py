@@ -19,13 +19,6 @@ import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from logging import (
-    CRITICAL,
-    DEBUG,
-    ERROR,
-    FATAL,
-    INFO,
-    NOTSET,
-    WARNING,
     Formatter,
     Logger,
 )
@@ -39,6 +32,17 @@ from nanotron import distributed as dist
 if TYPE_CHECKING:
     from nanotron.config import LoggingArgs
 from nanotron.parallel import ParallelContext
+
+
+# Define our own constants instead of importing from logging
+CRITICAL = 50
+FATAL = CRITICAL
+ERROR = 40
+WARNING = 30
+WARN = WARNING
+INFO = 20
+DEBUG = 10
+NOTSET = 0
 
 log_levels = {
     "debug": DEBUG,
