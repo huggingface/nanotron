@@ -36,6 +36,37 @@ def _build_token_mask(
     return token_mask
 
 
+def _extract_label_aligned_token_mask_from_examples(
+    examples: List[Dict[str, List[np.ndarray]]],
+    sequence_length: int,
+    expanded_input_length: int,
+    use_numpy: bool,
+):
+    """
+    Prefer dataset-provided token_mask (tail-aware), aligned to label_ids.
+
+    Expected shapes per sample:
+    - seq_len + 1: shift right by one to align with labels
+    - seq_len: already label-aligned
+    """
+    if "token_mask" not in examples[0]:
+        return None
+
+    vstack = np.vstack if use_numpy else torch.vstack
+    token_mask = vstack([examples[i]["token_mask"] for i in range(len(examples))])
+    token_len = token_mask.shape[1]
+
+    if token_len == expanded_input_length:
+        return token_mask[:, 1:]
+    if token_len == sequence_length:
+        return token_mask
+
+    raise ValueError(
+        "Invalid token_mask length. Expected per-sample length "
+        f"{expanded_input_length} or {sequence_length}, got {token_len}."
+    )
+
+
 @dataclasses.dataclass
 class DataCollatorForCLM:
     """
@@ -135,11 +166,21 @@ class DataCollatorForCLM:
             )
             result["label_ids"] = result["label_ids"][:, local_slice]  # (b, s/cp_size)
             result["label_mask"] = result["label_mask"][:, local_slice]  # (b, s/cp_size)
-            token_mask = _build_token_mask(
-                label_ids=result["label_ids"],
-                label_mask=result["label_mask"],
+
+            token_mask = _extract_label_aligned_token_mask_from_examples(
+                examples=examples,
+                sequence_length=self.sequence_length,
+                expanded_input_length=expanded_input_length,
                 use_numpy=self.use_numpy,
             )
+            if token_mask is not None:
+                token_mask = token_mask[:, local_slice]
+            else:
+                token_mask = _build_token_mask(
+                    label_ids=result["label_ids"],
+                    label_mask=result["label_mask"],
+                    use_numpy=self.use_numpy,
+                )
             if token_mask is not None:
                 result["token_mask"] = token_mask
 
@@ -293,11 +334,21 @@ class DataCollatorForCLMWithPositionIds:
             )
             result["label_ids"] = result["label_ids"][:, local_slice]  # (b, s/cp_size)
             result["label_mask"] = result["label_mask"][:, local_slice]  # (b, s/cp_size)
-            token_mask = _build_token_mask(
-                label_ids=result["label_ids"],
-                label_mask=result["label_mask"],
+
+            token_mask = _extract_label_aligned_token_mask_from_examples(
+                examples=examples,
+                sequence_length=self.sequence_length,
+                expanded_input_length=expanded_input_length,
                 use_numpy=True,
             )
+            if token_mask is not None:
+                token_mask = token_mask[:, local_slice]
+            else:
+                token_mask = _build_token_mask(
+                    label_ids=result["label_ids"],
+                    label_mask=result["label_mask"],
+                    use_numpy=True,
+                )
             if token_mask is not None:
                 result["token_mask"] = token_mask
 
