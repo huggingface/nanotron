@@ -3,7 +3,7 @@ import glob
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import List, Optional, Type, Union
+from typing import Dict, List, Optional, Type, Union
 
 import dacite
 import torch
@@ -439,6 +439,29 @@ class GenerationArgs:
 
 
 @dataclass
+class ValidationDatasetsArgs:
+    """Arguments for per-dataset validation loss logging.
+
+    Two modes (can be combined):
+    1. Tail-sample mode: domain_names maps names to training folder indices.
+       Uses last N samples from each training dataset (N = limit_val_batches * micro_batch_size * dp_size).
+       WARNING: these samples are NOT excluded from training — if training wraps around, they leak.
+    2. External folder mode: val_dataset_folders lists separate held-out dataset paths.
+       Each entry becomes its own validation domain (name derived from folder basename).
+
+    If neither domain_names nor val_dataset_folders is set, auto-derives domains from training folder basenames.
+    To disable validation, omit the 'validation' section from the YAML entirely.
+    """
+
+    limit_val_batches: int = 5  # number of micro-batches per domain per validation run
+    domain_names: Optional[Dict[str, List[int]]] = None
+    # e.g. {"text": [0], "dna": [1,2,3,4,5,6]} maps dataset_folder indices to domain names
+    val_dataset_folders: Optional[List[str]] = None
+    # External held-out validation dataset paths, e.g.:
+    # ["/path/to/evo2_valid/standard/", "/path/to/fwedu_valid/standard/"]
+
+
+@dataclass
 class Config:
     """Main configuration class"""
 
@@ -455,6 +478,7 @@ class Config:
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
     s3_upload: Optional[S3UploadArgs] = None
+    validation: Optional[ValidationDatasetsArgs] = None
 
     @classmethod
     def create_empty(cls):
