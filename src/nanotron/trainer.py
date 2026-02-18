@@ -35,6 +35,7 @@ from nanotron.config import (
     ParallelismArgs,
     RandomInit,
     SpectralMupInit,
+    ValidationDatasetsArgs,
     get_config_from_file,
 )
 from nanotron.constants import MODEL_CONFIG_FILE_NAME
@@ -278,6 +279,7 @@ class DistributedTrainer:
         self.limit_val_batches = self.config.tokens.limit_val_batches
         self.current_dataloader: Optional[DataLoader] = None  # used for the current training stage
         self.current_base_dl: Optional[DataLoader] = None  # used for the current training stage
+        self._val_dataloaders: Optional[Dict[str, DataLoader]] = None  # per-domain validation dataloaders
 
         log_libraries_versions(logger=logger)
         log_rank("Config:", logger=logger, level=logging.INFO, rank=0, is_separator=True)
@@ -588,6 +590,14 @@ class DistributedTrainer:
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg, tbi_logs=tbi_logs)
 
+                # Per-domain validation
+                if (
+                    self.config.validation is not None
+                    and self.config.tokens.val_check_interval > 0
+                    and self.iteration_step % self.config.tokens.val_check_interval == 0
+                ):
+                    self.run_validation()
+
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
                     self.save_checkpoint()
@@ -735,6 +745,165 @@ class DistributedTrainer:
             nb_microbatches=self.limit_val_batches,
         )
         return outputs
+
+
+    def _build_val_dataloaders(self):
+        """Build per-domain validation dataloaders.
+
+        If val_dataset_folders is set in config, uses external held-out datasets.
+        Otherwise, uses tail samples from training datasets (Warn: risks contamination when the training exhausts the dataset).
+        """
+        from nanotron.data.tokenized_bytes import build_val_dataloaders
+        from nanotron.parallel.pipeline_parallel.utils import get_input_output_pp_ranks
+        from transformers import AutoTokenizer
+
+        val_config: ValidationDatasetsArgs = self.config.validation
+        stage = self.config.data_stages[0]
+        dataset_config = stage.data.dataset
+        dataset_folders = dataset_config.dataset_folder
+
+        # Build domain name mapping for tail-sample mode
+        domain_names = {}
+        if val_config.domain_names is not None:
+            domain_names = val_config.domain_names
+        elif val_config.val_dataset_folders is None:
+            # Auto-derive domain names only when no explicit config at all
+            basenames = [os.path.basename(f.rstrip("/")) for f in dataset_folders]
+            use_parent = len(set(basenames)) < len(basenames)
+            for idx, folder in enumerate(dataset_folders):
+                stripped = folder.rstrip("/")
+                if use_parent:
+                    name = os.path.basename(os.path.dirname(stripped))
+                else:
+                    name = os.path.basename(stripped)
+                if name in domain_names:
+                    name = f"{name}_{idx}"
+                domain_names[name] = [idx]
+
+        # Get eos_token_id for position computation
+        tokenizer_path = self.config.tokenizer.tokenizer_name_or_path
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+        eos_token_id = tokenizer.eos_token_id
+
+        input_pp_rank, output_pp_rank = get_input_output_pp_ranks(model=self.model)
+
+        self._val_dataloaders = build_val_dataloaders(
+            dataset_folders=dataset_folders,
+            domain_names=domain_names,
+            limit_val_batches=val_config.limit_val_batches,
+            sequence_length=self.sequence_length,
+            micro_batch_size=self.micro_batch_size,
+            token_size=dataset_config.token_size_in_bytes,
+            parallel_context=self.parallel_context,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            return_positions=dataset_config.return_positions,
+            eos_token_id=eos_token_id,
+            use_position_ids=self.model_config.__class__.__name__ == "Qwen2Config",
+            use_doc_masking=getattr(self.model_config, '_use_doc_masking', False),
+            val_dataset_folders=val_config.val_dataset_folders,
+        )
+        self._val_iters = {name: iter(dl) for name, dl in self._val_dataloaders.items()}
+
+        log_rank(
+            f"[Validation] Built {len(self._val_dataloaders)} validation dataloaders: {list(self._val_dataloaders.keys())}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
+
+    def _prepare_val_batch(self, batch):
+        """Convert a raw dataloader batch (numpy arrays) to CUDA tensors."""
+        import numpy as np
+
+        batch = {k: torch.from_numpy(v) if isinstance(v, np.ndarray) else v for k, v in batch.items()}
+        batch = {
+            k: v if isinstance(v, TensorPointer)
+            else v.to("cuda", memory_format=torch.contiguous_format, non_blocking=True)
+            for k, v in batch.items()
+        }
+        return batch
+
+    def _get_val_microbatches(self, domain_name, limit_val_batches):
+        """Get limit_val_batches micro-batches for a domain, always starting from sample 0."""
+        dl = self._val_dataloaders[domain_name]
+        # Reset sampler so we always evaluate on the exact same samples every time
+        dl.batch_sampler.consumed_samples = 0
+        val_iter = iter(dl)
+
+        batches = []
+        for _ in range(limit_val_batches):
+            batch = next(val_iter)
+            batches.append(self._prepare_val_batch(batch))
+        return batches
+
+    def run_validation(self):
+        """Run per-domain validation and log losses to wandb."""
+        if self.config.validation is None:
+            return
+
+        # Lazy build
+        if self._val_dataloaders is None:
+            self._build_val_dataloaders()
+
+        val_config = self.config.validation
+        limit_val_batches = val_config.limit_val_batches
+
+        self.model.eval()
+        val_losses = {}
+
+        with torch.inference_mode():
+            for domain_name in self._val_dataloaders:
+                microbatches = self._get_val_microbatches(domain_name, limit_val_batches)
+                losses = []
+
+                for micro_batch in microbatches:
+                    output = self.model(**micro_batch)
+                    if not isinstance(output, dict):
+                        output = {"loss": output}
+                    if isinstance(output["loss"], torch.Tensor):
+                        losses.append(output["loss"].detach())
+
+                if losses:
+                    loss = torch.stack(losses).mean()
+                    # All-reduce across DP
+                    dist.all_reduce(loss, group=self.parallel_context.dp_pg, op=dist.ReduceOp.AVG)
+                    val_losses[domain_name] = loss.item()
+
+        self.model.train()
+
+        # Log to wandb
+        self._log_val_losses(val_losses)
+
+    def _log_val_losses(self, val_losses: Dict[str, float]):
+        """Log per-domain validation losses to wandb."""
+        tp_size = self.parallel_context.tp_pg.size()
+        dp_rank = dist.get_rank(self.parallel_context.dp_pg)
+        world_rank = dist.get_rank(self.parallel_context.world_pg)
+
+        should_log = wandb is not None and (
+            (tp_size > 1 and dp_rank == 0 and self.metrics_logging.log_level > 0)
+            or (tp_size > 1 and world_rank == self.logger_ranks[0] and self.metrics_logging.log_level == 0)
+            or (tp_size == 1 and world_rank == self.logger_ranks[0])
+        )
+
+        if should_log:
+            import math
+
+            log_dict = {"iteration_step": self.iteration_step}
+            for domain_name, loss in val_losses.items():
+                log_dict[f"val_loss/{domain_name}"] = loss
+                log_dict[f"val_ppl/{domain_name}"] = math.exp(min(loss, 20))  # cap to avoid overflow
+            wandb.log(log_dict, step=self.iteration_step)
+
+        # Also log to console
+        loss_strs = [f"{name}: {loss:.4f}" for name, loss in val_losses.items()]
+        log_rank(
+            f"[Validation step {self.iteration_step}] {' | '.join(loss_strs)}",
+            logger=logger,
+            level=logging.INFO,
+            rank=0,
+        )
 
     def train_step_logs(
         self,

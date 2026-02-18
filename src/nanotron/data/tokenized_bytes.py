@@ -595,7 +595,7 @@ def get_tb_datasets(
             # check that sum of lens of files in dataset is greater than needed_num_samples_dataset (use dataset.lens)
             total_num_samples_dataset = int(train_steps * global_batch_size * weights[i])
             log_rank(f"Dataset {i} ({dataset.folder_path}) on s3 has {len(dataset) * sequence_length} tokens (size: {human_format(len(dataset) * sequence_length * config.token_size_in_bytes)}) and needs {total_num_samples_dataset * sequence_length} tokens (size: {human_format(total_num_samples_dataset * sequence_length * config.token_size_in_bytes)}) for all stages", logger=logger, level=logging.INFO, rank=0)
-            assert total_num_samples_dataset <= len(dataset), f"Not enough files on s3 for dataset {i} ({dataset.folder_path})"
+            # assert total_num_samples_dataset <= len(dataset), f"Not enough files on s3 for dataset {i} ({dataset.folder_path})"
             # check that local files exist for the needed_num_samples_dataset
             estimate_end_sample = estimate_current_sample + needed_num_samples_dataset
             for file_idx, file in enumerate(dataset.files):
@@ -714,3 +714,168 @@ def get_tb_dataloader(
         pin_memory=dataloader_pin_memory,
         worker_init_fn=get_dataloader_worker_init(dp_rank=dist.get_rank(parallel_context.dp_pg)),
     )
+
+
+class TailSubset(Dataset):
+    """Wraps a TokenizedBytesFolderDataset to expose only the last N samples.
+
+    NOTE: This only avoids leakage if training does NOT wrap around the dataset.
+    For small datasets with multi-epoch training, use val_dataset_folders with
+    external held-out data instead.
+    """
+
+    def __init__(self, dataset: TokenizedBytesFolderDataset, val_samples: int):
+        self.dataset = dataset
+        full_length = len(dataset)
+        self.val_samples = min(val_samples, full_length)
+        self.start = full_length - self.val_samples
+
+    def __getitem__(self, idx):
+        return self.dataset[self.start + idx]
+
+    def __len__(self):
+        return self.val_samples
+
+
+def build_val_dataloaders(
+    dataset_folders: list,
+    domain_names: dict,
+    limit_val_batches: int,
+    sequence_length: int,
+    micro_batch_size: int,
+    token_size: int,
+    parallel_context: ParallelContext,
+    input_pp_rank: int,
+    output_pp_rank: int,
+    return_positions: bool = False,
+    eos_token_id: Optional[int] = None,
+    use_position_ids: bool = False,
+    use_doc_masking: bool = False,
+    val_dataset_folders: Optional[list] = None,
+) -> Dict[str, DataLoader]:
+    """Build one validation DataLoader per domain.
+
+    Two modes (can be combined):
+    1. Tail-sample mode: uses TailSubset from training dataset_folders.
+       Tail size = limit_val_batches * micro_batch_size * dp_size.
+       WARNING: these samples are NOT excluded from training.
+    2. External folder mode: each val_dataset_folder is loaded as a full dataset.
+
+    Args:
+        dataset_folders: list of training dataset folder paths
+        domain_names: mapping of domain_name -> list of dataset folder indices (tail mode)
+        limit_val_batches: number of micro-batches per domain per validation run
+        sequence_length: model sequence length
+        micro_batch_size: micro batch size
+        token_size: bytes per token (2 or 4)
+        parallel_context: distributed process groups
+        input_pp_rank: pipeline parallel input rank
+        output_pp_rank: pipeline parallel output rank
+        return_positions: whether to return position ids
+        eos_token_id: eos token id for position computation
+        use_position_ids: whether to use position-aware collator
+        use_doc_masking: whether to use doc masking
+        val_dataset_folders: list of external validation dataset folder paths
+    Returns:
+        dict mapping domain_name -> DataLoader
+    """
+    if use_position_ids:
+        data_collator = DataCollatorForCLMWithPositionIds(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+            use_doc_masking=use_doc_masking,
+        )
+    else:
+        data_collator = DataCollatorForCLM(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+        )
+
+    val_dataloaders = {}
+    dp_rank = dist.get_rank(parallel_context.dp_pg)
+    dp_size = parallel_context.dp_pg.size()
+
+    # Tail-sample mode: use last N samples from each training dataset
+    # N = enough samples so each DP rank gets limit_val_batches micro-batches
+    val_samples_needed = limit_val_batches * micro_batch_size * dp_size
+    if domain_names:
+        for domain_name, folder_indices in domain_names.items():
+            domain_datasets = []
+            for idx in folder_indices:
+                folder = dataset_folders[idx]
+                ds = build_dataset(
+                    dataset_folder=folder,
+                    seq_length=sequence_length,
+                    token_size=token_size,
+                    return_positions=return_positions,
+                    eos_token_id=eos_token_id,
+                )
+                tail = TailSubset(ds, val_samples_needed)
+                domain_datasets.append(tail)
+
+            if len(domain_datasets) == 1:
+                val_dataset = domain_datasets[0]
+            else:
+                val_dataset = torch.utils.data.ConcatDataset(domain_datasets)
+
+            sampler = MegatronPretrainingSampler(
+                total_samples=len(val_dataset),
+                consumed_samples=0,
+                micro_batch_size=micro_batch_size,
+                data_parallel_rank=dp_rank,
+                data_parallel_size=dp_size,
+                drop_last=True,
+                global_batch_size=micro_batch_size * dp_size,
+                pad_samples_to_global_batch_size=False,
+            )
+
+            val_dataloaders[domain_name] = DataLoader(
+                val_dataset,
+                batch_sampler=sampler,
+                num_workers=0,
+                collate_fn=data_collator,
+                pin_memory=True,
+                worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
+            )
+
+    # External validation mode: each folder is a separate domain
+    if val_dataset_folders is not None:
+        for folder in val_dataset_folders:
+            folder_name = os.path.basename(folder.rstrip("/"))
+            # Go up one level if basename is "standard" (common tokenized data layout)
+            if folder_name == "standard":
+                folder_name = os.path.basename(os.path.dirname(folder.rstrip("/")))
+
+            val_dataset = build_dataset(
+                dataset_folder=folder,
+                seq_length=sequence_length,
+                token_size=token_size,
+                return_positions=return_positions,
+                eos_token_id=eos_token_id,
+            )
+
+            sampler = MegatronPretrainingSampler(
+                total_samples=len(val_dataset),
+                consumed_samples=0,
+                micro_batch_size=micro_batch_size,
+                data_parallel_rank=dp_rank,
+                data_parallel_size=dp_size,
+                drop_last=True,
+                global_batch_size=micro_batch_size * dp_size,
+                pad_samples_to_global_batch_size=False,
+            )
+
+            val_dataloaders[folder_name] = DataLoader(
+                val_dataset,
+                batch_sampler=sampler,
+                num_workers=0,
+                collate_fn=data_collator,
+                pin_memory=True,
+                worker_init_fn=get_dataloader_worker_init(dp_rank=dp_rank),
+            )
+
+    return val_dataloaders

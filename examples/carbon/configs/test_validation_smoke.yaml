@@ -1,0 +1,154 @@
+checkpoints:
+  checkpoint_interval: 100
+  checkpoints_path: /scratch/loubna/checkpoints/test-val-smoke-evo2
+  checkpoints_path_is_shared_file_system: false
+  load_lr_scheduler: false
+  load_optimizer: false
+  resume_checkpoint_path: /fsx/loubna/projects_v2/carbon/checkpoints/smollm-models/smollm3-3b-checkpoint-hybrid-tokenizer-random-init
+  save_final_state: false
+  save_initial_state: false
+data_stages:
+- data:
+    dataset:
+      dataset_folder:
+      - /fsx/loubna/projects_v2/carbon/tokenized_data_hybrid/fwedu_100B_hybrid_smollm3_8193/standard
+      - /fsx/loubna/projects_v2/carbon/tokenized_data_hybrid/gener_raw_100k_fungi_smollm3h_8193/standard
+      - /fsx/loubna/projects_v2/carbon/tokenized_data_hybrid/gener_raw_100k_invertebrate_smollm3h_8193/standard
+      - /fsx/loubna/projects_v2/carbon/tokenized_data_hybrid/gener_raw_100k_plant_smollm3h_8193/standard
+      - /fsx/loubna/projects_v2/carbon/tokenized_data_hybrid/gener_raw_100k_protozoa_smollm3h_8193/standard
+      - /fsx/loubna/projects_v2/carbon/tokenized_data_hybrid/gener_raw_100k_vertebrate_mammalian_smollm3h_8193/standard
+      - /fsx/loubna/projects_v2/carbon/tokenized_data_hybrid/gener_raw_100k_vertebrate_other_smollm3_hybrid_8193/standard
+      dataset_weights:
+      - 0.5
+      - 0.0145
+      - 0.0985
+      - 0.04
+      - 0.0025
+      - 0.134
+      - 0.2105
+      pad_samples_to_global_batch_size: false
+      return_positions: true
+      token_size_in_bytes: 4
+      tokenizer_name: hf-carbon/smollm3-hybrid-dna-tokenizer-128
+      use_old_brrr_dataloader: false
+      vocab_size: 132480
+    num_loading_workers: 0
+    seed: 5
+  name: stable
+  start_training_step: 1
+general:
+  benchmark_csv_path: null
+  consumed_train_samples: null
+  ignore_sanity_checks: true
+  project: carbon-evals
+  run: test-val-smoke-evo2
+  seed: 5
+  step: null
+logging:
+  iteration_step_info_interval: 1
+  log_level: info
+  log_level_replica: info
+model:
+  ddp_bucket_cap_mb: 50
+  dtype: bfloat16
+  init_method:
+    std: 0.02
+  make_vocab_size_divisible_by: 1
+  model_config:
+    _attn_implementation: flash_attention_2
+    _fused_rms_norm: true
+    _fused_rotary_emb: true
+    _use_doc_masking: false
+    _use_qkv_packed: true
+    attention_bias: false
+    bos_token_id: null
+    eos_token_id: 128001
+    flex_attention_mask: null
+    hidden_act: silu
+    hidden_size: 2048
+    initializer_range: 0.02
+    intermediate_size: 11008
+    is_qwen2_config: true
+    max_position_embeddings: 8192
+    moe_config: null
+    num_attention_heads: 16
+    num_hidden_layers: 36
+    num_key_value_heads: 4
+    pad_token_id: null
+    pretraining_tp: 2
+    rms_norm_eps: 1.0e-06
+    rope_interleaved: false
+    rope_scaling: null
+    rope_theta: 50000.0
+    sliding_window_size: null
+    tie_word_embeddings: true
+    use_cache: true
+    vocab_size: 132480
+    no_rope_layer: 4
+optimizer:
+  accumulate_grad_in_fp32: true
+  clip_grad: 1.0
+  learning_rate_scheduler:
+    learning_rate: 0.0001
+    lr_decay_starting_step: 50
+    lr_decay_steps: 150
+    lr_decay_style: cosine
+    lr_warmup_steps: 50
+    lr_warmup_style: linear
+    min_decay_lr: 1.0e-05
+  optimizer_factory:
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    name: adamW
+    torch_adam_is_fused: true
+  weight_decay: 0.1
+  weight_decay_exclude_named_params: null
+  zero_stage: 0
+parallelism:
+  context_parallel_size: 1
+  dp: 8
+  expert_parallel_size: 1
+  moe_layer_recompute: false
+  pp: 1
+  pp_engine: 1f1b
+  recompute_layer: false
+  tp: 2
+  tp_linear_async_communication: true
+  tp_mode: REDUCE_SCATTER
+  tp_recompute_allgather: true
+profiler: null
+tokenizer:
+  tokenizer_max_length: 8192
+  tokenizer_name_or_path: hf-carbon/smollm3-hybrid-dna-tokenizer-128
+  tokenizer_revision: null
+metrics_logging:
+  log_level: 0
+  log_detail_interval: 10
+tokens:
+  batch_accumulation_per_replica: 8
+  limit_test_batches: 0
+  limit_val_batches: 0
+  micro_batch_size: 1
+  sequence_length: 8192
+  train_steps: 200
+  val_check_interval: 5
+validation:
+  limit_val_batches: 5
+  val_dataset_folders:
+  - /fsx/loubna/projects_v2/carbon/tokenized_data_hybrid/evo2_eukaryotic_genic_valid_8193/standard/
+  domain_names:
+    fwedu_text:
+    - 0
+    dna_fungi:
+    - 1
+    dna_invertebrate:
+    - 2
+    dna_plant:
+    - 3
+    dna_protozoa:
+    - 4
+    dna_vertebrate_mammalian:
+    - 5
+    dna_vertebrate_other:
+    - 6
