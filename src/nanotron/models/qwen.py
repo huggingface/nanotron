@@ -900,12 +900,21 @@ class HybridBPLoss(Loss):
         dna_kmer_start_id: int,
         dna_kmer_end_id: int,
         weight_special_ce: float = 1.0,
+        bp_weight: float = 1.0,
+        nl_weight: float = 1.0,
+        include_dna_special_ce: bool = False,
+        dna_oov_id: Optional[int] = None,
     ):
         super().__init__(tp_pg)
         self.k = k
         self.dna_kmer_start_id = dna_kmer_start_id
         self.dna_kmer_end_id = dna_kmer_end_id
         self.weight_special_ce = weight_special_ce
+        self.bp_weight = bp_weight
+        self.nl_weight = nl_weight
+        self.include_dna_special_ce = include_dna_special_ce
+        # Canonical ordering is <dna>, </dna>, <oov>, then k-mers; fallback to kmer_start-1.
+        self.dna_oov_id = dna_oov_id if dna_oov_id is not None else (dna_kmer_start_id - 1)
         self._warned_tp = False
 
     def _fallback_ce(
@@ -968,10 +977,16 @@ class HybridBPLoss(Loss):
         if torch.any((token_mask == -2) & valid):
             raise ValueError("`token_mask==-2` (padding) found on supervised positions.")
 
+        # <oov> must never be treated as a correct label under any circumstance.
+        oov_mask = valid & (label_ids == self.dna_oov_id)
+        valid_no_oov = valid & (~oov_mask)
+
         in_dna_range = (label_ids >= self.dna_kmer_start_id) & (label_ids < self.dna_kmer_end_id)
-        bp_mask = valid & (token_mask > 0) & in_dna_range
-        # CE is only for natural-language positions; DNA special/ignored (token_mask==0) has no loss.
-        ce_mask = valid & (token_mask == -1)
+        bp_mask = valid_no_oov & (token_mask > 0) & in_dna_range
+        # CE on NL tokens; optionally include DNA special tokens (token_mask==0) for post-training.
+        ce_mask = valid_no_oov & (token_mask == -1)
+        if self.include_dna_special_ce:
+            ce_mask = ce_mask | (valid_no_oov & (token_mask == 0))
 
         token_probs = torch.softmax(sharded_logits, dim=-1)
         vocab_indices = torch.arange(sharded_logits.shape[-1], device=sharded_logits.device, dtype=label_ids.dtype)
@@ -1009,11 +1024,11 @@ class HybridBPLoss(Loss):
         has_bp = bp_terms > 0
         has_ce = ce_mask.sum() > 0
         if has_bp and has_ce:
-            loss = bp_loss + self.weight_special_ce * ce_loss
+            loss = self.bp_weight * bp_loss + self.nl_weight * self.weight_special_ce * ce_loss
         elif has_bp:
-            loss = bp_loss
+            loss = self.bp_weight * bp_loss
         else:
-            loss = ce_loss
+            loss = self.nl_weight * self.weight_special_ce * ce_loss
         return {"loss": loss}
 
 
@@ -1035,6 +1050,10 @@ class Qwen2ForTraining(NanotronModel, LoggingCollectorMixin):
         hybrid_bp_dna_kmer_start_id = getattr(config, "hybrid_bp_dna_kmer_start_id", None)
         hybrid_bp_dna_kmer_end_id = getattr(config, "hybrid_bp_dna_kmer_end_id", None)
         hybrid_bp_weight_special_ce = getattr(config, "hybrid_bp_weight_special_ce", 1.0)
+        hybrid_bp_bp_weight = getattr(config, "hybrid_bp_bp_weight", 1.0)
+        hybrid_bp_nl_weight = getattr(config, "hybrid_bp_nl_weight", 1.0)
+        hybrid_bp_include_dna_special_ce = getattr(config, "hybrid_bp_include_dna_special_ce", False)
+        hybrid_bp_dna_oov_id = getattr(config, "hybrid_bp_dna_oov_id", None)
         loss_kwargs = {
             "tp_pg": parallel_context.tp_pg,
         }
@@ -1053,6 +1072,10 @@ class Qwen2ForTraining(NanotronModel, LoggingCollectorMixin):
                     "dna_kmer_start_id": hybrid_bp_dna_kmer_start_id,
                     "dna_kmer_end_id": hybrid_bp_dna_kmer_end_id,
                     "weight_special_ce": hybrid_bp_weight_special_ce,
+                    "bp_weight": hybrid_bp_bp_weight,
+                    "nl_weight": hybrid_bp_nl_weight,
+                    "include_dna_special_ce": hybrid_bp_include_dna_special_ce,
+                    "dna_oov_id": hybrid_bp_dna_oov_id,
                 }
             )
             module_input_keys.add("token_mask")
