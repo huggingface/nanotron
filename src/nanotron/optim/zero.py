@@ -6,9 +6,15 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch.optim
-from functorch.dim import tree_map
 from torch import nn
 from tqdm import tqdm
+
+try:
+    # PyTorch-native pytree API (works on modern torch / Python 3.12)
+    from torch.utils._pytree import tree_map
+except Exception:  # pragma: no cover
+    # Older environments may still rely on functorch
+    from functorch.dim import tree_map
 
 from nanotron import distributed as dist
 from nanotron import logging
