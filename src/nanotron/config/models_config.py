@@ -158,6 +158,17 @@ class Qwen2Config:
     # MoE configuration
     moe_config: Optional[MoEConfig] = None
 
+    # Hybrid DNA BP loss configuration (optional; ignored unless model code enables it)
+    hybrid_bp_loss_enabled: bool = False
+    hybrid_bp_loss_k: int = 6
+    hybrid_bp_dna_kmer_start_id: Optional[int] = None
+    hybrid_bp_dna_kmer_end_id: Optional[int] = None
+    hybrid_bp_weight_special_ce: float = 1.0
+    hybrid_bp_bp_weight: float = 1.0
+    hybrid_bp_nl_weight: float = 1.0
+    hybrid_bp_include_dna_special_ce: bool = False
+    hybrid_bp_dna_oov_id: Optional[int] = None
+
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it
         # then we only pass LlamaConfig around
