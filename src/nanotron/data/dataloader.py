@@ -312,20 +312,25 @@ def get_train_dataloader(
         input_pp_rank,
         output_pp_rank,
     ]:
-        train_dataset = train_dataset.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
+        format_columns = ["input_ids"]
+        if "token_mask" in train_dataset.column_names:
+            format_columns.append("token_mask")
+        if "positions" in train_dataset.column_names:
+            format_columns.append("positions")
+        train_dataset = train_dataset.with_format(type="numpy", columns=format_columns, output_all_columns=True)
 
     # Case of ranks not requiring data. We give them an infinite dummy dataloader
     else:
         #
-        assert train_dataset.column_names == ["input_ids"], (
-            f"Dataset has to have a single column, with `input_ids` as the column name. "
-            f"Current dataset: {train_dataset}"
+        assert "input_ids" in train_dataset.column_names, (
+            "Dataset must contain an `input_ids` column. "
+            f"Current columns: {train_dataset.column_names}"
         )
         dataset_length = len(train_dataset)
-        train_dataset = train_dataset.remove_columns(column_names="input_ids")
+        train_dataset = train_dataset.remove_columns(column_names=train_dataset.column_names)
         assert (
             len(train_dataset) == 0
-        ), f"Dataset has to be empty after removing the `input_ids` column. Current dataset: {train_dataset}"
+        ), f"Dataset has to be empty after removing all columns. Current dataset: {train_dataset}"
         # HACK as if we remove the last column of a train_dataset, it becomes empty and it's number of rows becomes empty.
         train_dataset = EmptyInfiniteDataset(length=dataset_length)
         # No need to spawn a lot of workers, we can just use main

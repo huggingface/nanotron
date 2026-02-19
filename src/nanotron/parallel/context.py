@@ -56,9 +56,16 @@ class ParallelContext:
 
         self._init_parallel_groups()
 
+    def _barrier(self):
+        """NCCL-safe barrier that avoids implicit device guessing."""
+        if dist.get_backend() == "nccl":
+            dist.barrier(device_ids=[torch.cuda.current_device()])
+        else:
+            dist.barrier()
+
     def _init_parallel_groups(self):
         """Initialize 3D parallelism's all process groups."""
-        dist.barrier()
+        self._barrier()
         ranks = np.arange(0, self.world_size).reshape(
             (
                 self.expert_parallel_size,
@@ -121,7 +128,7 @@ class ParallelContext:
         self.parallel_order = ["ep", "pp", "dp", "cp", "tp"]
 
     def create_new_group(self, all_groups_ranks: np.ndarray) -> dist.ProcessGroup:
-        dist.barrier()
+        self._barrier()
         rank = int(os.environ["RANK"])
         new_group_containing_rank = None
         for group_ranks in all_groups_ranks:
@@ -136,7 +143,7 @@ class ParallelContext:
 
             if rank in sorted_ranks:
                 new_group_containing_rank = new_group
-        dist.barrier()
+        self._barrier()
         return new_group_containing_rank
 
     def set_device(self):
@@ -157,7 +164,7 @@ class ParallelContext:
         if not dist.is_initialized():
             return
 
-        dist.barrier()
+        self._barrier()
         dist.destroy_process_group()
 
     def get_global_rank(

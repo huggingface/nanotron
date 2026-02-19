@@ -7,9 +7,6 @@ try:
     from datasets import (
         Dataset,
         DatasetDict,
-        Features,
-        Sequence,
-        Value,
         concatenate_datasets,
         load_dataset,
     )
@@ -62,7 +59,13 @@ def clm_process(
         return result
 
     def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
-        tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
+        supports_token_mask = hasattr(tokenizer, "dna_kmer_start_id") and hasattr(tokenizer, "dna_kmer_end_id")
+        tokenized_batch = tokenizer.batch_encode_plus(
+            texts,
+            return_attention_mask=False,
+            return_token_type_ids=False,
+            return_token_mask=supports_token_mask,
+        )
         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
         return group_texts(tokenized_batch)
 
@@ -70,7 +73,6 @@ def clm_process(
         _tokenize_and_group_texts,
         input_columns=text_column_name,
         remove_columns=raw_dataset.column_names,
-        features=Features({"input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)}),
         batched=True,
         num_proc=dataset_processing_num_proc_per_process,
         load_from_cache_file=not dataset_overwrite_cache,
