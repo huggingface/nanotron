@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple, Union
 import numpy as np
 import torch
 from datatrove.utils.dataset import DatatroveFolderDataset
+import inspect
 from nanotron import logging
 from nanotron.data.utils import count_dataset_indexes, normalize
 from nanotron.logging import log_rank
@@ -47,17 +48,21 @@ class Nanoset(torch.utils.data.Dataset):
         self.train_split_num_samples = train_split_num_samples
         self.random_seed = random_seed
         self.datatrove_datasets = []
+        sig = inspect.signature(DatatroveFolderDataset.__init__)
         for dataset_folder in self.dataset_folders:
-            self.datatrove_datasets.append(
-                DatatroveFolderDataset(
-                    folder_path=dataset_folder,
-                    filename_pattern=os.path.join(dataset_folder, "*.ds"),
-                    seq_len=sequence_length,
-                    recursive=False,
-                    token_size=token_size,
-                    shuffle=True,
-                )
+            kwargs = dict(
+                seq_len=sequence_length,
+                recursive=False,
+                token_size=token_size,
+                shuffle=True,
             )
+            if "folder_path" in sig.parameters:
+                kwargs["folder_path"] = dataset_folder
+                kwargs["filename_pattern"] = os.path.join(dataset_folder, "*.ds")
+            else:
+                kwargs["data_folder"] = dataset_folder
+                kwargs["filename_pattern"] = "*.ds"
+            self.datatrove_datasets.append(DatatroveFolderDataset(**kwargs))
 
         # Build Nanoset Index
         ## To build the index we need the length of each dataset

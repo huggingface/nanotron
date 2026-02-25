@@ -18,6 +18,7 @@ from nanotron.dataloader import (
     clm_process,
     dummy_infinite_data_generator,
     get_datasets,
+    sdsp_process,
     get_train_dataloader,
 )
 from nanotron.helpers import (
@@ -105,15 +106,27 @@ def get_dataloader_from_data_stage(
                 tokenizer.vocab_size <= trainer.model_config.vocab_size
             ), f"Tokenizer's vocab size ({tokenizer.vocab_size}) is larger than the model's vocab size ({trainer.model_config.vocab_size})"
 
-            # We apply the Causal Language Modeling preprocessing
-            train_dataset = clm_process(
-                raw_dataset=raw_dataset,
-                tokenizer=tokenizer,
-                text_column_name=data.dataset.text_column_name,
-                dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
-                dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
-                sequence_length=trainer.sequence_length,
-            )
+            sdsp_enabled = trainer.config.sdsp is not None and trainer.config.sdsp.enabled
+            if sdsp_enabled:
+                train_dataset = sdsp_process(
+                    raw_dataset=raw_dataset,
+                    tokenizer=tokenizer,
+                    chosen_text_column_name=data.dataset.chosen_text_column_name,
+                    rejected_text_column_name=data.dataset.rejected_text_column_name,
+                    dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
+                    dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
+                    sequence_length=trainer.sequence_length,
+                )
+            else:
+                # We apply the Causal Language Modeling preprocessing
+                train_dataset = clm_process(
+                    raw_dataset=raw_dataset,
+                    tokenizer=tokenizer,
+                    text_column_name=data.dataset.text_column_name,
+                    dataset_processing_num_proc_per_process=data.dataset.dataset_processing_num_proc_per_process,
+                    dataset_overwrite_cache=data.dataset.dataset_overwrite_cache,
+                    sequence_length=trainer.sequence_length,
+                )
 
             # We load the processed dataset on the ranks requiring it
             dataloader = get_train_dataloader(
@@ -127,6 +140,7 @@ def get_dataloader_from_data_stage(
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
                 dataloader_drop_last=True,
+                sdsp_enabled=sdsp_enabled,
             )
 
             # Check if we have enough samples for train_steps

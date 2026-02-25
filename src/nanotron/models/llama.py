@@ -22,7 +22,7 @@ from torch.utils.checkpoint import CheckpointFunction
 
 from nanotron import distributed as dist
 from nanotron import logging
-from nanotron.config import Config, LlamaConfig, ParallelismArgs
+from nanotron.config import Config, LlamaConfig, ParallelismArgs, SDSPArgs
 from nanotron.config.models_config import RandomInit, SpectralMupInit
 from nanotron.generation.generate_store import AttachableStore
 from nanotron.logging import log_rank
@@ -956,28 +956,58 @@ def masked_mean(loss, label_mask, dtype):
     return (loss * label_mask).sum(dtype=dtype) / mask_sum
 
 
+@torch.jit.script
+def masked_sum(loss, label_mask, dtype):
+    # type: (Tensor, Tensor, torch.dtype) -> Tensor
+    return (loss * label_mask).sum(dtype=dtype)
+
+
 class Loss(nn.Module):
-    def __init__(self, tp_pg: dist.ProcessGroup):
+    def __init__(self, tp_pg: dist.ProcessGroup, sdsp: Optional[SDSPArgs] = None):
         super().__init__()
         self.tp_pg = tp_pg
+        self.sdsp = sdsp
 
     def forward(
         self,
         sharded_logits: torch.Tensor,  # [seq_length, batch_size, logits]
         label_ids: torch.Tensor,  # [batch_size, seq_length]
         label_mask: torch.Tensor,  # [batch_size, seq_length]
+        rejected_sharded_logits: Optional[torch.Tensor] = None,
+        rejected_label_ids: Optional[torch.Tensor] = None,
+        rejected_label_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         # Megatron by defaults cast everything in fp32. `--f16-lm-cross-entropy` is an option you can use to keep current precision.
         # https://github.com/NVIDIA/Megatron-LM/blob/f267e6186eae1d6e2055b412b00e2e545a8e896a/megatron/model/gpt_model.py#L38
 
-        loss = sharded_cross_entropy(
+        token_loss = sharded_cross_entropy(
             sharded_logits, label_ids.transpose(0, 1).contiguous(), group=self.tp_pg, dtype=torch.float
         ).transpose(0, 1)
-        # TODO @thomasw21: It's unclear what kind of normalization we want to do.
-        loss = masked_mean(loss, label_mask, dtype=torch.float)
+        ce_loss = masked_mean(token_loss, label_mask, dtype=torch.float)
+
+        if self.sdsp is not None and self.sdsp.enabled:
+            assert rejected_sharded_logits is not None, "rejected_sharded_logits required for SDSP"
+            assert rejected_label_ids is not None, "rejected_label_ids required for SDSP"
+            assert rejected_label_mask is not None, "rejected_label_mask required for SDSP"
+
+            rejected_token_loss = sharded_cross_entropy(
+                rejected_sharded_logits,
+                rejected_label_ids.transpose(0, 1).contiguous(),
+                group=self.tp_pg,
+                dtype=torch.float,
+            ).transpose(0, 1)
+
+            # sequence-level log-prob scores for chosen/rejected (higher is better)
+            chosen_logp = -masked_sum(token_loss, label_mask, dtype=torch.float)
+            rejected_logp = -masked_sum(rejected_token_loss, rejected_label_mask, dtype=torch.float)
+            margin = self.sdsp.beta * (chosen_logp - rejected_logp)
+            sdpo_loss = -torch.nn.functional.logsigmoid(margin)
+            loss = ce_loss + self.sdsp.alpha * sdpo_loss
+            return {"loss": loss, "ce_loss": ce_loss, "sdpo_loss": sdpo_loss}
+
         # I think indexing causes a sync we don't actually want
         # loss = loss[label_mask].sum()
-        return {"loss": loss}
+        return {"loss": ce_loss, "ce_loss": ce_loss, "sdpo_loss": torch.zeros_like(ce_loss)}
 
 
 class LlamaForTraining(NanotronModel):
@@ -987,23 +1017,28 @@ class LlamaForTraining(NanotronModel):
         parallel_context: ParallelContext,
         parallel_config: Optional[ParallelismArgs],
         random_states: Optional[RandomStates] = None,
+        sdsp: Optional[SDSPArgs] = None,
     ):
         super().__init__()
         self.model = LlamaModel(config=config, parallel_context=parallel_context, parallel_config=parallel_config)
         self.loss = PipelineBlock(
             p2p=self.model.p2p,
             module_builder=Loss,
-            module_kwargs={"tp_pg": parallel_context.tp_pg},
+            module_kwargs={"tp_pg": parallel_context.tp_pg, "sdsp": sdsp},
             module_input_keys={
                 "sharded_logits",
                 "label_ids",
                 "label_mask",
+                "rejected_sharded_logits",
+                "rejected_label_ids",
+                "rejected_label_mask",
             },
-            module_output_keys={"loss"},
+            module_output_keys={"loss", "ce_loss", "sdpo_loss"},
         )
         self.parallel_context = parallel_context
         self.config = config
         self.parallel_config = parallel_config
+        self.sdsp = sdsp
 
     def forward(
         self,
@@ -1011,17 +1046,31 @@ class LlamaForTraining(NanotronModel):
         input_mask: Union[torch.Tensor, TensorPointer],
         label_ids: Union[torch.Tensor, TensorPointer],
         label_mask: Union[torch.Tensor, TensorPointer],
+        rejected_input_ids: Optional[Union[torch.Tensor, TensorPointer]] = None,
+        rejected_input_mask: Optional[Union[torch.Tensor, TensorPointer]] = None,
+        rejected_label_ids: Optional[Union[torch.Tensor, TensorPointer]] = None,
+        rejected_label_mask: Optional[Union[torch.Tensor, TensorPointer]] = None,
     ) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
         sharded_logits = self.model(
             input_ids=input_ids,
             input_mask=input_mask,
         )
-        loss = self.loss(
+        rejected_sharded_logits: Optional[Union[torch.Tensor, TensorPointer]] = None
+        if rejected_input_ids is not None and rejected_input_mask is not None:
+            rejected_sharded_logits = self.model(
+                input_ids=rejected_input_ids,
+                input_mask=rejected_input_mask,
+            )
+
+        loss_dict = self.loss(
             sharded_logits=sharded_logits,
             label_ids=label_ids,
             label_mask=label_mask,
-        )["loss"]
-        return {"loss": loss}
+            rejected_sharded_logits=rejected_sharded_logits,
+            rejected_label_ids=rejected_label_ids,
+            rejected_label_mask=rejected_label_mask,
+        )
+        return loss_dict
 
     @torch.no_grad()
     def init_model_randomly(self, config: Config):

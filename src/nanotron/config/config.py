@@ -84,6 +84,8 @@ class PretrainDatasetsArgs:
     dataset_processing_num_proc_per_process: Optional[int] = 1
     dataset_overwrite_cache: Optional[bool] = False
     text_column_name: Optional[str] = None
+    chosen_text_column_name: Optional[str] = None
+    rejected_text_column_name: Optional[str] = None
 
     def __post_init__(self):
         if self.text_column_name is None:
@@ -257,6 +259,19 @@ class TokensArgs:
 
 
 @dataclass
+class SDSPArgs:
+    enabled: bool = False
+    alpha: float = 0.0
+    beta: float = 1.0
+
+    def __post_init__(self):
+        if self.alpha < 0:
+            raise ValueError(f"sdsp.alpha must be >= 0 and not {self.alpha}")
+        if self.beta <= 0:
+            raise ValueError(f"sdsp.beta must be > 0 and not {self.beta}")
+
+
+@dataclass
 class LRSchedulerArgs:
     """Arguments related to the learning rate scheduler
 
@@ -350,6 +365,7 @@ class Config:
     tokens: Optional[TokensArgs] = None
     optimizer: Optional[OptimizerArgs] = None
     data_stages: Optional[List[DatasetStageArgs]] = None
+    sdsp: Optional[SDSPArgs] = None
     profiler: Optional[ProfilerArgs] = None
     lighteval: Optional[LightEvalConfig] = None
     s3_upload: Optional[S3UploadArgs] = None
@@ -372,6 +388,20 @@ class Config:
             self.optimizer.learning_rate_scheduler.lr_decay_steps = (
                 self.tokens.train_steps - self.optimizer.learning_rate_scheduler.lr_warmup_steps
             )
+
+        if self.sdsp is not None and self.sdsp.enabled:
+            if self.data_stages is None:
+                raise ValueError("sdsp.enabled requires data_stages to be configured.")
+            for stage in self.data_stages:
+                if not isinstance(stage.data.dataset, PretrainDatasetsArgs):
+                    raise ValueError("sdsp.enabled currently supports only PretrainDatasetsArgs datasets.")
+                if (
+                    stage.data.dataset.chosen_text_column_name is None
+                    or stage.data.dataset.rejected_text_column_name is None
+                ):
+                    raise ValueError(
+                        "sdsp.enabled requires chosen_text_column_name and rejected_text_column_name in dataset config."
+                    )
 
         if self.data_stages is not None:
             self.data_stages = sorted(self.data_stages, key=lambda stage: stage.start_training_step)

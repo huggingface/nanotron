@@ -1,5 +1,6 @@
 import datetime
 import gc
+import inspect
 import json
 import os
 import shutil
@@ -540,17 +541,25 @@ class DistributedTrainer:
                 max_norm=self.config.optimizer.clip_grad,
             )
 
-        # Compute DP average loss and overlap with optimizer step
+        # Compute DP average losses and overlap with optimizer step
         if isinstance(outputs[0]["loss"], torch.Tensor):
             # This is an average on only one data rank.
             loss_avg = torch.stack(
                 [output["loss"] for output in outputs]
             ).sum()  # already divided by n_micro_batches_per_batch
             # sync loss across DP
-            handle = dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+            handles = {"loss": dist.all_reduce(loss_avg, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)}
+
+            self.last_loss_components = {}
+            for key in ("ce_loss", "sdpo_loss"):
+                if key in outputs[0] and isinstance(outputs[0][key], torch.Tensor):
+                    comp = torch.stack([output[key] for output in outputs]).sum()
+                    handles[key] = dist.all_reduce(comp, group=self.parallel_context.dp_pg, async_op=True, op=dist.ReduceOp.AVG)
+                    self.last_loss_components[key] = comp
         else:
             loss_avg = None
-            handle = None
+            handles = {}
+            self.last_loss_components = {}
 
         # Move optimizer states back to GPU before optimizer step
         if (
@@ -573,8 +582,12 @@ class DistributedTrainer:
 
         after_optim_step_sanity_checks(self.config, self.parallel_context, self.unwrapped_model, self.grad_accumulator)
 
-        if handle is not None:
+        for handle in handles.values():
             handle.wait()
+
+        for key, value in list(self.last_loss_components.items()):
+            if isinstance(value, torch.Tensor):
+                self.last_loss_components[key] = value.item()
 
         self.post_train_step()
 
@@ -629,6 +642,11 @@ class DistributedTrainer:
                 LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
                 LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
             ]
+            if hasattr(self, "last_loss_components"):
+                if "ce_loss" in self.last_loss_components:
+                    log_entries.append(LogItem("ce_loss", self.last_loss_components["ce_loss"], "human_format"))
+                if "sdpo_loss" in self.last_loss_components:
+                    log_entries.append(LogItem("sdpo_loss", self.last_loss_components["sdpo_loss"], "human_format"))
 
             if self.config.optimizer.clip_grad is not None:
                 log_entries.append(LogItem("grad_norm", self.grad_norm_unclipped.item(), "human_format"))  # , ".3f"))
@@ -713,14 +731,18 @@ class DistributedTrainer:
         assert (
             model_config_cls in CONFIG_TO_MODEL_CLASS
         ), f"Unsupported model config {model_config_cls}. Only {CONFIG_TO_MODEL_CLASS.keys()} are supported"
+        model_cls = CONFIG_TO_MODEL_CLASS[model_config_cls]
+        model_kwargs = dict(
+            config=self.model_config,
+            parallel_context=self.parallel_context,
+            parallel_config=self.config.parallelism,
+            random_states=self.random_states,
+        )
+        if "sdsp" in inspect.signature(model_cls.__init__).parameters:
+            model_kwargs["sdsp"] = self.config.sdsp
 
         model = self._init_model(
-            model_builder=lambda: CONFIG_TO_MODEL_CLASS[model_config_cls](
-                config=self.model_config,
-                parallel_context=self.parallel_context,
-                parallel_config=self.config.parallelism,
-                random_states=self.random_states,
-            ),
+            model_builder=lambda: model_cls(**model_kwargs),
         )
         return model
 

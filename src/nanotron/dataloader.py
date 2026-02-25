@@ -1,4 +1,5 @@
 import dataclasses
+import os
 import warnings
 from typing import Dict, Generator, Iterator, List, Optional, Union
 
@@ -114,12 +115,19 @@ def get_datasets(
         # e.g. Dataset = "HuggingFaceH4/testing_alpaca_small"
         # Note this returns things other than just train/test, which may not be intended
         raw_datasets = DatasetDict()
-        for split in splits:
-            raw_datasets[split] = load_dataset(
-                hf_dataset_or_datasets,
-                hf_dataset_config_name,
-                split=split,
-            )
+        # Local JSONL shortcut for quick experiments.
+        if os.path.exists(hf_dataset_or_datasets) and hf_dataset_or_datasets.endswith(".jsonl"):
+            for split in splits:
+                if split != "train":
+                    continue
+                raw_datasets["train"] = load_dataset("json", data_files=hf_dataset_or_datasets, split="train")
+        else:
+            for split in splits:
+                raw_datasets[split] = load_dataset(
+                    hf_dataset_or_datasets,
+                    hf_dataset_config_name,
+                    split=split,
+                )
     else:
         raise ValueError(f"hf_dataset_or_datasets must be a dict or string but is {type(hf_dataset_or_datasets)}")
 
@@ -366,6 +374,57 @@ def clm_process(
     return train_dataset
 
 
+def sdsp_process(
+    raw_dataset: "Dataset",
+    tokenizer: "PreTrainedTokenizerBase",
+    chosen_text_column_name: str,
+    rejected_text_column_name: str,
+    dataset_processing_num_proc_per_process: int,
+    dataset_overwrite_cache: bool,
+    sequence_length: int,
+):
+    """Tokenize chosen/rejected pairs into fixed (sequence_length + 1) windows for SDSP."""
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is None:
+        eos_token_id = tokenizer.pad_token_id
+    if eos_token_id is None:
+        eos_token_id = 0
+
+    target_len = sequence_length + 1
+
+    def _fit(ids: List[int]) -> np.ndarray:
+        if len(ids) >= target_len:
+            return np.array(ids[:target_len], dtype=np.int64)
+        return np.array(ids + [eos_token_id] * (target_len - len(ids)), dtype=np.int64)
+
+    def _tokenize_pairs(batch: Dict[str, List[str]]) -> Dict[str, List[np.ndarray]]:
+        chosen_list = tokenizer.batch_encode_plus(
+            batch[chosen_text_column_name], return_attention_mask=False, return_token_type_ids=False
+        )["input_ids"]
+        rejected_list = tokenizer.batch_encode_plus(
+            batch[rejected_text_column_name], return_attention_mask=False, return_token_type_ids=False
+        )["input_ids"]
+        return {
+            "chosen_input_ids": [_fit(ids) for ids in chosen_list],
+            "rejected_input_ids": [_fit(ids) for ids in rejected_list],
+        }
+
+    return raw_dataset.map(
+        _tokenize_pairs,
+        batched=True,
+        remove_columns=raw_dataset.column_names,
+        features=Features(
+            {
+                "chosen_input_ids": Sequence(feature=Value(dtype="int64"), length=target_len),
+                "rejected_input_ids": Sequence(feature=Value(dtype="int64"), length=target_len),
+            }
+        ),
+        num_proc=dataset_processing_num_proc_per_process,
+        load_from_cache_file=not dataset_overwrite_cache,
+        desc=f"Tokenizing SDSP pairs to fixed length {target_len}",
+    )
+
+
 # Adapted from: https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/data/data_collator.py#L607
 @dataclasses.dataclass
 class DataCollatorForCLM:
@@ -441,6 +500,66 @@ class DataCollatorForCLM:
         return result
 
 
+@dataclasses.dataclass
+class DataCollatorForSDSP:
+    """Data collator for SDSP chosen/rejected pair batches."""
+
+    sequence_length: int
+    input_pp_rank: int
+    output_pp_rank: int
+    parallel_context: ParallelContext
+
+    def __call__(self, examples: List[Dict[str, List[np.ndarray]]]) -> Dict[str, Union[torch.Tensor, TensorPointer]]:
+        current_pp_rank = dist.get_rank(self.parallel_context.pp_pg)
+        if current_pp_rank not in [self.input_pp_rank, self.output_pp_rank]:
+            assert all(len(example) == 0 for example in examples)
+            return {
+                "input_ids": TensorPointer(group_rank=self.input_pp_rank),
+                "input_mask": TensorPointer(group_rank=self.input_pp_rank),
+                "label_ids": TensorPointer(group_rank=self.output_pp_rank),
+                "label_mask": TensorPointer(group_rank=self.output_pp_rank),
+                "rejected_input_ids": TensorPointer(group_rank=self.input_pp_rank),
+                "rejected_input_mask": TensorPointer(group_rank=self.input_pp_rank),
+                "rejected_label_ids": TensorPointer(group_rank=self.output_pp_rank),
+                "rejected_label_mask": TensorPointer(group_rank=self.output_pp_rank),
+            }
+
+        assert all(sorted(example.keys()) == ["chosen_input_ids", "rejected_input_ids"] for example in examples)
+
+        chosen_input_ids = np.vstack([examples[i]["chosen_input_ids"] for i in range(len(examples))])
+        rejected_input_ids = np.vstack([examples[i]["rejected_input_ids"] for i in range(len(examples))])
+
+        batch_size, expanded_input_length = chosen_input_ids.shape
+        assert (
+            expanded_input_length == self.sequence_length + 1
+        ), f"Samples should be of length {self.sequence_length + 1}, but got {expanded_input_length}"
+
+        result: Dict[str, Union[np.ndarray, TensorPointer]] = {
+            "input_ids": TensorPointer(group_rank=self.input_pp_rank),
+            "input_mask": TensorPointer(group_rank=self.input_pp_rank),
+            "label_ids": TensorPointer(group_rank=self.output_pp_rank),
+            "label_mask": TensorPointer(group_rank=self.output_pp_rank),
+            "rejected_input_ids": TensorPointer(group_rank=self.input_pp_rank),
+            "rejected_input_mask": TensorPointer(group_rank=self.input_pp_rank),
+            "rejected_label_ids": TensorPointer(group_rank=self.output_pp_rank),
+            "rejected_label_mask": TensorPointer(group_rank=self.output_pp_rank),
+        }
+
+        if current_pp_rank == self.input_pp_rank:
+            result["input_ids"] = chosen_input_ids[:, :-1]
+            result["input_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
+            result["rejected_input_ids"] = rejected_input_ids[:, :-1]
+            result["rejected_input_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
+
+        if current_pp_rank == self.output_pp_rank:
+            result["label_ids"] = chosen_input_ids[:, 1:]
+            result["label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
+            result["rejected_label_ids"] = rejected_input_ids[:, 1:]
+            result["rejected_label_mask"] = np.ones((batch_size, self.sequence_length), dtype=np.bool_)
+
+        return {k: v if isinstance(v, TensorPointer) else torch.from_numpy(v) for k, v in result.items()}
+
+
 # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/src/transformers/trainer.py#L763-L835
 def get_sampler(
     dl_ranks_size: int,
@@ -494,6 +613,7 @@ def get_train_dataloader(
     dataloader_drop_last: bool = True,
     dataloader_pin_memory: bool = True,
     use_loop_to_round_batch_size: bool = False,
+    sdsp_enabled: bool = False,
 ) -> DataLoader:
     if not isinstance(train_dataset, datasets.Dataset):
         raise ValueError(f"training requires a datasets.Dataset, but got {type(train_dataset)}")
@@ -503,31 +623,41 @@ def get_train_dataloader(
         input_pp_rank,
         output_pp_rank,
     ]:
-        train_dataset = train_dataset.with_format(type="numpy", columns=["input_ids"], output_all_columns=True)
+        columns = ["chosen_input_ids", "rejected_input_ids"] if sdsp_enabled else ["input_ids"]
+        train_dataset = train_dataset.with_format(type="numpy", columns=columns, output_all_columns=True)
 
     # Case of ranks not requiring data. We give them an infinite dummy dataloader
     else:
         #
-        assert train_dataset.column_names == ["input_ids"], (
-            f"Dataset has to have a single column, with `input_ids` as the column name. "
+        expected_columns = ["chosen_input_ids", "rejected_input_ids"] if sdsp_enabled else ["input_ids"]
+        assert train_dataset.column_names == expected_columns, (
+            f"Dataset has to have columns {expected_columns}. "
             f"Current dataset: {train_dataset}"
         )
         dataset_length = len(train_dataset)
-        train_dataset = train_dataset.remove_columns(column_names="input_ids")
+        train_dataset = train_dataset.remove_columns(column_names=train_dataset.column_names)
         assert (
             len(train_dataset) == 0
-        ), f"Dataset has to be empty after removing the `input_ids` column. Current dataset: {train_dataset}"
+        ), f"Dataset has to be empty after removing dataset columns. Current dataset: {train_dataset}"
         # HACK as if we remove the last column of a train_dataset, it becomes empty and it's number of rows becomes empty.
         train_dataset = EmptyInfiniteDataset(length=dataset_length)
         # No need to spawn a lot of workers, we can just use main
         dataloader_num_workers = 0
 
-    data_collator = DataCollatorForCLM(
-        sequence_length=sequence_length,
-        input_pp_rank=input_pp_rank,
-        output_pp_rank=output_pp_rank,
-        parallel_context=parallel_context,
-    )
+    if sdsp_enabled:
+        data_collator = DataCollatorForSDSP(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+        )
+    else:
+        data_collator = DataCollatorForCLM(
+            sequence_length=sequence_length,
+            input_pp_rank=input_pp_rank,
+            output_pp_rank=output_pp_rank,
+            parallel_context=parallel_context,
+        )
 
     # Compute size and rank of dataloader workers
     dp_ranks_size = parallel_context.dp_pg.size()
