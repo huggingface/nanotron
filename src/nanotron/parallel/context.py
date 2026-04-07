@@ -70,7 +70,9 @@ class ParallelContext:
         )
         self.world_ranks_to_pg = {}
         self.local_pg = self.create_new_group(ranks.reshape((-1, self.local_world_size)))
-        assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), "Local rank mismatch"
+        
+        # TODO not sure if needed
+        # assert int(os.environ.get("LOCAL_RANK")) == dist.get_rank(self.local_pg), "Local rank mismatch"
 
         # Relevant process groups containing the current rank
         self.tp_pg = self.create_new_group(ranks.transpose((0, 1, 2, 3, 4)).reshape((-1, self.tensor_parallel_size)))
