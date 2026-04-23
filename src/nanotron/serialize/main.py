@@ -56,7 +56,7 @@ def save(
     root_folder: Path,
     should_save_config: bool = True,
     should_save_model: bool = True,
-    should_save_optimizer: bool = True,
+    should_save_optimizer: bool = False,
     should_save_lr_scheduler: bool = True,
     sanity_checks: bool = True,
 ) -> None:
