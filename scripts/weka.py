@@ -111,8 +111,19 @@ def warmup_datasets(input_paths: Union[str, List[str]]) -> None:
             print(f"\nWarming up {folder_path}")
 
             # Use find to get all files and pipe to xargs for parallel fetching
-            cmd = f"find -L {folder_path} -type f | xargs -d '\\n' -r -n512 -P64 weka fs tier fetch"
-            subprocess.run(cmd, shell=True, check=True, text=True)
+            find_cmd = ["find", "-L", folder_path, "-type", "f"]
+            xargs_cmd = ["xargs", "-d", "\n", "-r", "-n512", "-P64", "weka", "fs", "tier", "fetch"]
+            find_process = subprocess.Popen(find_cmd, stdout=subprocess.PIPE, text=True)
+            try:
+                subprocess.run(xargs_cmd, stdin=find_process.stdout, check=True, text=True)
+            finally:
+                if find_process.stdout is not None:
+                    find_process.stdout.close()
+                find_returncode = find_process.wait()
+
+            if find_returncode:
+                raise subprocess.CalledProcessError(find_returncode, find_cmd)
+
             print(f"Finished warming up {folder_path}")
 
         except subprocess.CalledProcessError as e:
