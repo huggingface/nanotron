@@ -120,6 +120,18 @@ def checkpoint_method(attr_name: str):
 
 
 def get_parameter_and_parent_module(target: str, root_module: nn.Module):
+    """Retrieve a parameter and its parent module from a dotted target path.
+
+    Args:
+        target: Dotted string path to the parameter (e.g. ``"layer.weight"``).
+        root_module: The root ``nn.Module`` to traverse.
+
+    Returns:
+        A tuple of ``(parameter, parent_module, parameter_name)``.
+
+    Raises:
+        AttributeError: If the target attribute does not exist or is not an ``nn.Parameter``.
+    """
     module_path, _, param_name = target.rpartition(".")
 
     mod: torch.nn.Module = root_module.get_submodule(module_path)
@@ -136,6 +148,14 @@ def get_parameter_and_parent_module(target: str, root_module: nn.Module):
 
 
 def get_untyped_storage(tensor: torch.Tensor) -> torch.UntypedStorage:
+    """Return the untyped storage backing a tensor, compatible with PyTorch >= 1.x and >= 2.0.
+
+    Args:
+        tensor: The input ``torch.Tensor``.
+
+    Returns:
+        The ``torch.UntypedStorage`` backing the tensor.
+    """
     if version.parse(torch.__version__) >= version.parse("2.0"):
         return tensor.untyped_storage()
     else:
@@ -143,6 +163,15 @@ def get_untyped_storage(tensor: torch.Tensor) -> torch.UntypedStorage:
 
 
 def tensor_from_untyped_storage(untyped_storage: torch.UntypedStorage, dtype: torch.dtype):
+    """Construct a tensor from an untyped storage with the given dtype.
+
+    Args:
+        untyped_storage: The raw ``torch.UntypedStorage`` to wrap.
+        dtype: The desired ``torch.dtype`` of the resulting tensor.
+
+    Returns:
+        A 0-dimensional ``torch.Tensor`` backed by the provided storage.
+    """
     # TODO @thomasw21: Figure out what's the best Pytorch way of building a tensor from a storage.
     device = untyped_storage.device
     tensor = torch.empty([], dtype=dtype, device=device)
@@ -151,6 +180,18 @@ def tensor_from_untyped_storage(untyped_storage: torch.UntypedStorage, dtype: to
 
 
 def find_free_port(min_port: int = 2000, max_port: int = 65000) -> int:
+    """Find a free TCP port on localhost within the given range.
+
+    Randomly samples ports in ``[min_port, max_port]`` until one that is not
+    in use is found.
+
+    Args:
+        min_port: Lower bound of the port range (inclusive). Defaults to 2000.
+        max_port: Upper bound of the port range (inclusive). Defaults to 65000.
+
+    Returns:
+        An available port number.
+    """
     while True:
         port = random.randint(min_port, max_port)
         try:

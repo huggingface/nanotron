@@ -72,6 +72,11 @@ class RandomStates(MutableMapping[str, RandomState]):
 
 
 def set_random_seed(seed: int):
+    """Seed all random number generators used by nanotron (Python, NumPy, PyTorch CPU/GPU).
+
+    Args:
+        seed: Integer seed value to use for all RNGs.
+    """
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
@@ -80,6 +85,14 @@ def set_random_seed(seed: int):
 
 
 def set_random_state(random_state: RandomState):
+    """Restore all random number generators to the state captured in *random_state*.
+
+    Sets the Python, NumPy, and PyTorch CPU/GPU RNG states from the provided
+    :class:`RandomState` snapshot.
+
+    Args:
+        random_state: A previously captured :class:`RandomState` snapshot to restore.
+    """
     random.setstate(random_state.random)
     np.random.set_state(random_state.numpy)
     torch.set_rng_state(random_state.torch_cpu)
@@ -131,6 +144,19 @@ def get_synced_random_state(
     random_state: RandomState,
     pg: ProcessGroup,
 ):
+    """Synchronise a random state across all ranks in a process group.
+
+    Rank 0 of *pg* is treated as the reference.  Its *random_state* is
+    broadcast to every other rank so that all ranks end up with an identical
+    :class:`RandomState`.
+
+    Args:
+        random_state: The local random state (only rank 0's value is used).
+        pg: The process group across which to synchronise.
+
+    Returns:
+        A :class:`RandomState` identical to rank 0's *random_state*.
+    """
     # We use rank 0 as a reference and broadcast random states from that rank to all the other ranks within a group in order to sync them
     reference_rank = 0
     if dist.get_rank(pg) == reference_rank:
