@@ -277,6 +277,7 @@ class GeneralArgs:
     consumed_train_samples: Optional[int] = None # TODO: remove this
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = True
+    torch_compile: bool = False  # Wrap model with torch.compile for faster training (PP=1 only)
 
     def __post_init__(self):
         if self.seed is None:
