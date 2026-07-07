@@ -763,7 +763,9 @@ class Qwen2Model(nn.Module):
         output = self.token_position_embeddings(input_ids=input_ids, position_ids=position_ids)
         # Compute cu_seqlens
         cu_seqlens: Optional[Union[torch.Tensor, Dict[str, torch.Tensor]]] = None
-        if position_ids.numel() > 0:
+        if isinstance(position_ids, TensorPointer):
+            cu_seqlens = TensorPointer(group_rank=position_ids.group_rank)
+        elif position_ids.numel() > 0:
             start_indices = torch.where(position_ids.view(-1) == 0)[0]
             cu_seqlens = torch.cat(
                 [start_indices, torch.tensor([position_ids.numel()], dtype=torch.int32, device=start_indices.device)]
