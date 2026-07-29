@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
+from nanotron.config.models_config import ExistingCheckpointInit, LlamaConfig, NanotronConfigs, Qwen2Config, RandomInit, SpectralMupInit, Starcoder2Config
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     InitScalingMethod,
@@ -319,7 +319,21 @@ class ModelArgs:
             self.dtype = cast_str_to_torch_dtype(self.dtype)
 
         if isinstance(self.model_config, dict):
-            self.model_config = Qwen2Config(**self.model_config)
+            # Dispatch to the correct config class using per-class discriminator fields.
+            # When loading from a checkpoint YAML, dacite passes model_config as a raw dict;
+            # without this, setting _is_using_mup below raises AttributeError.
+            if self.model_config.get("is_llama_config"):
+                self.model_config = LlamaConfig(**self.model_config)
+            elif self.model_config.get("is_qwen2_config"):
+                self.model_config = Qwen2Config(**self.model_config)
+            elif self.model_config.get("is_starcoder2_config"):
+                self.model_config = Starcoder2Config(**self.model_config)
+            else:
+                raise ValueError(
+                    f"Cannot deserialize model_config dict: no recognised discriminator field "
+                    f"(is_llama_config / is_qwen2_config / is_starcoder2_config). "
+                    f"Keys found: {list(self.model_config.keys())}"
+                )
 
         self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
