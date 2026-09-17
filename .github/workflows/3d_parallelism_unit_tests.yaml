@@ -16,8 +16,12 @@ on:
      - "examples/**/*.py"
      - "tests/**/*.py"
 
+permissions: {}
+
 jobs:
   tests:
+    permissions:
+      contents: read
     runs-on:
       group: aws-g4dn-metal
     container:
@@ -26,7 +30,7 @@ jobs:
         - 80
       options: --gpus all --shm-size "8G"
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Python environment
       run: |
         which python
