@@ -8,8 +8,12 @@ on:
 env:
   PYPI_TOKEN: ${{ secrets.PYPI_TOKEN_DIST }}
 
+permissions: {}
+
 jobs:
   python_release:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
 
     steps:
