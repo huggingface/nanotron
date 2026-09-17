@@ -1,20 +1,27 @@
 import datetime
 import glob
 import os
-from dataclasses import dataclass, fields
+from dataclasses import MISSING, dataclass, fields, is_dataclass
 from pathlib import Path
-from typing import List, Optional, Type, Union
+from typing import List, Optional, Type, Union, get_args
 
 import dacite
 import torch
 import yaml
 from dacite import from_dict
+from dacite.exceptions import UnionMatchError
 from datasets.download.streaming_download_manager import xPath
 from transformers import AutoTokenizer
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
+from nanotron.config.models_config import (
+    ExistingCheckpointInit,
+    NanotronConfigs,
+    Qwen2Config,
+    RandomInit,
+    SpectralMupInit,
+)
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     InitScalingMethod,
@@ -27,7 +34,6 @@ from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger, human_format
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
-from nanotron.config.models_config import Qwen2Config
 
 logger = get_logger(__name__)
 
@@ -629,24 +635,67 @@ def get_config_from_dict(
             for k, v in config_dict.items()
             if v is not None
         }
-    return from_dict(
-        data_class=config_class,
-        data=config_dict,
-        config=dacite.Config(
-            cast=[Path],
-            type_hooks={
-                torch.dtype: cast_str_to_torch_dtype,
-                PipelineEngine: cast_str_to_pipeline_engine,
-                TensorParallelLinearMode: lambda x: TensorParallelLinearMode[x.upper()],
-                RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
-                InitScalingMethod: lambda x: InitScalingMethod[x.upper()],
-                SamplerType: lambda x: SamplerType[x.upper()],
-            },
-            # strict_unions_match=True,
-            strict=True,
-        ),
-    )
+    try:
+        return from_dict(
+            data_class=config_class,
+            data=config_dict,
+            config=dacite.Config(
+                cast=[Path],
+                type_hooks={
+                    torch.dtype: cast_str_to_torch_dtype,
+                    PipelineEngine: cast_str_to_pipeline_engine,
+                    TensorParallelLinearMode: lambda x: TensorParallelLinearMode[x.upper()],
+                    RecomputeGranularity: lambda x: RecomputeGranularity[x.upper()],
+                    InitScalingMethod: lambda x: InitScalingMethod[x.upper()],
+                    SamplerType: lambda x: SamplerType[x.upper()],
+                },
+                # strict_unions_match=True,
+                strict=True,
+            ),
+        )
+    except UnionMatchError as e:
+        raise ValueError(explain_union_match_error(e, config_dict)) from e
 
+
+
+
+def explain_union_match_error(error: "UnionMatchError", config_dict: dict) -> str:
+    """Name the keys that made every member of a union fail.
+
+    ``strict=True`` rejects a dataclass that sees a key it does not declare, so a
+    single stray key under a union-typed field makes every candidate fail and
+    dacite reports only that nothing matched. That names neither the field's own
+    section nor the key, which is the whole difficulty of the error (#371).
+
+    Falls back to dacite's own message whenever the shape is not the one this
+    understands, so a change in dacite degrades the message rather than raising
+    from the error handler.
+    """
+    message = str(error)
+    union = getattr(error, "field_type", None)
+    members = [arg for arg in get_args(union) if is_dataclass(arg)]
+    value = getattr(error, "value", None)
+    if not members or not isinstance(value, dict):
+        return message
+
+    lines = [message, "", "Checked each type in the union against the keys given:"]
+    for member in members:
+        declared = {field.name for field in fields(member)}
+        unknown = sorted(set(value) - declared)
+        missing = sorted(
+            field.name
+            for field in fields(member)
+            if field.default is MISSING and field.default_factory is MISSING and field.name not in value
+        )
+        detail = []
+        if unknown:
+            detail.append(f"unknown keys: {', '.join(unknown)}")
+        if missing:
+            detail.append(f"missing required keys: {', '.join(missing)}")
+        lines.append(f"  {member.__name__}: {'; '.join(detail) if detail else 'no key mismatch'}")
+    lines.append("")
+    lines.append("A key that no type declares is usually a typo or a key that moved between versions.")
+    return "\n".join(lines)
 
 def get_config_from_file(
     config_path: str,
