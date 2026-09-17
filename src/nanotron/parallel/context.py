@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Literal
+from typing import Dict, Literal, Optional
 
 import numpy as np
 import torch
@@ -160,13 +160,40 @@ class ParallelContext:
         dist.barrier()
         dist.destroy_process_group()
 
+    @staticmethod
+    def _get_parallel_rank(
+        short_name: str,
+        short_value: Optional[int],
+        long_name: str,
+        long_value: Optional[int],
+        default: Optional[int] = None,
+    ) -> int:
+        if short_value is not None and long_value is not None and short_value != long_value:
+            raise ValueError(
+                f"Received conflicting values for {short_name}={short_value} and {long_name}={long_value}."
+            )
+
+        value = short_value if short_value is not None else long_value
+        if value is None:
+            if default is not None:
+                return default
+            raise ValueError(f"{long_name} must be specified.")
+
+        return value
+
     def get_global_rank(
         self,
-        ep_rank: int,
-        pp_rank: int,
-        dp_rank: int,
-        cp_rank: int,
-        tp_rank: int,
+        ep_rank: Optional[int] = None,
+        pp_rank: Optional[int] = None,
+        dp_rank: Optional[int] = None,
+        cp_rank: Optional[int] = None,
+        tp_rank: Optional[int] = None,
+        *,
+        expert_parallel_rank: Optional[int] = None,
+        pipeline_parallel_rank: Optional[int] = None,
+        data_parallel_rank: Optional[int] = None,
+        context_parallel_rank: Optional[int] = None,
+        tensor_parallel_rank: Optional[int] = None,
     ) -> np.int64:
         """
         Get the global rank based on the specified ranks in different parallel groups.
@@ -174,9 +201,21 @@ class ParallelContext:
         :param ep_rank: int, Rank in the expert parallel group.
         :param pp_rank: int, Rank in the pipeline parallel group.
         :param dp_rank: int, Rank in the data parallel group.
-        :param cp_rank: int, Rank in the context parallel group.
+        :param cp_rank: int, Rank in the context parallel group. Defaults to 0.
         :param tp_rank: int, Rank in the tensor parallel group.
+        :param expert_parallel_rank: int, Alias for ``ep_rank``.
+        :param pipeline_parallel_rank: int, Alias for ``pp_rank``.
+        :param data_parallel_rank: int, Alias for ``dp_rank``.
+        :param context_parallel_rank: int, Alias for ``cp_rank``. Defaults to 0.
+        :param tensor_parallel_rank: int, Alias for ``tp_rank``.
 
         :return: numpy.int64, The global rank.
         """
+        ep_rank = self._get_parallel_rank("ep_rank", ep_rank, "expert_parallel_rank", expert_parallel_rank)
+        pp_rank = self._get_parallel_rank("pp_rank", pp_rank, "pipeline_parallel_rank", pipeline_parallel_rank)
+        dp_rank = self._get_parallel_rank("dp_rank", dp_rank, "data_parallel_rank", data_parallel_rank)
+        cp_rank = self._get_parallel_rank(
+            "cp_rank", cp_rank, "context_parallel_rank", context_parallel_rank, default=0
+        )
+        tp_rank = self._get_parallel_rank("tp_rank", tp_rank, "tensor_parallel_rank", tensor_parallel_rank)
         return self.world_rank_matrix[ep_rank, pp_rank, dp_rank, cp_rank, tp_rank]
