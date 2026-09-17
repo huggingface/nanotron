@@ -27,7 +27,7 @@ jobs:
         - 80
       options: --gpus all --shm-size "8G"
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
 
     - name: Python environment
       run: |
