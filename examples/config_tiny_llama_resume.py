@@ -21,29 +21,30 @@ from nanotron.config import (
     MetricsLoggingArgs,
 )
 from nanotron.logging import human_format
+import json
+
+
 CHECKPOINT_ROOT_PATH = "./checkpoints"
+with open(f"{CHECKPOINT_ROOT_PATH}/latest.txt", 'r') as file:
+    content = file.read().strip()
+number = 0
+# Try to convert to integer and store in 'number' if valid
+try:
+    number = int(content)
+    print(f"Valid number found: {number}")
+except ValueError:
+    print("The file does not contain a valid integer.")
+    raise ValueError("latest.txt does not contain a valid integer.")
+
+
+CHECKPOINT_PATH = f"{CHECKPOINT_ROOT_PATH}/{number}"
 tokenizer_name_or_path = "Qwen/Qwen3-0.6B"
-tokenizer_vocab_size = 151643
 sequence_length = 2048
+model_config_dict = json.load(open(f"{CHECKPOINT_PATH}/model_config.json"))
 model_config = LlamaConfig(
-    # Config for a tiny model model with 1.62M parameters
-    bos_token_id=1,
-    eos_token_id=2,
-    hidden_act="silu",
-    hidden_size=16,
-    initializer_range=0.02,
-    intermediate_size=64,
-    max_position_embeddings=256,
-    num_attention_heads=4,
-    num_hidden_layers=2,
-    num_key_value_heads=4,
-    pretraining_tp=1,
-    rms_norm_eps=1e-05,
-    rope_scaling=None,
-    tie_word_embeddings=True,
-    use_cache=True,
-    vocab_size=tokenizer_vocab_size,
+    **model_config_dict,
 )
+
 
 num_params = human_format(
     model_config.vocab_size * model_config.hidden_size * 2
@@ -85,7 +86,7 @@ parallelism = ParallelismArgs(
     tp_linear_async_communication=True,
 )
 
-tokens = TokensArgs(sequence_length=sequence_length, train_steps=1000, micro_batch_size=2, batch_accumulation_per_replica=1)
+tokens = TokensArgs(sequence_length=sequence_length, train_steps=2000, micro_batch_size=2, batch_accumulation_per_replica=1)
 
 data_stages = [
     # DatasetStageArgs(
@@ -110,8 +111,15 @@ checkpoints_path = CHECKPOINT_ROOT_PATH
 os.makedirs(checkpoints_path, exist_ok=True)
 
 config = Config(
-    general=GeneralArgs(project="tiny_llama_nanotron_test", run="tiny_llama_%date_%jobid", seed=seed),
-    checkpoints=CheckpointsArgs(checkpoints_path=checkpoints_path, checkpoint_interval=25),
+    general=GeneralArgs(project="tiny_llama_nanotron_test", run="tiny_llama_%date_%jobid", seed=seed,ignore_sanity_checks=False),
+    checkpoints=CheckpointsArgs(
+        checkpoints_path=checkpoints_path,
+        checkpoint_interval=10,
+        resume_checkpoint_path=CHECKPOINT_PATH,
+        save_initial_state=True,
+        load_lr_scheduler=True,
+        load_optimizer=True,
+    ),
     parallelism=parallelism,
     model=ModelArgs(init_method=RandomInit(std=0.025), model_config=model_config),
     tokenizer=TokenizerArgs(tokenizer_name_or_path),
@@ -127,6 +135,6 @@ if __name__ == "__main__":
     dir = os.path.dirname(__file__)
 
     # Save config as YAML file
-    config.save_as_yaml(f"{dir}/config_tiny_llama.yaml")
+    config.save_as_yaml(f"{dir}/config_tiny_llama_resume.yaml")
 
     # You can now train a model with this config using `/run_train.py`
