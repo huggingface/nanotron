@@ -139,7 +139,7 @@ def convert_checkpoint_and_save(
     if tokenizer_name is not None:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer.save_pretrained(save_path)
-    convert_nt_to_hf(nanotron_model, hf_model, model_config)
+    convert_nt_to_hf(nanotron_model, hf_model, model_config, interleave_qkv=model_config.rope_interleaved)
     hf_model.save_pretrained(save_path)
     print(f"Model saved to {save_path}")
 

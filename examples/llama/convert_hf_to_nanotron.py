@@ -113,7 +113,7 @@ def convert_checkpoint_and_save(checkpoint_path: Path, save_path: Path):
     parallel_context = nanotron.parallel.ParallelContext(
         data_parallel_size=1, pipeline_parallel_size=1, tensor_parallel_size=1
     )
-    convert_hf_to_nt(hf_model, nanotron_model, model_config)
+    convert_hf_to_nt(hf_model, nanotron_model, model_config, interleave_qkv=model_config.rope_interleaved)
     nanotron.serialize.save_weights(model=nanotron_model, parallel_context=parallel_context, root_folder=save_path)
     with open(save_path / "model_config.json", "w+") as f:
         json.dump(dataclasses.asdict(model_config), f)
