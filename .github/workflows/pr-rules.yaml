@@ -4,8 +4,11 @@ on:
     branches:
       - main
 
+permissions: {}
+
 jobs:
   check-branch:
+    permissions: {}
     runs-on: ubuntu-latest
     steps:
       - name: Check PR source branch
