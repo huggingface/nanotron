@@ -8,6 +8,7 @@ import dacite
 import torch
 from dacite import from_dict
 from packaging.version import Version
+from datatrove.io import DataFolder
 
 from nanotron import distributed as dist
 from nanotron.constants import CHECKPOINT_FILE_NAME, CHECKPOINT_VERSION
@@ -156,6 +157,22 @@ def to_dict(dict_: Dict, type_hooks: Dict[Type, Callable[[Any], Any]]):
 def to_list(list_: Union[List, Tuple], type_hooks: Dict[Type, Callable[[Any], Any]]):
     return list_.__class__((process_type(elt, type_hooks=type_hooks) for elt in list_))
 
+# FIX an error where DataFolder objects are used as keys in metadata dicts
+# This causes issues when saving/loading metadata as JSON
+def fix_datafolder_keys(obj):
+    """Convert DataFolder keys to their .path attribute"""
+    if isinstance(obj, dict):
+        new_dict = {}
+        for k, v in obj.items():
+            # Use DataFolder.path as the key
+            new_key = k.path if isinstance(k, DataFolder) else k
+            # Recursively process the value
+            new_dict[new_key] = fix_datafolder_keys(v)
+        return new_dict
+    elif isinstance(obj, list):
+        return [fix_datafolder_keys(item) for item in obj]
+    else:
+        return obj
 
 def save_meta(parallel_context: ParallelContext, root_folder: Path, training_metadata: TrainingMetadata):
     assert isinstance(training_metadata, TrainingMetadata)
@@ -173,7 +190,19 @@ def save_meta(parallel_context: ParallelContext, root_folder: Path, training_met
     )
 
     # There are some types that require manual casting in order to work correctly.
-    processed_metadata = process_type(dataclasses.asdict(checkpoint_metadata), type_hooks={Version: lambda x: str(x)})
+    #processed_metadata = process_type(dataclasses.asdict(checkpoint_metadata), type_hooks={Version: lambda x: str(x)})
+
+    # I had an issue with DataFolder objects being used as keys in the metadata dicts so i added a fix
+    raw_metadata = dataclasses.asdict(checkpoint_metadata)
+    fixed_metadata = fix_datafolder_keys(raw_metadata)
+
+    processed_metadata = process_type(
+        fixed_metadata,
+        type_hooks={
+            Version: lambda x: str(x),
+            #DataFolder: lambda x: str(x)  # This handles DataFolder values
+        }
+    )
 
     with open(root_folder / CHECKPOINT_FILE_NAME, mode="w") as fo:
         json.dump(processed_metadata, fo, indent=2, sort_keys=True)
