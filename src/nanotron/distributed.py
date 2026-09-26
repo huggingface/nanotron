@@ -24,6 +24,11 @@ def new_group(  # pylint: disable=function-redefined
     if len(ranks) == 0:
         raise ValueError("Cannot create a group with not ranks inside it")
 
+    # torch.distributed expects Python ints. ParallelContext frequently passes
+    # NumPy arrays, whose np.int64 values are not JSON serializable by the
+    # PyTorch profiler when process-group metadata is recorded.
+    ranks = [int(rank) for rank in ranks]
+
     return dist.new_group(ranks=ranks, timeout=timeout, backend=backend, pg_options=pg_options)
 
 

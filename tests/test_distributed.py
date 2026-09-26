@@ -7,9 +7,39 @@ from helpers.utils import (
     init_distributed,
     rerun_if_address_is_in_use,
 )
+import nanotron.distributed as nanotron_dist
 from nanotron.parallel import ParallelContext
 from torch.distributed import ProcessGroup
 
+
+
+@pytest.mark.parametrize(
+    "ranks",
+    [
+        np.array([0, 1], dtype=np.int64),
+        [0, 1],
+    ],
+)
+def test_new_group_normalizes_rank_types(monkeypatch, ranks):
+    captured = {}
+    expected_group = object()
+
+    def fake_new_group(*, ranks, timeout, backend, pg_options):
+        captured["ranks"] = ranks
+        return expected_group
+
+    monkeypatch.setattr(nanotron_dist.dist, "new_group", fake_new_group)
+
+    result = nanotron_dist.new_group(ranks=ranks)
+
+    assert result is expected_group
+    assert captured["ranks"] == [0, 1]
+    assert all(type(rank) is int for rank in captured["ranks"])
+
+
+def test_new_group_rejects_empty_ranks():
+    with pytest.raises(ValueError, match="Cannot create a group with not ranks inside it"):
+        nanotron_dist.new_group(ranks=[])
 
 def _test_init_parallel_context(parallel_context: ParallelContext):
     assert dist.is_initialized() is True
