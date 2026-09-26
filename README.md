@@ -64,6 +64,7 @@ To run the example scripts, install the remaining dependencies as follows:
 ```shell
 uv pip install datasets transformers datatrove[io] numba wandb
 # Fused kernels
+uv pip install setuptools wheel
 uv pip install ninja triton "flash-attn>=2.5.0" --no-build-isolation
 ```
 
