@@ -40,6 +40,17 @@ def assert_tensor_synced_across_pg(
 # TODO @nouamanetazi: remove this with SANITY_CHECKS
 @contextmanager
 def assert_fail_except_rank_with(exception_class, rank_exception, pg):
+    """Context manager that asserts *exception_class* is raised by all ranks except *rank_exception*.
+
+    The context manager passes silently for *rank_exception*.  All other ranks
+    must raise *exception_class*; if they do not, or if they raise a different
+    exception type, an :class:`AssertionError` is raised.
+
+    Args:
+        exception_class: The exception type expected to be raised.
+        rank_exception: The rank index (within *pg*) that is allowed to succeed.
+        pg: Process group used to determine the current rank.
+    """
     try:
         yield
     except exception_class:
@@ -61,6 +72,20 @@ def before_tbi_sanity_checks(
     grad_accumulator: GradientAccumulator,
     lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
 ) -> None:
+    """Run sanity checks before a training batch iteration (TBI).
+
+    Verifies that model parameters are synchronised across data-parallel and
+    context-parallel groups, that tied weights are in sync, that gradients
+    are zeroed, and that the optimizer learning rate matches the scheduler.
+    Skipped when ``config.general.ignore_sanity_checks`` is ``True``.
+
+    Args:
+        config: Training configuration object.
+        parallel_context: Holds references to all process groups.
+        unwrapped_model: The model without any DDP wrapper.
+        grad_accumulator: Gradient accumulation buffer, or ``None``.
+        lr_scheduler: The learning-rate scheduler attached to the optimizer.
+    """
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that the model params are synchronized across dp_cp
         for name, param in sorted(unwrapped_model.named_parameters(), key=lambda x: x[0]):
@@ -128,6 +153,18 @@ def after_tbi_sanity_checks(
     unwrapped_model: NanotronModel,
     grad_accumulator: GradientAccumulator,
 ) -> None:
+    """Run sanity checks after a training batch iteration (TBI).
+
+    Verifies that all parameters requiring gradients have a gradient and
+    that no NaN or Inf values appear in gradients or parameters.
+    Skipped when ``config.general.ignore_sanity_checks`` is ``True``.
+
+    Args:
+        config: Training configuration object.
+        parallel_context: Holds references to all process groups.
+        unwrapped_model: The model without any DDP wrapper.
+        grad_accumulator: Gradient accumulation buffer, or ``None``.
+    """
     if not config.general.ignore_sanity_checks:
         # SANITY CHECK: Check that gradient flow on the entire model
         # SANITY CHECK: Check that all parameters that required gradients, have actually a gradient
