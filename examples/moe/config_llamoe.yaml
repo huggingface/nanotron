@@ -70,6 +70,7 @@ model:
     tie_word_embeddings: false
     use_cache: true
     vocab_size: 32000
+    use_scattermoe: true
 optimizer:
   accumulate_grad_in_fp32: false
   clip_grad: 1.0

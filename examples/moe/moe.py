@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from config_llamoe import LlaMoEConfig
 from megablocks.layers import weight_parallel as wp
 from megablocks.layers.activation_fn import act_fn
+import scattermoe.mlp
 from nanotron import distributed as dist
 from nanotron import logging
 from nanotron.config import ParallelismArgs
@@ -30,6 +31,40 @@ except ImportError:
 
 
 logger = logging.get_logger(__name__)
+
+
+class ScatterMoE(torch.nn.Module):
+    def __init__(
+        self,
+        config: LlaMoEConfig,
+    ):
+        super().__init__()
+        self.config = config
+        # Token router.
+        self.gate = LearnedRouter(config)
+
+        # Expert computation helper.
+        self.experts = scattermoe.mlp.MLP(
+            input_size=config.hidden_size,
+            hidden_size=config.intermediate_size,
+            num_experts=config.moe_num_experts,
+            top_k=config.num_experts_per_tok,
+            activation=nn.GELU()
+        )
+
+    def forward(self, x: torch.Tensor):
+        """
+        Args:
+            x: input tensor of shape [sequence_length, batch_size, hidden_size]
+        """
+        # Compute the expert scores and assignments.
+        batch_size, sequence_length, _ = x.size()
+        x = x.view(-1, self.config.hidden_size)
+        scores, expert_weights, top_experts = self.gate(x)
+        # Compute the experts.
+        x = self.experts(x, expert_weights.to(x.dtype), top_experts)
+        return x.view(batch_size, sequence_length, -1)
+
 
 
 class dMoE(torch.nn.Module):
