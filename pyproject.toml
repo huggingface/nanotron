@@ -49,6 +49,10 @@ fast-modeling = [
     "flash-attn>=2.5.0,<2.7.0",
 ]
 
+torchembed = [
+    "torchembed[triton]>=0.3.0",
+]
+
 nanosets = [
      "transformers",
      "datatrove[io,processing]@git+https://github.com/huggingface/datatrove",
