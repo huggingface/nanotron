@@ -14,7 +14,16 @@ from transformers import AutoTokenizer
 from yaml.loader import SafeLoader
 
 from nanotron.config.lighteval_config import LightEvalConfig
-from nanotron.config.models_config import ExistingCheckpointInit, NanotronConfigs, RandomInit, SpectralMupInit
+from nanotron.config.models_config import (
+    ExistingCheckpointInit,
+    LlamaConfig,
+    MoEConfig,
+    NanotronConfigs,
+    Qwen2Config,
+    RandomInit,
+    SpectralMupInit,
+    Starcoder2Config,
+)
 from nanotron.config.parallelism_config import ParallelismArgs
 from nanotron.config.utils_config import (
     InitScalingMethod,
@@ -27,7 +36,6 @@ from nanotron.generation.sampler import SamplerType
 from nanotron.logging import get_logger, human_format
 from nanotron.parallel.pipeline_parallel.engine import PipelineEngine
 from nanotron.parallel.tensor_parallel.nn import TensorParallelLinearMode
-from nanotron.config.models_config import Qwen2Config
 
 logger = get_logger(__name__)
 
@@ -227,7 +235,7 @@ class DatasetStageArgs:
     name: str
     start_training_step: int
     data: DataArgs
-    sequence_length: Optional[int] = None # if None, we use the sequence length from the config
+    sequence_length: Optional[int] = None  # if None, we use the sequence length from the config
 
     def __post_init__(self):
         if self.start_training_step < 0:
@@ -274,7 +282,7 @@ class GeneralArgs:
     run: Optional[str] = None
     seed: Optional[int] = None
     step: Optional[int] = None
-    consumed_train_samples: Optional[int] = None # TODO: remove this
+    consumed_train_samples: Optional[int] = None  # TODO: remove this
     benchmark_csv_path: Optional[Path] = None
     ignore_sanity_checks: bool = True
 
@@ -302,6 +310,7 @@ class ProfilerArgs:
     with_stack: bool = True
     export_chrome_trace: bool = False
 
+
 @dataclass
 class ModelArgs:
     """Arguments related to model architecture"""
@@ -319,7 +328,17 @@ class ModelArgs:
             self.dtype = cast_str_to_torch_dtype(self.dtype)
 
         if isinstance(self.model_config, dict):
-            self.model_config = Qwen2Config(**self.model_config)
+            if isinstance(self.model_config.get("moe_config"), dict):
+                self.model_config["moe_config"] = MoEConfig(**self.model_config["moe_config"])
+
+            if self.model_config.get("is_qwen2_config"):
+                self.model_config = Qwen2Config(**self.model_config)
+            elif self.model_config.get("is_llama_config"):
+                self.model_config = LlamaConfig(**self.model_config)
+            elif self.model_config.get("is_starcoder2_config"):
+                self.model_config = Starcoder2Config(**self.model_config)
+            else:
+                self.model_config = Qwen2Config(**self.model_config)
 
         self.model_config._is_using_mup = isinstance(self.init_method, SpectralMupInit)
 
