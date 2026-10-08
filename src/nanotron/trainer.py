@@ -572,14 +572,16 @@ class DistributedTrainer:
 
                 # Training Logs
                 # Track consumed tokens for all dataset folders in current stage
-                if hasattr(self.current_base_dl, "dataset"):
+                if hasattr(self.current_base_dl, "dataset") and hasattr(self.current_base_dl.dataset, "get_consumption_stats"):
                     consumption_stats = self.current_base_dl.dataset.get_consumption_stats()
                     current_stage = self.metadata.data_stages[self.metadata.last_stage_idx]
 
                     # Update consumed tokens for all folders in the consumption stats
                     for folder_path, stats in consumption_stats.items():
                         current_stage.consumed_tokens_per_dataset_folder[folder_path] = stats["tokens"]
-
+                else:
+                    self.metadata.current_stage.consumed_tokens_per_dataset_folder.setdefault("default", 0)
+                    self.metadata.current_stage.consumed_tokens_per_dataset_folder["default"] += self.global_batch_size * self.sequence_length 
                 # Original consumption tracking
                 self.metadata.consumed_train_samples += self.global_batch_size # TODO: Legacy: idc abt this
                 self.metadata.consumed_tokens_total += self.global_batch_size * self.sequence_length
@@ -883,7 +885,7 @@ class DistributedTrainer:
             assert self.current_base_dl is not None, "current_base_dl should be defined"
 
             # Log consumption statistics
-            if hasattr(self.current_base_dl, "dataset"):
+            if hasattr(self.current_base_dl, "dataset") and hasattr(self.current_base_dl.dataset, "get_consumption_stats"):
                 for dataset_name, stats in self.current_base_dl.dataset.get_consumption_stats().items():
                     basic_log_entries.extend(
                         [
