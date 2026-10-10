@@ -33,6 +33,48 @@ def _test_init_parallel_context(parallel_context: ParallelContext):
     assert dist.is_initialized() is False
 
 
+def test_parallel_context_get_global_rank():
+    parallel_context = ParallelContext.__new__(ParallelContext)
+    parallel_context.world_rank_matrix = np.arange(2 * 3 * 4 * 5 * 6).reshape((2, 3, 4, 5, 6))
+
+    assert parallel_context.get_global_rank(1, 2, 3, 4, 5) == parallel_context.world_rank_matrix[1, 2, 3, 4, 5]
+    assert (
+        parallel_context.get_global_rank(
+            expert_parallel_rank=1,
+            pipeline_parallel_rank=2,
+            data_parallel_rank=3,
+            context_parallel_rank=4,
+            tensor_parallel_rank=5,
+        )
+        == parallel_context.world_rank_matrix[1, 2, 3, 4, 5]
+    )
+    assert (
+        parallel_context.get_global_rank(
+            expert_parallel_rank=1,
+            pipeline_parallel_rank=2,
+            data_parallel_rank=3,
+            tensor_parallel_rank=5,
+        )
+        == parallel_context.world_rank_matrix[1, 2, 3, 0, 5]
+    )
+
+    with pytest.raises(ValueError, match="Received conflicting values"):
+        parallel_context.get_global_rank(
+            ep_rank=0,
+            expert_parallel_rank=1,
+            pipeline_parallel_rank=2,
+            data_parallel_rank=3,
+            tensor_parallel_rank=5,
+        )
+
+    with pytest.raises(ValueError, match="expert_parallel_rank must be specified"):
+        parallel_context.get_global_rank(
+            pipeline_parallel_rank=2,
+            data_parallel_rank=3,
+            tensor_parallel_rank=5,
+        )
+
+
 @pytest.mark.parametrize(
     "tp,dp,pp",
     [
