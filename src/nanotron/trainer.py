@@ -778,12 +778,15 @@ class DistributedTrainer:
                 "tokens_per_sec_per_gpu", tokens_per_sec / self.parallel_context.world_pg.size(), "human_format"
             ),  # , "1.6E"),
             LogItem("global_batch_size", self.config.global_batch_size_in_tokens, "human_format"),  # , "5d"),
-            LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
+            # LogItem("lm_loss", loss_avg.item(), "human_format"),  # , "1.6E"),
             LogItem("lr", lr, "human_format"),  # , ".3E"),
             LogItem("model_tflops_per_gpu", model_tflops, "human_format"),  # , ".2f"),
             # LogItem("hardware_tflops_per_gpu", hardware_tflops, "human_format"),  # , ".2f"),
             LogItem("eta", str(datetime.timedelta(seconds=eta_seconds))),
         ]
+
+        if loss_avg is not None:
+            basic_log_entries.insert(5, LogItem("lm_loss", loss_avg.item(), "human_format"))  # , "1.6E"),
 
         def get_cpu_logitems():
             # Add CPU memory usage metrics
