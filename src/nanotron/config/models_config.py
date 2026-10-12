@@ -91,6 +91,7 @@ class LlamaConfig:
     _attn_implementation: Optional[AttentionImplementation] = DEFAULT_ATTENTION_IMPLEMENTATION
     z_loss_enabled: bool = False  # Z-loss regularization https://www.jmlr.org/papers/volume24/22-1144/22-1144.pdf
     z_loss_coefficient: float = 0.0001  # Default from the paper (10^-4)
+    use_torchembed_rope: bool = False  # Use torchembed fused Triton RoPE kernel (requires pip install torchembed[triton])
 
     def __post_init__(self):
         # NOTE: user don't set self._init_method, ModelArgs will set it
