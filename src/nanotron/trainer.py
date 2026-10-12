@@ -1163,6 +1163,19 @@ class DistributedTrainer:
         # Sanity check the model, all parameters must be NanotronParameter (either tied or sharded)
         sanity_check(root_module=model)
 
+        if config.general.torch_compile:
+            if parallel_config.pp > 1:
+                log_rank(
+                    "torch.compile is not supported with pipeline parallelism (pp>1). Skipping compilation.",
+                    logger=logger,
+                    level=logging.WARNING,
+                    rank=0,
+                )
+            else:
+                log_rank("Compiling model with torch.compile...", logger=logger, level=logging.INFO, rank=0)
+                model = torch.compile(model)
+                log_rank("torch.compile done.", logger=logger, level=logging.INFO, rank=0)
+
         return model
 
     def setup_log_writers(
