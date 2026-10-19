@@ -469,7 +469,7 @@ class Qwen2MoELayer(nn.Module):
         routing_weights, routing_indices = torch.topk(router_logits, k=self.num_experts_per_token, dim=-1)
 
         # Apply softmax on the top-k values
-        routing_weights = F.softmax(routing_weights, dim=-1)
+        routing_weights = torch.softmax(routing_weights, dim=-1)
 
         return routing_weights, routing_indices
 

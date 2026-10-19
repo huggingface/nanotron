@@ -63,7 +63,6 @@ model:
     intermediate_size: 768
     is_qwen2_config: true
     max_position_embeddings: 4096
-    moe_config: null
     no_rope_layer: null
     num_attention_heads: 4
     num_hidden_layers: 12
