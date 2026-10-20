@@ -9,6 +9,10 @@
     </a>
 </p>
 
+<p align="center">
+    <a href="README.md">English</a> • <a href="https://github.com/huggingface/nanotron/blob/main/README.zh.md">简体中文</a>
+</p>
+
 <h4 align="center">
     <p>
         <a href="#installation">Installation</a> •
