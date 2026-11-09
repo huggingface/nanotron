@@ -116,7 +116,7 @@ def lr_scheduler_builder(optimizer: Optimizer, lr_scheduler_args: LRSchedulerArg
         """
         # No warmup or decay
         if lr_scheduler_args.lr_warmup_steps == 0 and lr_decay_steps == 0:
-            return initial_lr
+            return 1.0  # LambdaLR expects a multiplier of the group's base lr
 
         # Warmup phase
         elif lr_scheduler_args.lr_warmup_style is not None and current_step <= lr_scheduler_args.lr_warmup_steps:
