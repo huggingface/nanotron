@@ -162,6 +162,43 @@ def _test_column_linear(
 
 
 @pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
+@pytest.mark.parametrize("tp_recompute_allgather", [False, True])
+@rerun_if_address_is_in_use()
+def test_column_linear_3d_input(tp: int, dp: int, pp: int, tp_recompute_allgather: bool):
+    init_distributed(tp=tp, dp=dp, pp=pp)(_test_column_linear_3d_input)(tp_recompute_allgather=tp_recompute_allgather)
+
+
+def _test_column_linear_3d_input(parallel_context: ParallelContext, tp_recompute_allgather: bool):
+    # Models feed column linears with [seq_length, batch_size, hidden_size], while test_column_linear uses 2D inputs.
+    os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"  # required by TensorParallelColumnLinear when tp > 1
+    tp_pg = parallel_context.tp_pg
+    in_features = 4
+    out_features_per_tp_rank = 3
+    column_linear = TensorParallelColumnLinear(
+        in_features=in_features,
+        out_features=tp_pg.size() * out_features_per_tp_rank,
+        pg=tp_pg,
+        mode=TensorParallelLinearMode.REDUCE_SCATTER,
+        device="cuda",
+        async_communication=False,
+        tp_recompute_allgather=tp_recompute_allgather,
+    )
+
+    sharded_input = torch.randn(5, 2, in_features, device="cuda", requires_grad=True)
+    column_linear(sharded_input).sum().backward()
+
+    # d/dx sum(x @ W.T) is the column sum of the full weight, for every position of x
+    if tp_pg.size() > 1:
+        full_weight = torch.empty(tp_pg.size() * out_features_per_tp_rank, in_features, device="cuda")
+        dist.all_gather_into_tensor(full_weight, column_linear.weight.detach().contiguous(), group=tp_pg)
+    else:
+        full_weight = column_linear.weight.detach()
+    torch.testing.assert_close(sharded_input.grad, full_weight.sum(dim=0).expand_as(sharded_input))
+
+    parallel_context.destroy()
+
+
+@pytest.mark.parametrize("tp,dp,pp", [pytest.param(i, 1, 1) for i in range(1, min(4, available_gpus()) + 1)])
 @pytest.mark.parametrize("tp_mode", list(TensorParallelLinearMode))
 @pytest.mark.parametrize("async_communication", [False, True])
 @pytest.mark.parametrize("tp_recompute_allgather", [False, True])
