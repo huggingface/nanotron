@@ -390,12 +390,12 @@ class LRSchedulerArgs:
     min_decay_lr: float = None
 
     def __post_init__(self):
+        if self.lr_warmup_style is None:
+            self.lr_warmup_style = "linear"
         if self.lr_warmup_style not in ["linear", "constant"]:
             raise ValueError(
                 f"lr_warmup_style should be a string selected in ['linear', 'constant'] and not {self.lr_warmup_style}"
             )
-        if self.lr_warmup_style is None:
-            self.lr_warmup_style = "linear"
         if self.lr_decay_style is None:
             self.lr_decay_style = "linear"
         if self.lr_decay_style not in ["linear", "cosine", "1-sqrt"]:

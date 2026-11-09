@@ -1,5 +1,5 @@
 import pytest
-from nanotron.config import ModelArgs, RandomInit, SpectralMupInit
+from nanotron.config import LRSchedulerArgs, ModelArgs, RandomInit, SpectralMupInit
 from nanotron.config.models_config import LlamaConfig, MoEConfig, Qwen2Config, Starcoder2Config
 
 
@@ -36,3 +36,15 @@ def test_model_args_sets_mup_on_restored_config():
 
     assert isinstance(model_args.model_config, LlamaConfig)
     assert model_args.model_config.is_using_mup is True
+
+
+def test_lr_scheduler_args_defaults_warmup_style_to_linear():
+    lr_scheduler_args = LRSchedulerArgs(learning_rate=3e-4)
+
+    assert lr_scheduler_args.lr_warmup_style == "linear"
+    assert lr_scheduler_args.lr_decay_style == "linear"
+
+
+def test_lr_scheduler_args_rejects_unknown_warmup_style():
+    with pytest.raises(ValueError, match="lr_warmup_style"):
+        LRSchedulerArgs(learning_rate=3e-4, lr_warmup_style="cosine")
