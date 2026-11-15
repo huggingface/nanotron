@@ -192,14 +192,13 @@ class Nanoset(torch.utils.data.Dataset):
         dataset_index, dataset_sample_index = build_nanoset_index_helper(
             n_samples=samples_per_epoch, weights=self.dataset_weights, dataset_sizes=self.dataset_lengths
         )
-        # Shuffle the indexes the same way
+        # Draw a new permutation for each epoch, so repeated data is not seen in the same order.
+        # Both indexes use the same permutation to keep (dataset, sample) pairs together.
+        # The first permutation is the one a single shuffle with this seed gives, so epoch 0 keeps its order.
         numpy_random_state = np.random.RandomState(self.random_seed)
-        numpy_random_state.shuffle(dataset_index)
-        numpy_random_state = np.random.RandomState(self.random_seed)
-        numpy_random_state.shuffle(dataset_sample_index)
-        # Concatenate num_epochs the shuffled indexes
-        dataset_index = np.concatenate([dataset_index for _ in range(num_epochs)])
-        dataset_sample_index = np.concatenate([dataset_sample_index for _ in range(num_epochs)])
+        permutations = [numpy_random_state.permutation(samples_per_epoch) for _ in range(num_epochs)]
+        dataset_index = np.concatenate([dataset_index[permutation] for permutation in permutations])
+        dataset_sample_index = np.concatenate([dataset_sample_index[permutation] for permutation in permutations])
         # Just keep the necessary samples
         dataset_index = dataset_index[: self.train_split_num_samples]
         dataset_sample_index = dataset_sample_index[: self.train_split_num_samples]

@@ -107,7 +107,7 @@ dataset_index = [1, 2, 0, 1, 3, 1, 2, 1, 2, 1, 0, 1, 2, 1, 3, 1, 2, 1, 2, 1]
 dataset_index =         [1, 2, 0, 1, 3, 1, 2, 1, 2, 1, 0, 1, 2, 1, 3, 1, 2, 1, 2, 1]
 dataset_sample_index =  [0, 0, 0, 1, 0, 0, 1, 1, 2, 0, 1, 1, 3, 0, 1, 1, 4, 0, 0, 1]
 ```
-Then, we **shuffle with the same permutation both indexes** and concatenate them `number of epochs` times, which is defined by `train split num samples` / `number of samples per epoch`.
+Then, for each epoch we **shuffle both indexes with the same permutation**, drawing a new permutation every epoch so repeated data is not read in the same order, and concatenate the `number of epochs` shuffled copies. The `number of epochs` is defined by `train split num samples` / `number of samples per epoch`.
 ```
 Given:
 
@@ -116,14 +116,14 @@ N = 70                      # train split num samples
 dataset_index =         [1, 2, 0, 1, 3, 1, 2, 1, 2, 1, 0, 1, 2, 1, 3, 1, 2, 1, 2, 1]
 dataset_sample_index =  [0, 0, 0, 1, 0, 0, 1, 1, 2, 0, 1, 1, 3, 0, 1, 1, 4, 0, 0, 1]
 
-Shuffle dataset_index and dataset_sample_index:
+Shuffle dataset_index and dataset_sample_index for the first epoch:
 
 dataset_index =         [1, 1, 0, 2, 3, 1, 3, 1, 2, 2, 1, 1, 0, 1, 1, 2, 1, 2, 2, 1]
 dataset_sample_index =  [1, 0, 0, 4, 1, 0, 0, 0, 2, 0, 0, 1, 1, 0, 1, 0, 1, 3, 1, 1]
 
-n_concatenations = (70/(20)) + 1 = 4
-dataset_index = dataset_index concatenated 4 times
-dataset_sample_index = dataset_sample_index concatenated 4 times
+n_epochs = (70/(20)) + 1 = 4
+dataset_index = 4 shuffled copies of dataset_index, one new permutation per epoch, concatenated
+dataset_sample_index = 4 shuffled copies of dataset_sample_index, same permutations, concatenated
 
 dataset_index = dataset_index[: N]
 dataset_sample_index = dataset_sample_index[: N]
