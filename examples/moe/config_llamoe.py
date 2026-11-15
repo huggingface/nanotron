@@ -56,6 +56,7 @@ class LlaMoEConfig:
     num_experts_per_tok: int = 1
     moe_capacity_factor: int = 1
 
+    use_scattermoe: bool = True
     def __post_init__(self):
         # for backward compatibility
         if self.num_key_value_heads is None:
@@ -113,7 +114,7 @@ parallelism = ParallelismArgs(
     dp=1,
     pp=1,
     tp=2,
-    expert_parallel_size=2,
+    expert_parallel_size=1,
     pp_engine="1f1b",
     tp_mode="ALL_REDUCE",
     tp_linear_async_communication=False,
