@@ -251,7 +251,7 @@ class OneForwardOneBackwardPipelineEngine(PipelineEngine):
         self.nb_microbatches = nb_microbatches
         assert (
             self.nb_microbatches >= pg.size() - 1
-        ), f"Number of microbatches ({self.nb_microbatches}) must be at least PP_SIZE-1={pg.size() - 1} when using the OneForwardOneBackwardPipelineEngine"
+        ), f"Number of microbatches (batch_accumulation_per_replica={self.nb_microbatches}) must be at least PP_SIZE-1={pg.size() - 1} when using the OneForwardOneBackwardPipelineEngine. Increase tokens.batch_accumulation_per_replica or decrease the pipeline-parallel size PP_SIZE={pg.size()}."
 
         state = PipelineTrainBatchState()
 
