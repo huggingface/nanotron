@@ -810,9 +810,9 @@ def compute_remain_train_steps_of_a_data_stage_from_ckp(
         next_stage = next((s for s in config.data_stages if s.start_training_step > stage.start_training_step), None)
         total_train_steps = next_stage.start_training_step
 
-    if metadata.last_train_step > stage.start_training_step:
-        # NOTE: if the last_train_step is larger than the start_training_step of the current stage,
-        # it means that the training has already passed this stage
+    if metadata.last_train_step >= total_train_steps:
+        # NOTE: if the last_train_step is at or beyond the end of the current stage,
+        # it means that the training has already finished this stage
         # so there is no remaining steps
         return 0
     else:
